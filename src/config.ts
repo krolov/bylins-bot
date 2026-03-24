@@ -11,6 +11,7 @@ export interface RuntimeConfig {
   commandDelayMs: number;
   lineEnding: "\n" | "\r\n";
   databaseUrl: string;
+  wikiProxies: string[];
 }
 
 function readString(name: string, fallback: string): string {
@@ -64,6 +65,23 @@ function readStartupCommands(): string[] {
     .filter((command) => command.length > 0);
 }
 
+function readWikiProxies(): string[] {
+  const raw = Bun.env.WIKI_PROXIES?.trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((entry) => {
+      const parts = entry.split(":");
+      if (parts.length === 4) {
+        const [host, port, user, pass] = parts;
+        return `http://${user}:${pass}@${host}:${port}`;
+      }
+      return entry;
+    });
+}
+
 export const runtimeConfig: RuntimeConfig = {
   host: readString("HOST", "0.0.0.0"),
   port: readNumber("PORT", 3000),
@@ -75,6 +93,7 @@ export const runtimeConfig: RuntimeConfig = {
   commandDelayMs: readNumber("MUD_COMMAND_DELAY_MS", startupConnectionScript.commandDelayMs),
   lineEnding: readLineEnding(),
   databaseUrl: readString("DATABASE_URL", ""),
+  wikiProxies: readWikiProxies(),
 };
 
 if (!runtimeConfig.databaseUrl) {
