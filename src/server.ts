@@ -1,8 +1,10 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { runtimeConfig } from "./config";
 import { sql } from "./db";
+import { createCombatState } from "./combat-state";
 import { createFarmController } from "./farm-script";
-import type { PeriodicActionConfig, SurvivalConfig } from "./farm-script";
+import type { PeriodicActionConfig } from "./farm-script";
+import { createSurvivalController, normalizeSurvivalConfig } from "./survival-script";
 import { findPath } from "./map/pathfinder";
 import type { PathStep } from "./map/pathfinder";
 import { createParserState, feedText } from "./map/parser";
@@ -61,22 +63,11 @@ type ClientEvent =
           gotoAlias2?: string;
           intervalMs?: number;
         };
-        survival?: {
-          enabled?: boolean;
-          eatCommands?: string[];
-          eatCount?: number;
-          drinkCommands?: string[];
-          drinkCount?: number;
-          buyFoodAlias?: string;
-          buyFoodCommands?: string[];
-          fillFlaskAlias?: string;
-          fillFlaskCommands?: string[];
-        };
       };
     }
   | { type: "alias_set"; payload?: { vnum?: number; alias?: string } }
   | { type: "alias_delete"; payload?: { vnum?: number } }
-  | { type: "navigate_to"; payload?: { vnum?: number } }
+  | { type: "navigate_to"; payload?: { vnums?: number[] } }
   | { type: "navigate_stop" }
   | { type: "farm_settings_get"; payload?: { zoneId?: number } }
   | {
@@ -231,10 +222,12 @@ const recentOutputChunks: string[] = [];
 const parserState = createParserState();
 const trackerState = createTrackerState();
 const mapStore = createMapStore(sql);
+const combatState = createCombatState();
 const farmController = createFarmController({
   getCurrentRoomId: () => trackerState.currentRoomId,
   isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
   getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
+  combatState,
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) {
       return;
@@ -270,6 +263,27 @@ const farmController = createFarmController({
         state: sharedSession.state,
         message,
       },
+    });
+  },
+});
+const survivalController = createSurvivalController({
+  getCurrentRoomId: () => trackerState.currentRoomId,
+  sendCommand: (command) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "survival-script");
+  },
+  resolveNearest: async (alias) => {
+    const vnums = await mapStore.resolveAliasAll(alias);
+    if (vnums.length === 0) return null;
+    return vnums[0] ?? null;
+  },
+  navigateTo: (vnum) => startNavigation(null, vnum),
+  isInCombat: () => combatState.getInCombat(),
+  onLog: (message) => {
+    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+    broadcastServerEvent({
+      type: "status",
+      payload: { state: sharedSession.state, message },
     });
   },
 });
@@ -336,6 +350,9 @@ let statsHp = 0;
 let statsHpMax = 0;
 let statsEnergy = 0;
 let statsEnergyMax = 0;
+
+let survivalTickTimer: ReturnType<typeof setTimeout> | null = null;
+let survivalPreviousInCombat = false;
 
 // ── Item identify parser ──────────────────────────────────────────────────────
 // Collects MUD text chunks into a rolling buffer to detect multi-line identify
@@ -796,6 +813,10 @@ function teardownSession(
     tcpSocket.close();
   }
 
+  combatState.reset();
+  clearSurvivalTickTimer();
+  survivalController.reset();
+
   logEvent(ws, options.state === "error" ? "error" : "session", reason, {
     state: options.state ?? "disconnected",
   });
@@ -1154,9 +1175,64 @@ async function startNavigation(ws: BunServerWebSocket | null, targetVnum: number
   })();
 }
 
+async function startNavigationToNearest(ws: BunServerWebSocket | null, targetVnums: number[]): Promise<void> {
+  const currentVnum = trackerState.currentRoomId;
+  if (currentVnum === null) {
+    broadcastServerEvent({ type: "status", payload: { state: sharedSession.state, message: "Навигация: текущая комната неизвестна." } });
+    return;
+  }
+  if (targetVnums.includes(currentVnum)) {
+    broadcastServerEvent({ type: "status", payload: { state: sharedSession.state, message: "Навигация: уже в целевой комнате." } });
+    return;
+  }
+  const snapshot = await mapStore.getSnapshot(currentVnum);
+  let bestVnum: number | null = null;
+  let bestLen = Infinity;
+  for (const vnum of targetVnums) {
+    const path = findPath(snapshot, currentVnum, vnum);
+    if (path !== null && path.length < bestLen) {
+      bestLen = path.length;
+      bestVnum = vnum;
+    }
+  }
+  if (bestVnum === null) {
+    broadcastServerEvent({ type: "status", payload: { state: sharedSession.state, message: "Навигация: путь не найден." } });
+    return;
+  }
+  await startNavigation(ws, bestVnum);
+}
+
+function scheduleSurvivalTick(delayMs: number): void {
+  if (survivalTickTimer !== null) return;
+  survivalTickTimer = setTimeout(() => {
+    survivalTickTimer = null;
+    void survivalController.runTick((d) => scheduleSurvivalTick(d));
+  }, Math.max(0, delayMs));
+}
+
+function clearSurvivalTickTimer(): void {
+  if (survivalTickTimer !== null) {
+    clearTimeout(survivalTickTimer);
+    survivalTickTimer = null;
+  }
+}
+
 async function persistParsedMapData(text: string, ws: BunServerWebSocket | null): Promise<void> {
   parseAndBroadcastStats(text);
   triggers.handleMudText(text);
+
+  const wasInCombat = survivalPreviousInCombat;
+  combatState.handleMudText(text);
+  survivalController.handleMudText(text);
+  const nowInCombat = combatState.getInCombat();
+  survivalPreviousInCombat = nowInCombat;
+
+  if (wasInCombat && !nowInCombat) {
+    scheduleSurvivalTick(50);
+  } else if (!nowInCombat) {
+    scheduleSurvivalTick(150);
+  }
+
   void handleItemIdentifyBuffer(text).catch((error: unknown) => {
     logEvent(ws, "error", error instanceof Error ? `Item parser error: ${error.message}` : "Item parser error.");
   });
@@ -1207,6 +1283,20 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
 }
 
 await mapStore.initialize();
+
+const savedSurvival = await mapStore.getSurvivalSettings();
+if (savedSurvival) {
+  survivalController.updateConfig(normalizeSurvivalConfig({
+    enabled: savedSurvival.foodItems.trim().length > 0 || savedSurvival.flaskItems.trim().length > 0,
+    container: savedSurvival.container,
+    foodItems: savedSurvival.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
+    flaskItems: savedSurvival.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
+    buyFoodAlias: savedSurvival.buyFoodAlias,
+    buyFoodCommands: savedSurvival.buyFoodCommands.split("\n").map(s => s.trim()).filter(Boolean),
+    fillFlaskAlias: savedSurvival.fillFlaskAlias,
+    fillFlaskCommands: savedSurvival.fillFlaskCommands.split("\n").map(s => s.trim()).filter(Boolean),
+  }));
+}
 
 roomChangedListeners.add((vnum: number) => {
   void mapStore.getRoomAutoCommand(vnum).then((command) => {
@@ -1332,7 +1422,6 @@ const server = Bun.serve({
         case "farm_toggle": {
           const enabled = event.payload?.enabled === true;
           const pa = event.payload?.periodicAction;
-          const sv = event.payload?.survival;
           farmController.updateConfig({
             targetValues: event.payload?.targetValues ?? [],
             healCommands: event.payload?.healCommands ?? [],
@@ -1344,17 +1433,6 @@ const server = Bun.serve({
               commands: pa?.commands ?? [],
               gotoAlias2: pa?.gotoAlias2 ?? "",
               intervalMs: pa?.intervalMs ?? 0,
-            },
-            survival: {
-              enabled: sv?.enabled === true,
-              eatCommands: sv?.eatCommands ?? [],
-              eatCount: sv?.eatCount ?? 1,
-              drinkCommands: sv?.drinkCommands ?? [],
-              drinkCount: sv?.drinkCount ?? 1,
-              buyFoodAlias: sv?.buyFoodAlias ?? "",
-              buyFoodCommands: sv?.buyFoodCommands ?? [],
-              fillFlaskAlias: sv?.fillFlaskAlias ?? "",
-              fillFlaskCommands: sv?.fillFlaskCommands ?? [],
             },
           });
           logEvent(ws, "browser-in", "farm_toggle", { enabled });
@@ -1381,10 +1459,10 @@ const server = Bun.serve({
           break;
         }
         case "navigate_to": {
-          const vnum = event.payload?.vnum;
-          if (typeof vnum === "number") {
-            logEvent(ws, "browser-in", "navigate_to", { vnum });
-            await startNavigation(ws, vnum);
+          const vnums = event.payload?.vnums;
+          if (Array.isArray(vnums) && vnums.length > 0) {
+            logEvent(ws, "browser-in", "navigate_to", { vnums: vnums.join(",") });
+            await startNavigationToNearest(ws, vnums);
           }
           break;
         }
@@ -1427,6 +1505,16 @@ const server = Bun.serve({
             const settings = normalizeSurvivalSettings(raw);
             logEvent(ws, "browser-in", "survival_settings_save");
             await mapStore.setSurvivalSettings(settings);
+            survivalController.updateConfig(normalizeSurvivalConfig({
+              enabled: settings.foodItems.trim().length > 0 || settings.flaskItems.trim().length > 0,
+              container: settings.container,
+              foodItems: settings.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
+              flaskItems: settings.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
+              buyFoodAlias: settings.buyFoodAlias,
+              buyFoodCommands: settings.buyFoodCommands.split("\n").map(s => s.trim()).filter(Boolean),
+              fillFlaskAlias: settings.fillFlaskAlias,
+              fillFlaskCommands: settings.fillFlaskCommands.split("\n").map(s => s.trim()).filter(Boolean),
+            }));
           }
           break;
         }
@@ -1498,10 +1586,9 @@ function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZoneSett
 
 function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSettings {
   return {
-    eatCommand: typeof raw.eatCommand === "string" ? raw.eatCommand : "",
-    eatCount: typeof raw.eatCount === "number" && Number.isFinite(raw.eatCount) ? raw.eatCount : 1,
-    drinkCommand: typeof raw.drinkCommand === "string" ? raw.drinkCommand : "",
-    drinkCount: typeof raw.drinkCount === "number" && Number.isFinite(raw.drinkCount) ? raw.drinkCount : 1,
+    container: typeof raw.container === "string" ? raw.container : "",
+    foodItems: typeof raw.foodItems === "string" ? raw.foodItems : "",
+    flaskItems: typeof raw.flaskItems === "string" ? raw.flaskItems : "",
     buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : "",
     buyFoodCommands: typeof raw.buyFoodCommands === "string" ? raw.buyFoodCommands : "",
     fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : "",

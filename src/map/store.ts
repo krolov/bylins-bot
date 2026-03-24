@@ -15,10 +15,9 @@ export interface FarmZoneSettings {
 }
 
 export interface SurvivalSettings {
-  eatCommand: string;
-  eatCount: number;
-  drinkCommand: string;
-  drinkCount: number;
+  container: string;
+  foodItems: string;
+  flaskItems: string;
   buyFoodAlias: string;
   buyFoodCommands: string;
   fillFlaskAlias: string;

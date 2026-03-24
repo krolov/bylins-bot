@@ -1,23 +1,16 @@
 const ANSI_SEQUENCE_REGEXP = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
-const ROOM_PROMPT_REGEXP = /Вых:[^>]*>/i;
 const DEFAULT_RETRY_DELAY_MS = 1200;
-
-// Голод: "Вы голодны.", "Вы очень голодны.", "Вы готовы сожрать быка."
 const HUNGER_REGEXP = /Вы (?:голодны|очень голодны|готовы сожрать быка)/i;
-// Жажда: "Вас мучает жажда.", "Вас сильно мучает жажда.", "Вам хочется выпить озеро."
 const THIRST_REGEXP = /Вас (?:мучает|сильно мучает) жажда|Вам хочется выпить озеро/i;
-// Подтверждение насыщения
 const SATIATED_REGEXP = /Вы полностью насытились/i;
-// Подтверждение утоления жажды
 const THIRST_QUENCHED_REGEXP = /Вы не чувствуете жажды/i;
 const CONSUME_COMMAND_DELAY_MS = 800;
 
 export interface SurvivalConfig {
   enabled: boolean;
-  eatCommands: string[];
-  eatCount: number;
-  drinkCommands: string[];
-  drinkCount: number;
+  container: string;
+  foodItems: string[];
+  flaskItems: string[];
   buyFoodAlias: string;
   buyFoodCommands: string[];
   fillFlaskAlias: string;
@@ -26,18 +19,20 @@ export interface SurvivalConfig {
 
 export interface SurvivalControllerDependencies {
   getCurrentRoomId(): number | null;
-  isConnected(): boolean;
   sendCommand(command: string): void;
   resolveNearest(alias: string): Promise<number | null>;
   navigateTo(vnum: number): Promise<void>;
+  isInCombat(): boolean;
   onLog(message: string): void;
 }
 
 interface SurvivalState {
   hungry: boolean;
   thirsty: boolean;
-  eatAttempted: boolean;
-  drinkAttempted: boolean;
+  eatItemIndex: number;
+  drinkItemIndex: number;
+  eatPending: boolean;
+  drinkPending: boolean;
   inFlight: boolean;
   nextActionAt: number;
   config: SurvivalConfig;
@@ -46,14 +41,13 @@ interface SurvivalState {
 export function normalizeSurvivalConfig(config: SurvivalConfig): SurvivalConfig {
   return {
     enabled: config.enabled === true,
-    eatCommands: Array.isArray(config.eatCommands)
-      ? config.eatCommands.map((c) => c.trim()).filter((c) => c.length > 0)
+    container: (config.container ?? "").trim(),
+    foodItems: Array.isArray(config.foodItems)
+      ? config.foodItems.map((c) => c.trim()).filter((c) => c.length > 0)
       : [],
-    eatCount: Math.max(1, Math.round(Number.isFinite(Number(config.eatCount)) ? Number(config.eatCount) : 1)),
-    drinkCommands: Array.isArray(config.drinkCommands)
-      ? config.drinkCommands.map((c) => c.trim()).filter((c) => c.length > 0)
+    flaskItems: Array.isArray(config.flaskItems)
+      ? config.flaskItems.map((c) => c.trim()).filter((c) => c.length > 0)
       : [],
-    drinkCount: Math.max(1, Math.round(Number.isFinite(Number(config.drinkCount)) ? Number(config.drinkCount) : 1)),
     buyFoodAlias: (config.buyFoodAlias ?? "").trim(),
     buyFoodCommands: Array.isArray(config.buyFoodCommands)
       ? config.buyFoodCommands.map((c) => c.trim()).filter((c) => c.length > 0)
@@ -69,16 +63,17 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
   const state: SurvivalState = {
     hungry: false,
     thirsty: false,
-    eatAttempted: false,
-    drinkAttempted: false,
+    eatItemIndex: 0,
+    drinkItemIndex: 0,
+    eatPending: false,
+    drinkPending: false,
     inFlight: false,
     nextActionAt: 0,
     config: {
       enabled: false,
-      eatCommands: [],
-      eatCount: 1,
-      drinkCommands: [],
-      drinkCount: 1,
+      container: "",
+      foodItems: [],
+      flaskItems: [],
       buyFoodAlias: "",
       buyFoodCommands: [],
       fillFlaskAlias: "",
@@ -89,8 +84,10 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
   function reset(): void {
     state.hungry = false;
     state.thirsty = false;
-    state.eatAttempted = false;
-    state.drinkAttempted = false;
+    state.eatItemIndex = 0;
+    state.drinkItemIndex = 0;
+    state.eatPending = false;
+    state.drinkPending = false;
     state.inFlight = false;
     state.nextActionAt = 0;
   }
@@ -102,24 +99,18 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
   function handleMudText(text: string): void {
     const normalized = stripAnsi(text).replace(/\r/g, "");
 
-    if (HUNGER_REGEXP.test(normalized)) {
-      state.hungry = true;
-    }
-    if (THIRST_REGEXP.test(normalized)) {
-      state.thirsty = true;
-    }
+    if (HUNGER_REGEXP.test(normalized)) state.hungry = true;
+    if (THIRST_REGEXP.test(normalized)) state.thirsty = true;
+
     if (SATIATED_REGEXP.test(normalized)) {
       state.hungry = false;
-      state.eatAttempted = false;
+      state.eatItemIndex = 0;
+      state.eatPending = false;
     }
     if (THIRST_QUENCHED_REGEXP.test(normalized)) {
       state.thirsty = false;
-      state.drinkAttempted = false;
-    }
-
-    // Reset flags when a room prompt arrives (no longer in combat)
-    if (ROOM_PROMPT_REGEXP.test(normalized)) {
-      // intentionally empty — prompt detection for future use
+      state.drinkItemIndex = 0;
+      state.drinkPending = false;
     }
   }
 
@@ -127,26 +118,8 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     return state.inFlight;
   }
 
-  function needsAttention(inCombat: boolean): boolean {
-    if (!state.config.enabled) return false;
-    if (inCombat) return false;
-    return state.hungry || state.thirsty;
-  }
-
-  function getNextActionDelay(): number {
-    return Math.max(0, state.nextActionAt - Date.now());
-  }
-
-  /**
-   * Attempts to handle hunger/thirst. Returns true if an action was taken
-   * (caller should yield / reschedule tick), false if nothing to do.
-   *
-   * scheduleTick is called by the caller when this returns true with a delay,
-   * so this function uses onSchedule callback to request a reschedule.
-   */
-  async function runTick(inCombat: boolean, onSchedule: (delayMs: number) => void): Promise<boolean> {
-    if (!state.config.enabled) return false;
-    if (inCombat) return false;
+  async function runTick(onSchedule: (delayMs: number) => void): Promise<boolean> {
+    if (!state.config.enabled || deps.isInCombat()) return false;
 
     const waitMs = state.nextActionAt - Date.now();
     if (waitMs > 0) {
@@ -155,83 +128,76 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     }
 
     if (state.hungry) {
-      if (!state.eatAttempted && state.config.eatCommands.length > 0) {
-        const count = Math.max(1, state.config.eatCount);
-        deps.onLog(`[survival] голод: ${state.config.eatCommands.join(", ")} x${count}`);
-        for (let i = 0; i < count; i++) {
-          for (const cmd of state.config.eatCommands) {
-            deps.sendCommand(cmd);
-          }
-        }
-        state.eatAttempted = true;
+      const { foodItems, container } = state.config;
+
+      if (state.eatPending) {
         state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
         onSchedule(CONSUME_COMMAND_DELAY_MS);
         return true;
       }
 
-      if (state.hungry && state.config.buyFoodAlias && !state.inFlight) {
-        const originVnum = deps.getCurrentRoomId();
-        state.inFlight = true;
-        void (async () => {
-          try {
-            const alias = state.config.buyFoodAlias;
-            deps.onLog(`[survival] еда кончилась, идём к ближайшей точке "${alias}"`);
-            const vnum = await deps.resolveNearest(alias);
-            if (vnum === null) {
-              deps.onLog(`[survival] алиас "${alias}" не найден на карте, пропуск`);
-              return;
-            }
-            await deps.navigateTo(vnum);
-            for (const cmd of state.config.buyFoodCommands) {
-              deps.sendCommand(cmd);
-            }
-            state.eatAttempted = false;
-            if (originVnum !== null && originVnum !== deps.getCurrentRoomId()) {
-              deps.onLog(`[survival] возвращаемся на исходную позицию (${originVnum})`);
-              await deps.navigateTo(originVnum);
-            }
-          } finally {
-            state.inFlight = false;
-            onSchedule(DEFAULT_RETRY_DELAY_MS);
-          }
-        })();
-        onSchedule(DEFAULT_RETRY_DELAY_MS);
+      if (foodItems.length > 0 && state.eatItemIndex < foodItems.length) {
+        const item = foodItems[state.eatItemIndex];
+        const takeCmd = container ? `взя ${item} ${container}` : `взя ${item}`;
+        const eatCmd = `есть ${item}`;
+        deps.onLog(`[survival] голод: ${takeCmd} → ${eatCmd}`);
+        deps.sendCommand(takeCmd);
+        deps.sendCommand(eatCmd);
+        state.eatItemIndex += 1;
+        state.eatPending = true;
+        state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
+        onSchedule(CONSUME_COMMAND_DELAY_MS);
         return true;
       }
+
+      if (foodItems.length > 0 && state.eatItemIndex >= foodItems.length) {
+        deps.onLog("[survival] еда в контейнере кончилась, нечего есть");
+        state.eatItemIndex = 0;
+      }
+
+      return false;
     }
 
     if (state.thirsty) {
-      if (!state.drinkAttempted && state.config.drinkCommands.length > 0) {
-        const count = Math.max(1, state.config.drinkCount);
-        deps.onLog(`[survival] жажда: ${state.config.drinkCommands.join(", ")} x${count}`);
-        for (let i = 0; i < count; i++) {
-          for (const cmd of state.config.drinkCommands) {
-            deps.sendCommand(cmd);
-          }
-        }
-        state.drinkAttempted = true;
+      const { flaskItems, container, fillFlaskAlias, fillFlaskCommands } = state.config;
+
+      if (state.drinkPending) {
         state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
         onSchedule(CONSUME_COMMAND_DELAY_MS);
         return true;
       }
 
-      if (state.thirsty && state.config.fillFlaskAlias && !state.inFlight) {
+      if (flaskItems.length > 0 && state.drinkItemIndex < flaskItems.length) {
+        const item = flaskItems[state.drinkItemIndex];
+        const takeCmd = container ? `взя ${item} ${container}` : `взя ${item}`;
+        const drinkCmd = `пить ${item}`;
+        deps.onLog(`[survival] жажда: ${takeCmd} → ${drinkCmd}`);
+        deps.sendCommand(takeCmd);
+        deps.sendCommand(drinkCmd);
+        state.drinkItemIndex += 1;
+        state.drinkPending = true;
+        state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
+        onSchedule(CONSUME_COMMAND_DELAY_MS);
+        return true;
+      }
+
+      if (!state.inFlight && fillFlaskAlias) {
         const originVnum = deps.getCurrentRoomId();
         state.inFlight = true;
         void (async () => {
           try {
-            const alias = state.config.fillFlaskAlias;
-            deps.onLog(`[survival] вода кончилась, идём к ближайшей точке "${alias}"`);
-            const vnum = await deps.resolveNearest(alias);
+            deps.onLog(`[survival] фляга пуста, идём наполнять: "${fillFlaskAlias}"`);
+            const vnum = await deps.resolveNearest(fillFlaskAlias);
             if (vnum === null) {
-              deps.onLog(`[survival] алиас "${alias}" не найден на карте, пропуск`);
+              deps.onLog(`[survival] алиас "${fillFlaskAlias}" не найден на карте, пропуск`);
               return;
             }
             await deps.navigateTo(vnum);
-            for (const cmd of state.config.fillFlaskCommands) {
+            for (const cmd of fillFlaskCommands) {
               deps.sendCommand(cmd);
             }
-            state.drinkAttempted = false;
+            state.drinkItemIndex = 0;
+            state.drinkPending = false;
             if (originVnum !== null && originVnum !== deps.getCurrentRoomId()) {
               deps.onLog(`[survival] возвращаемся на исходную позицию (${originVnum})`);
               await deps.navigateTo(originVnum);
@@ -244,6 +210,13 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
         onSchedule(DEFAULT_RETRY_DELAY_MS);
         return true;
       }
+
+      if (!state.inFlight && !fillFlaskAlias) {
+        deps.onLog("[survival] фляга пуста, маршрут наполнения не настроен");
+        state.drinkItemIndex = 0;
+      }
+
+      return false;
     }
 
     if (state.inFlight) {
@@ -259,8 +232,6 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     updateConfig,
     handleMudText,
     isInFlight,
-    needsAttention,
-    getNextActionDelay,
     runTick,
   };
 }
