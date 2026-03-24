@@ -18,10 +18,11 @@ export interface SurvivalSettings {
   container: string;
   foodItems: string;
   flaskItems: string;
+  buyFoodItem: string;
+  buyFoodMax: number;
   buyFoodAlias: string;
-  buyFoodCommands: string;
   fillFlaskAlias: string;
-  fillFlaskCommands: string;
+  fillFlaskSource: string;
 }
 
 export interface GameItem {
@@ -52,6 +53,7 @@ export interface MapStore {
   getSurvivalSettings(): Promise<SurvivalSettings | null>;
   setSurvivalSettings(settings: SurvivalSettings): Promise<void>;
   upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void>;
+  getItemByName(name: string): Promise<GameItem | null>;
   getItems(): Promise<GameItem[]>;
   setRoomAutoCommand(vnum: number, command: string): Promise<void>;
   deleteRoomAutoCommand(vnum: number): Promise<void>;
@@ -363,6 +365,24 @@ export function createMapStore(database: DatabaseClient): MapStore {
           data = EXCLUDED.data,
           last_seen = NOW()
       `;
+    },
+
+    async getItemByName(name: string): Promise<GameItem | null> {
+      const rows = await database<ItemRow[]>`
+        SELECT name, item_type, data, first_seen, last_seen
+        FROM game_items
+        WHERE name = ${name}
+        LIMIT 1
+      `;
+      if (rows.length === 0) return null;
+      const row = rows[0];
+      return {
+        name: row.name,
+        itemType: row.item_type,
+        data: typeof row.data === "string" ? (JSON.parse(row.data) as Record<string, unknown>) : row.data,
+        firstSeen: row.first_seen,
+        lastSeen: row.last_seen,
+      };
     },
 
     async getItems(): Promise<GameItem[]> {

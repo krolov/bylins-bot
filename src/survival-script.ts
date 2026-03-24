@@ -3,18 +3,32 @@ const DEFAULT_RETRY_DELAY_MS = 1200;
 const HUNGER_REGEXP = /Вы (?:голодны|очень голодны|готовы сожрать быка)/i;
 const THIRST_REGEXP = /Вас (?:мучает|сильно мучает) жажда|Вам хочется выпить озеро/i;
 const SATIATED_REGEXP = /Вы полностью насытились/i;
+const ATE_REGEXP = /Вы съели /i;
+const TOO_FULL_REGEXP = /Вы слишком сыты для этого/i;
 const THIRST_QUENCHED_REGEXP = /Вы не чувствуете жажды/i;
+const DRANK_REGEXP = /Вы выпили .+ из /i;
+const NOT_FOUND_REGEXP = /Вы не смогли это найти|Вы не видите .+ в |У вас нет '/i;
 const CONSUME_COMMAND_DELAY_MS = 800;
+const INSPECT_TIMEOUT_MS = 2000;
+const ITEM_LINE_REGEXP = /^\s*(.+?)\s*(?:\[(\d+)\])?\s*$/;
+const PROMPT_LINE_REGEXP = /^\s*\d+H\s+\d+M\b/i;
+const MAX_CONSUME_ITERATIONS = 20;
 
 export interface SurvivalConfig {
   enabled: boolean;
   container: string;
   foodItems: string[];
   flaskItems: string[];
+  buyFoodItem: string;
+  buyFoodMax: number;
   buyFoodAlias: string;
-  buyFoodCommands: string[];
   fillFlaskAlias: string;
-  fillFlaskCommands: string[];
+  fillFlaskSource: string;
+}
+
+export interface SurvivalStatus {
+  foodEmpty: boolean;
+  flaskEmpty: boolean;
 }
 
 export interface SurvivalControllerDependencies {
@@ -24,18 +38,24 @@ export interface SurvivalControllerDependencies {
   navigateTo(vnum: number): Promise<void>;
   isInCombat(): boolean;
   onLog(message: string): void;
+  onStatusChange(status: SurvivalStatus): void;
 }
 
 interface SurvivalState {
   hungry: boolean;
   thirsty: boolean;
-  eatItemIndex: number;
-  drinkItemIndex: number;
-  eatPending: boolean;
-  drinkPending: boolean;
   inFlight: boolean;
   nextActionAt: number;
+  foodEmpty: boolean;
+  flaskEmpty: boolean;
+  inspectPending: ((text: string) => void) | null;
+  pendingPutBack: { keyword: string; container: string } | null;
   config: SurvivalConfig;
+  eatingKeyword: string | null;
+  drinkingKeyword: string | null;
+  eatIterations: number;
+  drinkIterations: number;
+  eatNextTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export function normalizeSurvivalConfig(config: SurvivalConfig): SurvivalConfig {
@@ -48,14 +68,13 @@ export function normalizeSurvivalConfig(config: SurvivalConfig): SurvivalConfig 
     flaskItems: Array.isArray(config.flaskItems)
       ? config.flaskItems.map((c) => c.trim()).filter((c) => c.length > 0)
       : [],
+    buyFoodItem: (config.buyFoodItem ?? "").trim(),
+    buyFoodMax: typeof config.buyFoodMax === "number" && Number.isFinite(config.buyFoodMax) && config.buyFoodMax > 0
+      ? Math.floor(config.buyFoodMax)
+      : 20,
     buyFoodAlias: (config.buyFoodAlias ?? "").trim(),
-    buyFoodCommands: Array.isArray(config.buyFoodCommands)
-      ? config.buyFoodCommands.map((c) => c.trim()).filter((c) => c.length > 0)
-      : [],
     fillFlaskAlias: (config.fillFlaskAlias ?? "").trim(),
-    fillFlaskCommands: Array.isArray(config.fillFlaskCommands)
-      ? config.fillFlaskCommands.map((c) => c.trim()).filter((c) => c.length > 0)
-      : [],
+    fillFlaskSource: (config.fillFlaskSource ?? "").trim(),
   };
 }
 
@@ -63,33 +82,52 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
   const state: SurvivalState = {
     hungry: false,
     thirsty: false,
-    eatItemIndex: 0,
-    drinkItemIndex: 0,
-    eatPending: false,
-    drinkPending: false,
     inFlight: false,
     nextActionAt: 0,
+    foodEmpty: false,
+    flaskEmpty: false,
+    inspectPending: null,
+    pendingPutBack: null,
+    eatingKeyword: null,
+    drinkingKeyword: null,
+    eatIterations: 0,
+    drinkIterations: 0,
+    eatNextTimer: null,
     config: {
       enabled: false,
       container: "",
       foodItems: [],
       flaskItems: [],
+      buyFoodItem: "",
+      buyFoodMax: 20,
       buyFoodAlias: "",
-      buyFoodCommands: [],
       fillFlaskAlias: "",
-      fillFlaskCommands: [],
+      fillFlaskSource: "",
     },
   };
 
   function reset(): void {
     state.hungry = false;
     state.thirsty = false;
-    state.eatItemIndex = 0;
-    state.drinkItemIndex = 0;
-    state.eatPending = false;
-    state.drinkPending = false;
     state.inFlight = false;
     state.nextActionAt = 0;
+    state.foodEmpty = false;
+    state.flaskEmpty = false;
+    state.inspectPending = null;
+    state.pendingPutBack = null;
+    state.eatingKeyword = null;
+    state.drinkingKeyword = null;
+    state.eatIterations = 0;
+    state.drinkIterations = 0;
+    cancelEatNextTimer();
+    deps.onStatusChange({ foodEmpty: state.foodEmpty, flaskEmpty: state.flaskEmpty });
+  }
+
+  function cancelEatNextTimer(): void {
+    if (state.eatNextTimer !== null) {
+      clearTimeout(state.eatNextTimer);
+      state.eatNextTimer = null;
+    }
   }
 
   function updateConfig(config: SurvivalConfig): void {
@@ -99,18 +137,100 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
   function handleMudText(text: string): void {
     const normalized = stripAnsi(text).replace(/\r/g, "");
 
+    if (state.inspectPending !== null && /(Заполнен|Пуст)/i.test(normalized)) {
+      const pending = state.inspectPending;
+      state.inspectPending = null;
+      pending(normalized);
+    }
+
     if (HUNGER_REGEXP.test(normalized)) state.hungry = true;
     if (THIRST_REGEXP.test(normalized)) state.thirsty = true;
 
-    if (SATIATED_REGEXP.test(normalized)) {
+    if (SATIATED_REGEXP.test(normalized) || TOO_FULL_REGEXP.test(normalized)) {
+      cancelEatNextTimer();
       state.hungry = false;
-      state.eatItemIndex = 0;
-      state.eatPending = false;
+      state.inFlight = false;
+      state.eatingKeyword = null;
+      state.eatIterations = 0;
+      setFoodEmpty(false);
     }
+
+    if (NOT_FOUND_REGEXP.test(normalized)) {
+      if (state.eatingKeyword !== null) {
+        state.hungry = false;
+        state.inFlight = false;
+        state.eatingKeyword = null;
+        state.eatIterations = 0;
+        cancelEatNextTimer();
+        setFoodEmpty(true);
+        deps.onLog("[survival] еда не найдена, попробуем позже");
+      }
+      if (state.drinkingKeyword !== null) {
+        state.thirsty = false;
+        state.inFlight = false;
+        state.drinkingKeyword = null;
+        state.drinkIterations = 0;
+        setFlaskEmpty(true);
+        if (state.pendingPutBack !== null) {
+          state.pendingPutBack = null;
+        }
+        deps.onLog("[survival] фляга не найдена, попробуем позже");
+      }
+    }
+
+    if (ATE_REGEXP.test(normalized)) {
+      if (state.eatingKeyword !== null) {
+        state.eatIterations += 1;
+        if (state.eatIterations >= MAX_CONSUME_ITERATIONS) {
+          deps.onLog("[survival] достигнут лимит поедания, останавливаемся");
+          state.hungry = false;
+          state.inFlight = false;
+          state.eatingKeyword = null;
+          state.eatIterations = 0;
+        } else {
+          const keyword = state.eatingKeyword;
+          const container = state.config.container;
+          deps.sendCommand(`взять ${keyword} ${container}`);
+          state.eatNextTimer = setTimeout(() => {
+            state.eatNextTimer = null;
+            deps.sendCommand(`есть ${keyword}`);
+          }, CONSUME_COMMAND_DELAY_MS);
+        }
+      }
+    }
+
+    if (DRANK_REGEXP.test(normalized)) {
+      setFlaskEmpty(false);
+      if (state.drinkingKeyword !== null) {
+        state.drinkIterations += 1;
+        if (state.drinkIterations >= MAX_CONSUME_ITERATIONS) {
+          deps.onLog("[survival] достигнут лимит питья, останавливаемся");
+          state.thirsty = false;
+          state.inFlight = false;
+          if (state.pendingPutBack !== null) {
+            const { keyword, container } = state.pendingPutBack;
+            state.pendingPutBack = null;
+            deps.sendCommand(`положить ${keyword} ${container}`);
+          }
+          state.drinkingKeyword = null;
+          state.drinkIterations = 0;
+        } else {
+          deps.sendCommand(`пить ${state.drinkingKeyword}`);
+        }
+      }
+    }
+
     if (THIRST_QUENCHED_REGEXP.test(normalized)) {
       state.thirsty = false;
-      state.drinkItemIndex = 0;
-      state.drinkPending = false;
+      state.inFlight = false;
+      state.drinkingKeyword = null;
+      state.drinkIterations = 0;
+      setFlaskEmpty(false);
+      if (state.pendingPutBack !== null) {
+        const { keyword, container } = state.pendingPutBack;
+        state.pendingPutBack = null;
+        deps.sendCommand(`положить ${keyword} ${container}`);
+      }
     }
   }
 
@@ -120,6 +240,7 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
 
   async function runTick(onSchedule: (delayMs: number) => void): Promise<boolean> {
     if (!state.config.enabled || deps.isInCombat()) return false;
+    if (state.inFlight) return true;
 
     const waitMs = state.nextActionAt - Date.now();
     if (waitMs > 0) {
@@ -130,91 +251,71 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     if (state.hungry) {
       const { foodItems, container } = state.config;
 
-      if (state.eatPending) {
+      if (foodItems.length === 0 || container.length === 0) {
+        setFoodEmpty(true);
+        state.hungry = false;
+        deps.onLog("[survival] еда в мешке кончилась");
+        return false;
+      }
+
+      state.inFlight = true;
+      deps.sendCommand(`осм ${container}`);
+      const inspectText = await waitForInspect();
+      const foodKeyword = findFirstMatchingKeyword(inspectText, foodItems);
+
+      if (foodKeyword !== null) {
+        deps.onLog(`[survival] голод: есть ${foodKeyword}`);
+        state.eatingKeyword = foodKeyword;
+        state.eatIterations = 0;
+        deps.sendCommand(`взять ${foodKeyword} ${container}`);
+        await delay(CONSUME_COMMAND_DELAY_MS);
+        deps.sendCommand(`есть ${foodKeyword}`);
         state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
         onSchedule(CONSUME_COMMAND_DELAY_MS);
         return true;
       }
 
-      if (foodItems.length > 0 && state.eatItemIndex < foodItems.length) {
-        const item = foodItems[state.eatItemIndex];
-        const takeCmd = container ? `взя ${item} ${container}` : `взя ${item}`;
-        const eatCmd = `есть ${item}`;
-        deps.onLog(`[survival] голод: ${takeCmd} → ${eatCmd}`);
-        deps.sendCommand(takeCmd);
-        deps.sendCommand(eatCmd);
-        state.eatItemIndex += 1;
-        state.eatPending = true;
-        state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
-        onSchedule(CONSUME_COMMAND_DELAY_MS);
-        return true;
-      }
-
-      if (foodItems.length > 0 && state.eatItemIndex >= foodItems.length) {
-        deps.onLog("[survival] еда в контейнере кончилась, нечего есть");
-        state.eatItemIndex = 0;
-      }
+      state.inFlight = false;
+      setFoodEmpty(true);
+      state.hungry = false;
+      deps.onLog("[survival] еда в мешке кончилась");
 
       return false;
     }
 
     if (state.thirsty) {
-      const { flaskItems, container, fillFlaskAlias, fillFlaskCommands } = state.config;
+      const { flaskItems, container } = state.config;
 
-      if (state.drinkPending) {
+      if (flaskItems.length === 0 || container.length === 0) {
+        setFlaskEmpty(true);
+        state.thirsty = false;
+        deps.onLog("[survival] вода в мешке кончилась");
+        return false;
+      }
+
+      state.inFlight = true;
+      deps.sendCommand(`осм ${container}`);
+      const inspectText = await waitForInspect();
+      const flaskKeyword = findFirstMatchingKeyword(inspectText, flaskItems);
+
+      if (flaskKeyword !== null) {
+        deps.onLog(`[survival] жажда: пить ${flaskKeyword}`);
+        state.drinkingKeyword = flaskKeyword;
+        state.drinkIterations = 0;
+        deps.sendCommand(`взять ${flaskKeyword} ${container}`);
+        await delay(CONSUME_COMMAND_DELAY_MS);
+        state.pendingPutBack = { keyword: flaskKeyword, container };
+        deps.sendCommand(`пить ${flaskKeyword}`);
+        setFlaskEmpty(false);
         state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
         onSchedule(CONSUME_COMMAND_DELAY_MS);
         return true;
       }
 
-      if (flaskItems.length > 0 && state.drinkItemIndex < flaskItems.length) {
-        const item = flaskItems[state.drinkItemIndex];
-        const takeCmd = container ? `взя ${item} ${container}` : `взя ${item}`;
-        const drinkCmd = `пить ${item}`;
-        deps.onLog(`[survival] жажда: ${takeCmd} → ${drinkCmd}`);
-        deps.sendCommand(takeCmd);
-        deps.sendCommand(drinkCmd);
-        state.drinkItemIndex += 1;
-        state.drinkPending = true;
-        state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
-        onSchedule(CONSUME_COMMAND_DELAY_MS);
-        return true;
-      }
-
-      if (!state.inFlight && fillFlaskAlias) {
-        const originVnum = deps.getCurrentRoomId();
-        state.inFlight = true;
-        void (async () => {
-          try {
-            deps.onLog(`[survival] фляга пуста, идём наполнять: "${fillFlaskAlias}"`);
-            const vnum = await deps.resolveNearest(fillFlaskAlias);
-            if (vnum === null) {
-              deps.onLog(`[survival] алиас "${fillFlaskAlias}" не найден на карте, пропуск`);
-              return;
-            }
-            await deps.navigateTo(vnum);
-            for (const cmd of fillFlaskCommands) {
-              deps.sendCommand(cmd);
-            }
-            state.drinkItemIndex = 0;
-            state.drinkPending = false;
-            if (originVnum !== null && originVnum !== deps.getCurrentRoomId()) {
-              deps.onLog(`[survival] возвращаемся на исходную позицию (${originVnum})`);
-              await deps.navigateTo(originVnum);
-            }
-          } finally {
-            state.inFlight = false;
-            onSchedule(DEFAULT_RETRY_DELAY_MS);
-          }
-        })();
-        onSchedule(DEFAULT_RETRY_DELAY_MS);
-        return true;
-      }
-
-      if (!state.inFlight && !fillFlaskAlias) {
-        deps.onLog("[survival] фляга пуста, маршрут наполнения не настроен");
-        state.drinkItemIndex = 0;
-      }
+      state.inFlight = false;
+      setFlaskEmpty(true);
+      state.thirsty = false;
+      deps.onLog("[survival] вода в мешке кончилась");
 
       return false;
     }
@@ -232,10 +333,85 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     updateConfig,
     handleMudText,
     isInFlight,
+    getStatus,
     runTick,
   };
+
+  function setFoodEmpty(value: boolean): void {
+    if (state.foodEmpty === value) return;
+    state.foodEmpty = value;
+    deps.onStatusChange({ foodEmpty: state.foodEmpty, flaskEmpty: state.flaskEmpty });
+  }
+
+  function setFlaskEmpty(value: boolean): void {
+    if (state.flaskEmpty === value) return;
+    state.flaskEmpty = value;
+    deps.onStatusChange({ foodEmpty: state.foodEmpty, flaskEmpty: state.flaskEmpty });
+  }
+
+  function getStatus(): SurvivalStatus {
+    return { foodEmpty: state.foodEmpty, flaskEmpty: state.flaskEmpty };
+  }
+
+  function waitForInspect(): Promise<string> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        state.inspectPending = null;
+        resolve("");
+      }, INSPECT_TIMEOUT_MS);
+      state.inspectPending = (text) => {
+        clearTimeout(timer);
+        resolve(text);
+      };
+    });
+  }
+}
+
+function findFirstMatchingKeyword(inspectText: string, keywords: string[]): string | null {
+  const items = parseInspectItems(inspectText);
+  for (const keyword of keywords) {
+    const normalizedKeyword = keyword.toLowerCase();
+    if (items.some((item) => item.name.toLowerCase().includes(normalizedKeyword))) {
+      return keyword;
+    }
+  }
+  return null;
+}
+
+export function parseInspectItems(inspectText: string): Array<{ name: string; count: number }> {
+  const normalized = stripAnsi(inspectText).replace(/\r/g, "");
+  const lines = normalized.split("\n");
+  const headerIndex = lines.findIndex((line) => /Заполнен/i.test(line));
+  if (headerIndex < 0) {
+    if (/Пуст/i.test(normalized)) {
+      return [];
+    }
+    return [];
+  }
+
+  const items: Array<{ name: string; count: number }> = [];
+  for (let i = headerIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i]?.trim() ?? "";
+    if (line.length === 0) continue;
+    if (PROMPT_LINE_REGEXP.test(line) || /Вых:/i.test(line)) {
+      break;
+    }
+    const match = ITEM_LINE_REGEXP.exec(line);
+    if (!match) continue;
+    const name = match[1]?.trim();
+    if (!name) continue;
+    const countRaw = match[2];
+    const count = countRaw ? Number.parseInt(countRaw, 10) : 1;
+    items.push({ name, count: Number.isFinite(count) && count > 0 ? count : 1 });
+  }
+
+  return items;
 }
 
 function stripAnsi(text: string): string {
   return text.replace(ANSI_SEQUENCE_REGEXP, "");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

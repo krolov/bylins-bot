@@ -94,6 +94,10 @@ export function createMemoryMapStore(): MapStore {
 
     async upsertItem(_name: string, _itemType: string, _data: Record<string, unknown>): Promise<void> {},
 
+    async getItemByName(_name: string): Promise<GameItem | null> {
+      return null;
+    },
+
     async getItems(): Promise<GameItem[]> {
       return [];
     },
