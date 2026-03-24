@@ -56,11 +56,12 @@
 
     <main class="shell">
       <aside class="panel panel--actions">
-        <button id="buy-food-btn" type="button" class="action-btn" title="Купить еду">🍞</button>
-        <button id="fill-flask-btn" type="button" class="action-btn" title="Наполнить флягу">💧</button>
+        <button id="buy-food-btn" type="button" class="action-btn" title="Купить еду">🍞<span id="buy-food-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
+        <button id="fill-flask-btn" type="button" class="action-btn" title="Наполнить флягу">💧<span id="fill-flask-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
+        <button id="gear-advisor-button" type="button" class="action-btn" title="Советник по снаряжению">🗡️</button>
       </aside>
 
-      <section class="panel panel--output">
+      <section id="panel-output" class="panel panel--output">
         <div class="terminal-toolbar">
           <span>Session output</span>
           <button id="clear-output-button" type="button" class="button-secondary button-small">Clear</button>
@@ -73,7 +74,9 @@
         </form>
       </section>
 
-      <section class="panel panel--map">
+      <div id="panel-splitter" class="panel-splitter" title="Тащите для изменения размера"></div>
+
+      <section id="panel-map" class="panel panel--map">
         <div class="terminal-toolbar map-toolbar">
           <div class="map-tabs">
             <button id="map-tab-map" type="button" class="map-tab map-tab--active">Карта</button>
@@ -95,6 +98,26 @@
           <div id="nav-status" class="nav-status nav-status--hidden"></div>
           <ul id="alias-list" class="alias-list"></ul>
           <p id="alias-list-empty" class="alias-list-empty">Алиасы не заданы. Кликните по комнате на карте.</p>
+        </div>
+
+        <div id="gear-advisor-panel" class="gear-advisor-panel gear-advisor-panel--hidden">
+          <div class="gear-advisor-panel__header">
+            <span class="gear-advisor-panel__title">Советник по снаряжению</span>
+            <button id="gear-advisor-modal-close" type="button" class="button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+          <div class="gear-advisor-panel__body">
+            <p id="gear-advisor-status" class="gear-advisor__status"></p>
+            <p id="gear-advisor-coins" class="gear-advisor__coins"></p>
+            <div class="gear-advisor__table-wrap">
+              <table class="gear-advisor__table">
+                <thead><tr><th>Слот</th><th>Решение</th><th>Сейчас</th></tr></thead>
+                <tbody id="gear-advisor-table-body"></tbody>
+              </table>
+            </div>
+            <div id="gear-advisor-sell-list" class="gear-advisor__sell-section gear-advisor__sell--hidden">
+              <h4 class="gear-advisor__sell-title">Ненужные предметы</h4>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -348,20 +371,29 @@
               />
             </div>
 
-            <div class="farm-modal__field">
-              <label for="survival-modal-buy-food-commands" class="farm-modal__label">
-                Команды покупки еды
-                <span class="farm-modal__hint">по одной на строку</span>
-              </label>
-              <textarea
-                id="survival-modal-buy-food-commands"
-                class="farm-modal__textarea"
-                placeholder="купить каравай"
-                rows="3"
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="survival-modal-buy-food-item" class="farm-modal__label">Что покупать</label>
+              <input
+                id="survival-modal-buy-food-item"
+                type="text"
+                class="topbar__input"
+                placeholder="хлеб"
                 autocomplete="off"
                 spellcheck="false"
-              ></textarea>
+              />
             </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="survival-modal-buy-food-max" class="farm-modal__label">Максимум в мешке</label>
+              <input
+                id="survival-modal-buy-food-max"
+                type="number"
+                min="1"
+                class="farm-modal__number-input topbar__input"
+                value="20"
+              />
+            </div>
+
 
             <div class="farm-modal__field farm-modal__field--section-header">
               <span class="farm-modal__label">Наполнение фляги</span>
@@ -378,19 +410,16 @@
               />
             </div>
 
-            <div class="farm-modal__field">
-              <label for="survival-modal-fill-flask-commands" class="farm-modal__label">
-                Команды наполнения фляги
-                <span class="farm-modal__hint">по одной на строку</span>
-              </label>
-              <textarea
-                id="survival-modal-fill-flask-commands"
-                class="farm-modal__textarea"
-                placeholder="налить фляга колодец"
-                rows="3"
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="survival-modal-fill-flask-source" class="farm-modal__label">Источник воды</label>
+              <input
+                id="survival-modal-fill-flask-source"
+                type="text"
+                class="topbar__input"
+                placeholder="колодец"
                 autocomplete="off"
                 spellcheck="false"
-              ></textarea>
+              />
             </div>
           </div>
 
@@ -412,6 +441,10 @@
             <div class="farm-modal__field farm-modal__field--inline">
               <label for="trigger-dodge" class="farm-modal__label">Уклон в бою</label>
               <input id="trigger-dodge" type="checkbox" />
+            </div>
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="trigger-stand-up" class="farm-modal__label">Вставать при сбивании с ног</label>
+              <input id="trigger-stand-up" type="checkbox" />
             </div>
           </div>
 
@@ -522,5 +555,6 @@
           </div>
         </div>
       </div>
+
   </body>
 </html>

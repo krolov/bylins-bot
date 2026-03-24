@@ -150,6 +150,13 @@ type ServerEvent =
       payload: NavigationStatePayload;
     }
   | {
+      type: "survival_status";
+      payload: {
+        foodEmpty: boolean;
+        flaskEmpty: boolean;
+      };
+    }
+  | {
       type: "farm_settings_data";
       payload: {
         zoneId: number;
@@ -162,7 +169,7 @@ type ServerEvent =
     }
   | {
       type: "triggers_state";
-      payload: { dodge: boolean };
+      payload: { dodge: boolean; standUp: boolean };
     }
   | {
       type: "items_data";
@@ -174,6 +181,35 @@ type ServerEvent =
       type: "room_auto_commands_snapshot";
       payload: {
         entries: Array<{ vnum: number; command: string }>;
+      };
+    }
+  | { type: "gear_scan_progress"; payload: { message: string } }
+  | { type: "gear_scan_result";
+      payload: {
+        coins: number;
+        rows: Array<{
+          slot: string;
+          action: "keep" | "buy" | "equip" | "no_upgrade";
+          itemName?: string;
+          price?: number;
+          shopNumber?: number;
+          canAfford?: boolean;
+          source?: "shop" | "inventory";
+          damageDice?: string;
+          damageAvg?: number;
+          itemAc?: number;
+          itemArmor?: number;
+          currentItemName?: string;
+          currentDamageDice?: string;
+          currentDamageAvg?: number;
+          currentAc?: number;
+          currentArmor?: number;
+        }>;
+        sellItems: Array<{
+          name: string;
+          count: number;
+          sellCommand: string;
+        }>;
       };
     };
 
@@ -199,6 +235,7 @@ type ClientEvent =
   | { type: "alias_set"; payload: { vnum: number; alias: string } }
   | { type: "alias_delete"; payload: { vnum: number } }
   | { type: "navigate_to"; payload: { vnums: number[] } }
+  | { type: "goto_and_run"; payload: { vnums: number[]; commands: string[]; action?: "buy_food" | "fill_flask" } }
   | { type: "navigate_stop" }
   | { type: "farm_settings_get"; payload: { zoneId: number } }
   | {
@@ -210,14 +247,18 @@ type ClientEvent =
     }
   | {
       type: "triggers_toggle";
-      payload: { dodge?: boolean };
+      payload: { dodge?: boolean; standUp?: boolean };
     }
   | { type: "item_db_get" }
   | { type: "room_auto_command_set"; payload: { vnum: number; command: string } }
   | { type: "room_auto_command_delete"; payload: { vnum: number } }
   | { type: "room_auto_commands_get" }
   | { type: "survival_settings_get" }
-  | { type: "survival_settings_save"; payload: SurvivalSettings };
+  | { type: "survival_settings_save"; payload: SurvivalSettings }
+  | { type: "gear_scan_start" }
+  | { type: "gear_sell"; payload: { sellCommand: string } }
+  | { type: "gear_drop"; payload: { dropCommand: string } }
+  | { type: "gear_apply"; payload: { commands: string[] } };
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -303,15 +344,19 @@ const survivalModalContainer = requireElement<HTMLInputElement>("#survival-modal
 const survivalModalFoodItems = requireElement<HTMLTextAreaElement>("#survival-modal-food-items");
 const survivalModalFlaskItems = requireElement<HTMLTextAreaElement>("#survival-modal-flask-items");
 const survivalModalBuyFoodAlias = requireElement<HTMLInputElement>("#survival-modal-buy-food-alias");
-const survivalModalBuyFoodCommands = requireElement<HTMLTextAreaElement>("#survival-modal-buy-food-commands");
+const survivalModalBuyFoodItem = requireElement<HTMLInputElement>("#survival-modal-buy-food-item");
+const survivalModalBuyFoodMax = requireElement<HTMLInputElement>("#survival-modal-buy-food-max");
+
 const survivalModalFillFlaskAlias = requireElement<HTMLInputElement>("#survival-modal-fill-flask-alias");
-const survivalModalFillFlaskCommands = requireElement<HTMLTextAreaElement>("#survival-modal-fill-flask-commands");
+const survivalModalFillFlaskSource = requireElement<HTMLInputElement>("#survival-modal-fill-flask-source");
 const survivalModalClose = requireElement<HTMLButtonElement>("#survival-modal-close");
 const survivalModalCancel = requireElement<HTMLButtonElement>("#survival-modal-cancel");
 const survivalModalSave = requireElement<HTMLButtonElement>("#survival-modal-save");
 
 const buyFoodBtn = requireElement<HTMLButtonElement>("#buy-food-btn");
 const fillFlaskBtn = requireElement<HTMLButtonElement>("#fill-flask-btn");
+const buyFoodBadge = requireElement<HTMLSpanElement>("#buy-food-badge");
+const fillFlaskBadge = requireElement<HTMLSpanElement>("#fill-flask-badge");
 
 const triggersButton = requireElement<HTMLButtonElement>("#triggers-button");
 const triggersModal = requireElement<HTMLDivElement>("#triggers-modal");
@@ -319,6 +364,7 @@ const triggersModalBackdrop = requireElement<HTMLDivElement>("#triggers-modal .f
 const triggersModalClose = requireElement<HTMLButtonElement>("#triggers-modal-close");
 const triggersModalCancel = requireElement<HTMLButtonElement>("#triggers-modal-cancel");
 const triggerDodgeCheckbox = requireElement<HTMLInputElement>("#trigger-dodge");
+const triggerStandUpCheckbox = requireElement<HTMLInputElement>("#trigger-stand-up");
 
 const itemDbButton = requireElement<HTMLButtonElement>("#item-db-button");
 const itemDbModal = requireElement<HTMLDivElement>("#item-db-modal");
@@ -330,6 +376,14 @@ const itemDbEmpty = requireElement<HTMLParagraphElement>("#item-db-empty");
 const itemDbTabs = requireElement<HTMLDivElement>("#item-db-tabs");
 const itemDbSearch = requireElement<HTMLInputElement>("#item-db-search");
 const itemDbCount = requireElement<HTMLSpanElement>("#item-db-count");
+
+const gearAdvisorButton = requireElement<HTMLButtonElement>("#gear-advisor-button");
+const gearAdvisorPanel = requireElement<HTMLDivElement>("#gear-advisor-panel");
+const gearAdvisorModalClose = requireElement<HTMLButtonElement>("#gear-advisor-modal-close");
+const gearAdvisorStatus = requireElement<HTMLParagraphElement>("#gear-advisor-status");
+const gearAdvisorTableBody = requireElement<HTMLTableSectionElement>("#gear-advisor-table-body");
+const gearAdvisorCoins = requireElement<HTMLSpanElement>("#gear-advisor-coins");
+const gearAdvisorSellList = requireElement<HTMLDivElement>("#gear-advisor-sell-list");
 
 let farmModalZoneId: number | null = null;
 let currentSurvivalSettings: SurvivalSettings = defaultSurvivalSettings();
@@ -351,10 +405,11 @@ interface SurvivalSettings {
   container: string;
   foodItems: string;
   flaskItems: string;
+  buyFoodItem: string;
+  buyFoodMax: number;
   buyFoodAlias: string;
-  buyFoodCommands: string;
   fillFlaskAlias: string;
-  fillFlaskCommands: string;
+  fillFlaskSource: string;
 }
 
 interface FarmRuntimeStats {
@@ -369,7 +424,7 @@ function defaultFarmSettings(): FarmSettings {
 }
 
 function defaultSurvivalSettings(): SurvivalSettings {
-  return { container: "", foodItems: "", flaskItems: "", buyFoodAlias: "", buyFoodCommands: "", fillFlaskAlias: "", fillFlaskCommands: "" };
+  return { container: "", foodItems: "", flaskItems: "", buyFoodItem: "", buyFoodMax: 20, buyFoodAlias: "", fillFlaskAlias: "", fillFlaskSource: "" };
 }
 
 function normalizeFarmSettings(raw: Partial<FarmSettings>): FarmSettings {
@@ -394,10 +449,11 @@ function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSett
     container: typeof raw.container === "string" ? raw.container : def.container,
     foodItems: typeof raw.foodItems === "string" ? raw.foodItems : def.foodItems,
     flaskItems: typeof raw.flaskItems === "string" ? raw.flaskItems : def.flaskItems,
+    buyFoodItem: typeof raw.buyFoodItem === "string" ? raw.buyFoodItem : def.buyFoodItem,
+    buyFoodMax: typeof raw.buyFoodMax === "number" && Number.isFinite(raw.buyFoodMax) && raw.buyFoodMax > 0 ? Math.floor(raw.buyFoodMax) : def.buyFoodMax,
     buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : def.buyFoodAlias,
-    buyFoodCommands: typeof raw.buyFoodCommands === "string" ? raw.buyFoodCommands : def.buyFoodCommands,
     fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : def.fillFlaskAlias,
-    fillFlaskCommands: typeof raw.fillFlaskCommands === "string" ? raw.fillFlaskCommands : def.fillFlaskCommands,
+    fillFlaskSource: typeof raw.fillFlaskSource === "string" ? raw.fillFlaskSource : def.fillFlaskSource,
   };
 }
 function fillFarmModal(settings: FarmSettings): void {
@@ -417,10 +473,11 @@ function fillSurvivalModal(settings: SurvivalSettings): void {
   survivalModalContainer.value = settings.container;
   survivalModalFoodItems.value = settings.foodItems;
   survivalModalFlaskItems.value = settings.flaskItems;
+  survivalModalBuyFoodItem.value = settings.buyFoodItem;
+  survivalModalBuyFoodMax.value = String(settings.buyFoodMax);
   survivalModalBuyFoodAlias.value = settings.buyFoodAlias;
-  survivalModalBuyFoodCommands.value = settings.buyFoodCommands;
   survivalModalFillFlaskAlias.value = settings.fillFlaskAlias;
-  survivalModalFillFlaskCommands.value = settings.fillFlaskCommands;
+  survivalModalFillFlaskSource.value = settings.fillFlaskSource;
 }
 
 function parseFarmCommandValues(rawValue: string): string[] {
@@ -457,10 +514,11 @@ function closeSurvivalSettingsModal(): void {
   survivalSettingsModal.classList.add("farm-modal--hidden");
 }
 
-let currentTriggerState: { dodge: boolean } = { dodge: true };
+let currentTriggerState: { dodge: boolean; standUp: boolean } = { dodge: true, standUp: true };
 
 function openTriggersModal(): void {
   triggerDodgeCheckbox.checked = currentTriggerState.dodge;
+  triggerStandUpCheckbox.checked = currentTriggerState.standUp;
   triggersModal.classList.remove("farm-modal--hidden");
 }
 
@@ -631,10 +689,11 @@ function commitSurvivalSettings(): void {
     container: survivalModalContainer.value.trim(),
     foodItems: survivalModalFoodItems.value.trim(),
     flaskItems: survivalModalFlaskItems.value.trim(),
+    buyFoodItem: survivalModalBuyFoodItem.value.trim(),
+    buyFoodMax: Number(survivalModalBuyFoodMax.value) || 20,
     buyFoodAlias: survivalModalBuyFoodAlias.value.trim(),
-    buyFoodCommands: survivalModalBuyFoodCommands.value.trim(),
     fillFlaskAlias: survivalModalFillFlaskAlias.value.trim(),
-    fillFlaskCommands: survivalModalFillFlaskCommands.value.trim(),
+    fillFlaskSource: survivalModalFillFlaskSource.value.trim(),
   });
 
   sendClientEvent({
@@ -647,8 +706,13 @@ function commitSurvivalSettings(): void {
 }
 
 function updateActionButtons(): void {
-  buyFoodBtn.disabled = !currentSurvivalSettings.buyFoodCommands.trim();
-  fillFlaskBtn.disabled = !currentSurvivalSettings.fillFlaskCommands.trim();
+  buyFoodBtn.disabled = !currentSurvivalSettings.buyFoodAlias.trim() || !currentSurvivalSettings.buyFoodItem.trim();
+  fillFlaskBtn.disabled = !currentSurvivalSettings.fillFlaskAlias.trim();
+}
+
+function updateActionBadges(): void {
+  buyFoodBadge.classList.toggle("action-btn__badge--hidden", !currentSurvivalStatus.foodEmpty);
+  fillFlaskBadge.classList.toggle("action-btn__badge--hidden", !currentSurvivalStatus.flaskEmpty);
 }
 
 function commitFarmSettings(): void {
@@ -854,6 +918,7 @@ let currentStats: FarmRuntimeStats = {
 };
 
 let currentAliases: AliasPayload[] = [];
+let currentSurvivalStatus: { foodEmpty: boolean; flaskEmpty: boolean } = { foodEmpty: false, flaskEmpty: false };
 let currentRoomAutoCommands: Map<number, string> = new Map();
 let aliasPopupVnum: number | null = null;
 let autoCmdPopupVnum: number | null = null;
@@ -1714,6 +1779,131 @@ function flushPendingQueue(): void {
   }
 }
 
+function openGearAdvisorModal(): void {
+  gearAdvisorTableBody.innerHTML = "";
+  gearAdvisorCoins.textContent = "";
+  gearAdvisorStatus.textContent = "Запускаю...";
+  gearAdvisorSellList.innerHTML = "";
+  gearAdvisorSellList.classList.add("gear-advisor__sell--hidden");
+  gearAdvisorPanel.classList.remove("gear-advisor-panel--hidden");
+  sendClientEvent({ type: "gear_scan_start" });
+}
+
+function closeGearAdvisorModal(): void {
+  gearAdvisorPanel.classList.add("gear-advisor-panel--hidden");
+}
+
+function renderGearAdvisorRow(row: {
+  slot: string;
+  action: string;
+  itemName?: string;
+  price?: number;
+  shopNumber?: number;
+  canAfford?: boolean;
+  source?: string;
+  damageDice?: string;
+  damageAvg?: number;
+  itemAc?: number;
+  itemArmor?: number;
+  currentItemName?: string;
+  currentDamageDice?: string;
+  currentDamageAvg?: number;
+  currentAc?: number;
+  currentArmor?: number;
+}): HTMLTableRowElement {
+  const tr = document.createElement("tr");
+  tr.className = "gear-advisor__row";
+
+  const tdSlot = document.createElement("td");
+  tdSlot.className = "gear-advisor__cell";
+  tdSlot.textContent = row.slot;
+  tr.appendChild(tdSlot);
+
+  const tdAction = document.createElement("td");
+  tdAction.className = "gear-advisor__cell";
+
+  function fmtDamage(dice?: string, avg?: number): string {
+    if (!dice) return "";
+    return avg ? `[${dice} (ср. ${avg.toFixed(1)})]` : `[${dice}]`;
+  }
+
+  function fmtArmor(ac?: number, armor?: number): string {
+    const parts: string[] = [];
+    if (ac) parts.push(`AC ${ac}`);
+    if (armor) parts.push(`броня ${armor}`);
+    return parts.length ? `[${parts.join(", ")}]` : "";
+  }
+
+  const itemStats = fmtDamage(row.damageDice, row.damageAvg) || fmtArmor(row.itemAc, row.itemArmor);
+  const itemLabel = itemStats ? `${row.itemName ?? ""} ${itemStats}` : (row.itemName ?? "");
+
+  if (row.action === "keep") {
+    tr.classList.add("gear-advisor__row--keep");
+    tdAction.textContent = "оставить";
+  } else if (row.action === "no_upgrade") {
+    tr.classList.add("gear-advisor__row--keep");
+    tdAction.textContent = "оставить (нет улучшений)";
+  } else if (row.action === "equip") {
+    tr.classList.add("gear-advisor__row--equip");
+    tdAction.textContent = `надеть: ${itemLabel}`;
+  } else if (row.action === "buy") {
+    const numStr = row.shopNumber != null ? `${row.shopNumber}` : "";
+    const priceStr = row.price != null ? ` [${row.price} кун]` : "";
+    if (row.canAfford) {
+      tr.classList.add("gear-advisor__row--buy");
+      tdAction.textContent = `купить ${numStr}${priceStr}: ${itemLabel}`.trim();
+    } else {
+      tr.classList.add("gear-advisor__row--buy-cant");
+      tdAction.textContent = `купить ${numStr}${priceStr} (не хватает): ${itemLabel}`.trim();
+    }
+  }
+  tr.appendChild(tdAction);
+
+  const tdCurrent = document.createElement("td");
+  tdCurrent.className = "gear-advisor__cell gear-advisor__cell--current";
+  if (row.currentItemName) {
+    const curStats = fmtDamage(row.currentDamageDice, row.currentDamageAvg)
+      || fmtArmor(row.currentAc, row.currentArmor);
+    tdCurrent.textContent = curStats
+      ? `${row.currentItemName} ${curStats}`
+      : row.currentItemName;
+  } else {
+    tdCurrent.textContent = "—";
+  }
+  tr.appendChild(tdCurrent);
+
+  if (row.action === "buy" || row.action === "equip") {
+    const tdApply = document.createElement("td");
+    tdApply.className = "gear-advisor__cell gear-advisor__cell--apply";
+    const applyBtn = document.createElement("button");
+    applyBtn.className = "button-secondary button-small";
+    applyBtn.textContent = "Применить";
+    applyBtn.addEventListener("click", () => {
+      const cmds: string[] = [];
+      if (row.action === "buy" && row.shopNumber != null) {
+        cmds.push(`купить ${row.shopNumber}`);
+      }
+      if (row.currentItemName) {
+        cmds.push(`снять ${row.currentItemName.replace(/ /g, ".")}`);
+      }
+      if (row.itemName) {
+        const escapedName = row.itemName.replace(/ /g, ".");
+        const wearCmd = row.slot === "правая рука" ? "вооруж" : row.slot === "левая рука" ? "держ" : "надеть";
+        cmds.push(`${wearCmd} ${escapedName}`);
+      }
+      if (cmds.length > 0) {
+        sendClientEvent({ type: "gear_apply", payload: { commands: cmds } });
+        applyBtn.disabled = true;
+        applyBtn.textContent = "...";
+      }
+    });
+    tdApply.appendChild(applyBtn);
+    tr.appendChild(tdApply);
+  }
+
+  return tr;
+}
+
 function createSocket(): WebSocket {
   const nextSocket = new WebSocket(getSocketUrl());
 
@@ -1780,6 +1970,10 @@ function createSocket(): WebSocket {
         currentNavState = message.payload;
         renderNavStatus(message.payload);
         break;
+      case "survival_status":
+        currentSurvivalStatus = message.payload;
+        updateActionBadges();
+        break;
       case "farm_settings_data": {
         const rawSettings = message.payload.settings;
         const parsedSettings = typeof rawSettings === "string"
@@ -1807,12 +2001,62 @@ function createSocket(): WebSocket {
       case "triggers_state":
         currentTriggerState = message.payload;
         triggerDodgeCheckbox.checked = message.payload.dodge;
+        triggerStandUpCheckbox.checked = message.payload.standUp;
         break;
       case "items_data":
         renderItemDbTable(message.payload.items);
         break;
       case "room_auto_commands_snapshot":
         currentRoomAutoCommands = new Map(message.payload.entries.map((e) => [e.vnum, e.command]));
+        break;
+      case "gear_scan_progress":
+        gearAdvisorStatus.textContent = message.payload.message;
+        break;
+      case "gear_scan_result":
+        gearAdvisorStatus.textContent = "";
+        gearAdvisorCoins.textContent = `Монеты: ${message.payload.coins}`;
+        gearAdvisorTableBody.innerHTML = "";
+        for (const row of message.payload.rows) {
+          gearAdvisorTableBody.appendChild(renderGearAdvisorRow(row));
+        }
+        gearAdvisorSellList.innerHTML = "";
+        if (message.payload.sellItems.length > 0) {
+          gearAdvisorSellList.classList.remove("gear-advisor__sell--hidden");
+          for (const item of message.payload.sellItems) {
+            const sellRow = document.createElement("div");
+            sellRow.className = "gear-advisor__sell-row";
+
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "gear-advisor__sell-name";
+            nameSpan.textContent = item.count > 1 ? `${item.name} ×${item.count}` : item.name;
+
+            const sellBtn = document.createElement("button");
+            sellBtn.type = "button";
+            sellBtn.className = "button-secondary button-small gear-advisor__sell-btn";
+            sellBtn.textContent = "Продать";
+            sellBtn.addEventListener("click", () => {
+              sendClientEvent({ type: "gear_sell", payload: { sellCommand: item.sellCommand } });
+              sellRow.remove();
+            });
+
+            const dropBtn = document.createElement("button");
+            dropBtn.type = "button";
+            dropBtn.className = "button-secondary button-small gear-advisor__sell-btn";
+            dropBtn.textContent = "Бросить";
+            dropBtn.addEventListener("click", () => {
+              const dropCommand = item.count > 1 ? `бросить все.${item.name}` : `бросить ${item.name}`;
+              sendClientEvent({ type: "gear_drop", payload: { dropCommand } });
+              sellRow.remove();
+            });
+
+            sellRow.appendChild(nameSpan);
+            sellRow.appendChild(sellBtn);
+            sellRow.appendChild(dropBtn);
+            gearAdvisorSellList.appendChild(sellRow);
+          }
+        } else {
+          gearAdvisorSellList.classList.add("gear-advisor__sell--hidden");
+        }
         break;
     }
   });
@@ -1962,22 +2206,30 @@ commandInput.addEventListener("keydown", (e) => {
 
 commandForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const command = commandInput.value.trim();
+  const raw = commandInput.value.trim();
 
-  if (!command) {
+  if (!raw) {
     return;
   }
 
-  if (commandHistory[commandHistory.length - 1] !== command) {
-    commandHistory.push(command);
+  const parts = raw.split(";").map((p) => p.trim()).filter((p) => p.length > 0);
+
+  if (parts.length === 0) {
+    return;
+  }
+
+  if (commandHistory[commandHistory.length - 1] !== raw) {
+    commandHistory.push(raw);
   }
   historyIndex = -1;
   historySavedInput = "";
 
-  sendClientEvent({
-    type: "send",
-    payload: { command },
-  });
+  for (const command of parts) {
+    sendClientEvent({
+      type: "send",
+      payload: { command },
+    });
+  }
   commandInput.value = "";
 });
 
@@ -2063,16 +2315,13 @@ buyFoodBtn.addEventListener("click", () => {
       .filter(a => a.alias.toLowerCase() === aliasName)
       .map(a => a.vnum);
     if (allVnums.length > 0) {
-      sendClientEvent({ type: "navigate_to", payload: { vnums: allVnums } });
+      sendClientEvent({ type: "goto_and_run", payload: { vnums: allVnums, commands: [], action: "buy_food" } });
+      return;
     }
+    appendSystemLine(`[survival] алиас "${alias}" не найден на карте`);
+    return;
   }
-  const commands = currentSurvivalSettings.buyFoodCommands
-    .split(/\r?\n/g)
-    .map((c) => c.trim())
-    .filter((c) => c.length > 0);
-  for (const command of commands) {
-    sendClientEvent({ type: "send", payload: { command } });
-  }
+  appendSystemLine("[survival] не задан алиас места покупки еды");
 });
 
 fillFlaskBtn.addEventListener("click", () => {
@@ -2083,16 +2332,13 @@ fillFlaskBtn.addEventListener("click", () => {
       .filter(a => a.alias.toLowerCase() === aliasName)
       .map(a => a.vnum);
     if (allVnums.length > 0) {
-      sendClientEvent({ type: "navigate_to", payload: { vnums: allVnums } });
+      sendClientEvent({ type: "goto_and_run", payload: { vnums: allVnums, commands: [], action: "fill_flask" } });
+      return;
     }
+    appendSystemLine(`[survival] алиас "${alias}" не найден на карте`);
+    return;
   }
-  const commands = currentSurvivalSettings.fillFlaskCommands
-    .split(/\r?\n/g)
-    .map((c) => c.trim())
-    .filter((c) => c.length > 0);
-  for (const command of commands) {
-    sendClientEvent({ type: "send", payload: { command } });
-  }
+  appendSystemLine("[survival] не задан алиас места с водой");
 });
 
 triggersButton.addEventListener("click", openTriggersModal);
@@ -2103,6 +2349,9 @@ triggersModalBackdrop.addEventListener("click", closeTriggersModal);
 itemDbButton.addEventListener("click", openItemDbModal);
 itemDbModalClose.addEventListener("click", closeItemDbModal);
 itemDbModalBackdrop.addEventListener("click", closeItemDbModal);
+
+gearAdvisorButton.addEventListener("click", openGearAdvisorModal);
+gearAdvisorModalClose.addEventListener("click", closeGearAdvisorModal);
 
 itemDbTabs.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
@@ -2120,6 +2369,11 @@ triggerDodgeCheckbox.addEventListener("change", () => {
   sendClientEvent({ type: "triggers_toggle", payload: { dodge: triggerDodgeCheckbox.checked } });
 });
 
+triggerStandUpCheckbox.addEventListener("change", () => {
+  currentTriggerState = { ...currentTriggerState, standUp: triggerStandUpCheckbox.checked };
+  sendClientEvent({ type: "triggers_toggle", payload: { standUp: triggerStandUpCheckbox.checked } });
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !farmSettingsModal.classList.contains("farm-modal--hidden")) {
     closeFarmSettingsModal();
@@ -2132,6 +2386,9 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape" && !itemDbModal.classList.contains("farm-modal--hidden")) {
     closeItemDbModal();
+  }
+  if (e.key === "Escape" && !gearAdvisorPanel.classList.contains("gear-advisor-panel--hidden")) {
+    closeGearAdvisorModal();
   }
   if (e.key === "Escape" && !mapContextMenu.classList.contains("map-context-menu--hidden")) {
     closeMapContextMenu();
@@ -2471,6 +2728,67 @@ document.addEventListener("keydown", (e) => {
 });
 
 renderFarmButton();
+updateActionBadges();
+updateActionButtons();
+
+const PANEL_SPLIT_KEY = "panel-split-map-fr";
+const PANEL_SPLIT_MIN_FR = 0.15;
+const PANEL_SPLIT_MAX_FR = 0.75;
+
+const shellEl = document.querySelector<HTMLElement>("main.shell");
+const panelSplitterEl = document.getElementById("panel-splitter");
+
+function applyPanelSplit(mapFr: number): void {
+  if (!shellEl) return;
+  const clamped = Math.max(PANEL_SPLIT_MIN_FR, Math.min(PANEL_SPLIT_MAX_FR, mapFr));
+  shellEl.style.gridTemplateColumns = `56px ${1 - clamped}fr 6px ${clamped}fr`;
+}
+
+function loadPanelSplit(): void {
+  const stored = localStorage.getItem(PANEL_SPLIT_KEY);
+  if (stored !== null) {
+    const fr = parseFloat(stored);
+    if (!isNaN(fr)) {
+      applyPanelSplit(fr);
+      return;
+    }
+  }
+  applyPanelSplit(0.35);
+}
+
+loadPanelSplit();
+
+if (panelSplitterEl !== null && shellEl !== null) {
+  let dragging = false;
+
+  panelSplitterEl.addEventListener("pointerdown", (e: PointerEvent) => {
+    e.preventDefault();
+    dragging = true;
+    panelSplitterEl.classList.add("panel-splitter--dragging");
+    panelSplitterEl.setPointerCapture(e.pointerId);
+  });
+
+  panelSplitterEl.addEventListener("pointermove", (e: PointerEvent) => {
+    if (!dragging) return;
+    const shellRect = shellEl.getBoundingClientRect();
+    const gaps = 3 * 8;
+    const available = shellRect.width - 56 - gaps;
+    const offsetX = e.clientX - shellRect.left - 56 - gaps / 2;
+    applyPanelSplit(Math.max(0, 1 - offsetX / available));
+  });
+
+  function stopSplitterDrag(e: PointerEvent): void {
+    if (!dragging) return;
+    dragging = false;
+    panelSplitterEl!.classList.remove("panel-splitter--dragging");
+    panelSplitterEl!.releasePointerCapture(e.pointerId);
+    const match = shellEl!.style.gridTemplateColumns.match(/\s([\d.]+)fr\s*$/);
+    if (match) localStorage.setItem(PANEL_SPLIT_KEY, match[1]);
+  }
+
+  panelSplitterEl.addEventListener("pointerup", stopSplitterDrag);
+  panelSplitterEl.addEventListener("pointercancel", stopSplitterDrag);
+}
 
 void loadDefaults()
   .then(() => {

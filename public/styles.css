@@ -103,8 +103,36 @@ body {
   width: min(1680px, calc(100vw - 32px));
   margin: 16px auto;
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr) minmax(320px, 460px);
-  gap: 16px;
+  grid-template-columns: 56px 1fr 6px minmax(280px, 1fr);
+  grid-template-rows: 1fr;
+  column-gap: 8px;
+  row-gap: 16px;
+}
+
+.panel-splitter {
+  align-self: stretch;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  touch-action: none;
+}
+
+.panel-splitter::after {
+  content: "";
+  display: block;
+  width: 2px;
+  height: 40px;
+  border-radius: 1px;
+  background: var(--panel-border);
+  transition: background 0.15s, height 0.15s;
+}
+
+.panel-splitter:hover::after,
+.panel-splitter--dragging::after {
+  background: var(--accent);
+  height: 60px;
 }
 
 .panel {
@@ -129,6 +157,7 @@ body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 
 /* ── Quick-action side panel ────────────────────────────────────────────── */
@@ -179,6 +208,22 @@ body {
   background: var(--panel-muted);
   border-color: var(--panel-border);
   color: var(--text-muted);
+}
+
+.action-btn__badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff4d4d;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.action-btn__badge--hidden {
+  display: none;
 }
 
 button {
@@ -534,6 +579,17 @@ button:hover {
     grid-template-columns: 1fr;
     height: auto;
     overflow: visible;
+    column-gap: 0;
+  }
+
+  .shell > .panel--actions,
+  .shell > .panel--output,
+  .shell > .panel--map {
+    margin: 0;
+  }
+
+  .panel-splitter {
+    display: none;
   }
 
   .panel--actions {
@@ -1244,4 +1300,55 @@ button:hover {
 .topbar-dropdown__item:focus {
   background: rgba(103, 215, 167, 0.1);
   color: var(--accent-strong);
+}
+
+/* ── Gear Advisor modal ──────────────────────────────────────────────────────── */
+
+.gear-advisor__status { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 8px; min-height: 1.2em; }
+.gear-advisor__coins { color: var(--accent); font-size: 0.85rem; margin: 0 0 12px; }
+.gear-advisor__table-wrap { overflow-x: auto; }
+.gear-advisor__table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.gear-advisor__table th,
+.gear-advisor__table td { padding: 3px 7px; text-align: left; border-bottom: 1px solid var(--panel-border); }
+.gear-advisor__table th { color: var(--text-muted); font-weight: 600; }
+.gear-advisor__cell { color: var(--text); }
+.gear-advisor__row--keep .gear-advisor__cell:last-child { color: var(--text-muted); }
+.gear-advisor__row--buy .gear-advisor__cell:last-child { color: var(--accent-strong); }
+.gear-advisor__row--buy-cant .gear-advisor__cell:last-child { color: var(--danger); }
+.gear-advisor__row--equip .gear-advisor__cell:last-child { color: var(--accent); }
+.gear-advisor__sell-section { margin-top: 12px; border-top: 1px solid var(--panel-border); padding-top: 10px; }
+.gear-advisor__sell--hidden { display: none; }
+.gear-advisor__sell-title { font-size: 13px; font-weight: 600; color: var(--text-muted); margin: 0 0 8px; }
+.gear-advisor__sell-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.gear-advisor__sell-name { flex: 1; font-size: 13px; }
+.gear-advisor__sell-btn { flex-shrink: 0; }
+
+.gear-advisor-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--panel);
+  border-radius: inherit;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.gear-advisor-panel--hidden { display: none; }
+.gear-advisor-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--panel-border);
+  flex-shrink: 0;
+}
+.gear-advisor-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.gear-advisor-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
 }
