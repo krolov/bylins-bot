@@ -1,40 +1,21 @@
 import type { Direction, MapSnapshot } from "./map/types";
 import { findPath } from "./map/pathfinder";
+import type { CombatState } from "./combat-state";
 
 const ANSI_SEQUENCE_REGEXP = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const ROOM_PROMPT_REGEXP = /Вых:[^>]*>/i;
-const COMBAT_PROMPT_REGEXP = /\[[^:\]]+:[^\]]+\]\s+\[[^:\]]+:[^\]]+\]\s*>/;
-const COMBAT_ACTIVITY_REGEXP = /Вы\s+(?:легонько|слегка)\s+огрели|Вы попытались огреть|попытал(?:ся|ась|ось)\s+(?:укусить|ужалить)\s+вас|без сознания и медленно умирает/i;
 const TARGET_NOT_VISIBLE_REGEXP = /Вы не видите цели\.?|Кого вы так сильно ненавидите/i;
 const TARGET_REMOVAL_REGEXP = /труп|мертв|мертва|душа|без сознания|убежал|убежала|убежало|убежали|уполз|уползла|уползли|улетел|улетела|улетели|ушел|ушла|ушли|исчез|исчезла|исчезли/i;
-// Моб пришёл в комнату: "Полоз приполз с запада.", "Аист прилетел с юга.", "Выдра прибежала с севера."
 const MOB_ARRIVAL_REGEXP = /^(.+?)\s+(?:приполз|приползла|приползли|прибежал|прибежала|прибежали|пришел|пришла|пришли|прилетел|прилетела|прилетели|прошмыгнул|прошмыгнула|прошмыгнули|прошмыгнуло)\s+с\s+\S+\.?$/i;
-// "Труп выдры лежит здесь." — предмет/труп на полу в описании комнаты
 const LOOT_ON_FLOOR_REGEXP = /^(.+?)\s+лежит здесь\.?$/i;
-// "Выдра мертва, ее душа медленно подымается в небеса." — моб только что умер
 const LOOT_MOB_DEATH_REGEXP = /мертв[аео]?,\s+(?:его|её|ее|ее)\s+душа/i;
 const LOOT_COMMAND_DELAY_MS = 600;
 const PERIODIC_ACTION_COMMAND_DELAY_MS = 700;
-// Блок мобов в описании комнаты: красные строки \u001b[1;31m после [ Exits: ... ]
-// Формат: <ESC>[1;31m<строка1>\r\n<строка2>\r\n<ESC>[0;0m
 const ROOM_MOB_BLOCK_REGEXP = /\u001b\[1;31m([\s\S]*?)\u001b\[0;0m/g;
-// Убирает префикс состояния моба в скобках, например "(летит) " или "(спит) "
 const TARGET_PREFIX_REGEXP = /^\([^)]*\)\s*/;
-// Вычленяет имя моба из строки описания, отсекая глагол/описание действия
 const TARGET_ACTION_SPLIT_REGEXP = /\s+(?:так\s+и\s+)?(?:тихо|величаво|злобно|изящно|медленно|стремительно|быстро)\s+(?=\S)|\s+(?:так\s+и\s+)?(?:норовит|стоит|сидит|лежит|ползает|ползет|ползут|идет|идут|ходит|ходят|бредет|бродит|бродят|разгуливает|проходит|проходят|присела|присел|крадется|крадутся|скользит|скользят|кружит|выгнул|выискивает|зудит|волнуется|спрятался|спряталась|спрятались|проскользнула|проскользнул|прошмыгнула|прошмыгнул|прошмыгнули|прошмыгнуло|извивается|проползает|шипит|орет|орёт|нахваливает|смотрит|несется|гоняет|пробегает|летает|жужжит|надоедает|пробует|отдыхает|прячется|пробежал|юркнула)(?=\s|$)/i;
 const RESTING_PROMPT_REGEXP = /\b(?:ОЗ|Вых):/i;
-// Голод: "Вы голодны.", "Вы очень голодны.", "Вы готовы сожрать быка."
-const HUNGER_REGEXP = /Вы (?:голодны|очень голодны|готовы сожрать быка)/i;
-// Жажда: "Вас мучает жажда.", "Вас сильно мучает жажда.", "Вам хочется выпить озеро."
-const THIRST_REGEXP = /Вас (?:мучает|сильно мучает) жажда|Вам хочется выпить озеро/i;
-// Подтверждение насыщения
-const SATIATED_REGEXP = /Вы полностью насытились/i;
-// Подтверждение утоления жажды
-const THIRST_QUENCHED_REGEXP = /Вы не чувствуете жажды/i;
-const CONSUME_COMMAND_DELAY_MS = 800;
-// Персонаж сел (от игры или от скрипта)
 const SITTING_REGEXP = /^Вы (?:сели|пристроились поудобнее)/i;
-// Персонаж встал
 const STANDING_REGEXP = /^Вы прекратили отдыхать и встали/i;
 const DEFAULT_RETRY_DELAY_MS = 1200;
 const MOVE_DELAY_MS = 900;
@@ -69,18 +50,6 @@ export interface PeriodicActionConfig {
   intervalMs: number;
 }
 
-export interface SurvivalConfig {
-  enabled: boolean;
-  eatCommands: string[];
-  eatCount: number;
-  drinkCommands: string[];
-  drinkCount: number;
-  buyFoodAlias: string;
-  buyFoodCommands: string[];
-  fillFlaskAlias: string;
-  fillFlaskCommands: string[];
-}
-
 export interface FarmStateSnapshot {
   enabled: boolean;
   zoneId: number | null;
@@ -101,6 +70,7 @@ interface FarmControllerDependencies {
   resolveAlias(alias: string): Promise<number | null>;
   resolveAliasAll(alias: string): Promise<number[]>;
   navigateTo(vnum: number): Promise<void>;
+  combatState: CombatState;
   onStateChange(state: FarmStateSnapshot): void;
   onLog(message: string): void;
 }
@@ -111,7 +81,6 @@ interface FarmConfig {
   healThresholdPercent: number;
   lootValues: string[];
   periodicAction: PeriodicActionConfig;
-  survival: SurvivalConfig;
 }
 
 interface FarmStats {
@@ -142,11 +111,6 @@ interface FarmState {
   lastMoveFromRoomId: number | null;
   lastPeriodicActionAt: number;
   periodicActionInFlight: boolean;
-  hungry: boolean;
-  thirsty: boolean;
-  eatAttempted: boolean;
-  drinkAttempted: boolean;
-  survivalInFlight: boolean;
   pendingRoomScanAfterKill: boolean;
 }
 
@@ -173,17 +137,6 @@ export function createFarmController(deps: FarmControllerDependencies) {
         gotoAlias2: "",
         intervalMs: 0,
       },
-      survival: {
-        enabled: false,
-        eatCommands: [],
-        eatCount: 1,
-        drinkCommands: [],
-        drinkCount: 1,
-        buyFoodAlias: "",
-        buyFoodCommands: [],
-        fillFlaskAlias: "",
-        fillFlaskCommands: [],
-      },
     },
     stats: {
       hp: 0,
@@ -200,13 +153,9 @@ export function createFarmController(deps: FarmControllerDependencies) {
     lastMoveFromRoomId: null,
     lastPeriodicActionAt: 0,
     periodicActionInFlight: false,
-    hungry: false,
-    thirsty: false,
-    eatAttempted: false,
-    drinkAttempted: false,
-    survivalInFlight: false,
     pendingRoomScanAfterKill: false,
   };
+
 
   function getState(): FarmStateSnapshot {
     return {
@@ -268,11 +217,6 @@ export function createFarmController(deps: FarmControllerDependencies) {
     state.lastMoveFromRoomId = null;
     state.lastPeriodicActionAt = 0;
     state.periodicActionInFlight = false;
-    state.hungry = false;
-    state.thirsty = false;
-    state.eatAttempted = false;
-    state.drinkAttempted = false;
-    state.survivalInFlight = false;
     state.pendingRoomScanAfterKill = false;
   }
 
@@ -345,13 +289,12 @@ export function createFarmController(deps: FarmControllerDependencies) {
     disable("Фарм выключен.");
   }
 
-  function updateConfig(config: { targetValues: string[]; healCommands: string[]; healThresholdPercent: number; lootValues: string[]; periodicAction: PeriodicActionConfig; survival: SurvivalConfig }): void {
+  function updateConfig(config: { targetValues: string[]; healCommands: string[]; healThresholdPercent: number; lootValues: string[]; periodicAction: PeriodicActionConfig }): void {
     state.config.targetValues = normalizeTargetValues(config.targetValues);
     state.config.healCommands = normalizeCommands(config.healCommands);
     state.config.healThresholdPercent = normalizePercent(config.healThresholdPercent, 50);
     state.config.lootValues = normalizeTargetValues(config.lootValues);
     state.config.periodicAction = normalizePeriodicAction(config.periodicAction);
-    state.config.survival = normalizeSurvivalConfig(config.survival);
     deps.onLog(`[farm] config targetValues: [${state.config.targetValues.join(", ") || "пусто"}]`);
     publishState();
   }
@@ -385,7 +328,7 @@ export function createFarmController(deps: FarmControllerDependencies) {
       parseMobsFromRoomDescription(text);
     }
 
-    if (COMBAT_PROMPT_REGEXP.test(normalized) || COMBAT_ACTIVITY_REGEXP.test(normalized)) {
+    if (deps.combatState.getInCombat()) {
       state.inCombat = true;
     }
 
@@ -412,27 +355,6 @@ export function createFarmController(deps: FarmControllerDependencies) {
         break;
       }
     }
-
-    for (const line of lines) {
-      if (HUNGER_REGEXP.test(line)) {
-        state.hungry = true;
-      }
-      if (THIRST_REGEXP.test(line)) {
-        state.thirsty = true;
-      }
-      if (SATIATED_REGEXP.test(line)) {
-        state.hungry = false;
-        state.eatAttempted = false;
-      }
-      if (THIRST_QUENCHED_REGEXP.test(line)) {
-        state.thirsty = false;
-        state.drinkAttempted = false;
-      }
-    }
-    if (HUNGER_REGEXP.test(normalized)) state.hungry = true;
-    if (THIRST_REGEXP.test(normalized)) state.thirsty = true;
-    if (SATIATED_REGEXP.test(normalized)) { state.hungry = false; state.eatAttempted = false; }
-    if (THIRST_QUENCHED_REGEXP.test(normalized)) { state.thirsty = false; state.drinkAttempted = false; }
 
     if (TARGET_NOT_VISIBLE_REGEXP.test(normalized)) {
       state.inCombat = false;
@@ -503,7 +425,7 @@ export function createFarmController(deps: FarmControllerDependencies) {
         deps.onLog(`Фарм включён для зоны ${state.zoneId}.`);
       }
 
-      if (!state.periodicActionInFlight && !state.survivalInFlight && options.currentRoomId !== null && state.zoneId !== null && getZoneId(options.currentRoomId) !== state.zoneId) {
+      if (!state.periodicActionInFlight && options.currentRoomId !== null && state.zoneId !== null && getZoneId(options.currentRoomId) !== state.zoneId) {
         disable(`Фарм остановлен: персонаж вышел из зоны ${state.zoneId}.`);
         return;
       }
@@ -569,7 +491,7 @@ export function createFarmController(deps: FarmControllerDependencies) {
         publishState();
       }
 
-      if (!state.periodicActionInFlight && !state.survivalInFlight && getZoneId(currentRoomId) !== state.zoneId) {
+      if (!state.periodicActionInFlight && getZoneId(currentRoomId) !== state.zoneId) {
         disable(`Фарм остановлен: персонаж вышел из зоны ${state.zoneId}.`);
         return;
       }
@@ -612,101 +534,6 @@ export function createFarmController(deps: FarmControllerDependencies) {
       }
 
       state.healingInProgress = false;
-
-      if (state.hungry && !state.inCombat && state.config.survival.enabled) {
-        if (!state.eatAttempted && state.config.survival.eatCommands.length > 0) {
-          const count = Math.max(1, state.config.survival.eatCount);
-          deps.onLog(`[farm] голод: ${state.config.survival.eatCommands.join(", ")} x${count}`);
-          for (let i = 0; i < count; i++) {
-            for (const cmd of state.config.survival.eatCommands) {
-              deps.sendCommand(cmd);
-            }
-          }
-          state.eatAttempted = true;
-          state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
-          scheduleTick(CONSUME_COMMAND_DELAY_MS);
-          return;
-        }
-        if (state.hungry && state.config.survival.buyFoodAlias && !state.survivalInFlight) {
-          const originVnum = deps.getCurrentRoomId();
-          state.survivalInFlight = true;
-          void (async () => {
-            try {
-              const alias = state.config.survival.buyFoodAlias;
-              deps.onLog(`[farm] еда кончилась, идём к ближайшей точке "${alias}"`);
-              const vnum = await resolveNearest(alias);
-              if (vnum === null) {
-                deps.onLog(`[farm] алиас "${alias}" не найден на карте, пропуск`);
-                return;
-              }
-              await deps.navigateTo(vnum);
-              for (const cmd of state.config.survival.buyFoodCommands) {
-                deps.sendCommand(cmd);
-              }
-              state.eatAttempted = false;
-              if (originVnum !== null && originVnum !== deps.getCurrentRoomId()) {
-                deps.onLog(`[farm] возвращаемся на исходную позицию (${originVnum})`);
-                await deps.navigateTo(originVnum);
-              }
-            } finally {
-              state.survivalInFlight = false;
-              scheduleTick(DEFAULT_RETRY_DELAY_MS);
-            }
-          })();
-          scheduleTick(DEFAULT_RETRY_DELAY_MS);
-          return;
-        }
-      }
-
-      if (state.thirsty && !state.inCombat && state.config.survival.enabled) {
-        if (!state.drinkAttempted && state.config.survival.drinkCommands.length > 0) {
-          const count = Math.max(1, state.config.survival.drinkCount);
-          deps.onLog(`[farm] жажда: ${state.config.survival.drinkCommands.join(", ")} x${count}`);
-          for (let i = 0; i < count; i++) {
-            for (const cmd of state.config.survival.drinkCommands) {
-              deps.sendCommand(cmd);
-            }
-          }
-          state.drinkAttempted = true;
-          state.nextActionAt = Date.now() + CONSUME_COMMAND_DELAY_MS;
-          scheduleTick(CONSUME_COMMAND_DELAY_MS);
-          return;
-        }
-        if (state.thirsty && state.config.survival.fillFlaskAlias && !state.survivalInFlight) {
-          const originVnum = deps.getCurrentRoomId();
-          state.survivalInFlight = true;
-          void (async () => {
-            try {
-              const alias = state.config.survival.fillFlaskAlias;
-              deps.onLog(`[farm] вода кончилась, идём к ближайшей точке "${alias}"`);
-              const vnum = await resolveNearest(alias);
-              if (vnum === null) {
-                deps.onLog(`[farm] алиас "${alias}" не найден на карте, пропуск`);
-                return;
-              }
-              await deps.navigateTo(vnum);
-              for (const cmd of state.config.survival.fillFlaskCommands) {
-                deps.sendCommand(cmd);
-              }
-              state.drinkAttempted = false;
-              if (originVnum !== null && originVnum !== deps.getCurrentRoomId()) {
-                deps.onLog(`[farm] возвращаемся на исходную позицию (${originVnum})`);
-                await deps.navigateTo(originVnum);
-              }
-            } finally {
-              state.survivalInFlight = false;
-              scheduleTick(DEFAULT_RETRY_DELAY_MS);
-            }
-          })();
-          scheduleTick(DEFAULT_RETRY_DELAY_MS);
-          return;
-        }
-      }
-
-      if (state.survivalInFlight) {
-        scheduleTick(DEFAULT_RETRY_DELAY_MS);
-        return;
-      }
 
       if (state.inCombat) {
         scheduleTick(DEFAULT_RETRY_DELAY_MS);
@@ -1004,10 +831,6 @@ function chooseNextDirection(
   return choices[0]?.direction ?? null;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function normalizePeriodicAction(config: PeriodicActionConfig): PeriodicActionConfig {
   return {
     enabled: config.enabled === true,
@@ -1017,27 +840,5 @@ function normalizePeriodicAction(config: PeriodicActionConfig): PeriodicActionCo
       : [],
     gotoAlias2: (config.gotoAlias2 ?? "").trim(),
     intervalMs: Math.max(0, Math.round(Number.isFinite(config.intervalMs) ? config.intervalMs : 0)),
-  };
-}
-
-function normalizeSurvivalConfig(config: SurvivalConfig): SurvivalConfig {
-  return {
-    enabled: config.enabled === true,
-    eatCommands: Array.isArray(config.eatCommands)
-      ? config.eatCommands.map((c) => c.trim()).filter((c) => c.length > 0)
-      : [],
-    eatCount: Math.max(1, Math.round(Number.isFinite(Number(config.eatCount)) ? Number(config.eatCount) : 1)),
-    drinkCommands: Array.isArray(config.drinkCommands)
-      ? config.drinkCommands.map((c) => c.trim()).filter((c) => c.length > 0)
-      : [],
-    drinkCount: Math.max(1, Math.round(Number.isFinite(Number(config.drinkCount)) ? Number(config.drinkCount) : 1)),
-    buyFoodAlias: (config.buyFoodAlias ?? "").trim(),
-    buyFoodCommands: Array.isArray(config.buyFoodCommands)
-      ? config.buyFoodCommands.map((c) => c.trim()).filter((c) => c.length > 0)
-      : [],
-    fillFlaskAlias: (config.fillFlaskAlias ?? "").trim(),
-    fillFlaskCommands: Array.isArray(config.fillFlaskCommands)
-      ? config.fillFlaskCommands.map((c) => c.trim()).filter((c) => c.length > 0)
-      : [],
   };
 }
