@@ -103,7 +103,7 @@ body {
   width: min(1680px, calc(100vw - 32px));
   margin: 16px auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
+  grid-template-columns: 56px minmax(0, 1fr) minmax(320px, 460px);
   gap: 16px;
 }
 
@@ -129,6 +129,56 @@ body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
+
+/* ── Quick-action side panel ────────────────────────────────────────────── */
+
+.panel--actions {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.action-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-muted);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.1s, opacity 0.12s;
+}
+
+.action-btn:hover {
+  background: rgba(103, 215, 167, 0.12);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  transform: scale(1.08);
+}
+
+.action-btn:active {
+  transform: scale(0.95);
+}
+
+.action-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+  background: var(--panel-muted);
+  border-color: var(--panel-border);
+  color: var(--text-muted);
 }
 
 button {
@@ -484,6 +534,14 @@ button:hover {
     grid-template-columns: 1fr;
     height: auto;
     overflow: visible;
+  }
+
+  .panel--actions {
+    flex-direction: row;
+    height: auto;
+    width: 100%;
+    padding: 8px;
+    justify-content: flex-start;
   }
 
   body {

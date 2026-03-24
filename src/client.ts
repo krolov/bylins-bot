@@ -185,7 +185,7 @@ type ClientEvent =
   | { type: "send"; payload: { command: string } }
   | { type: "disconnect" }
   | { type: "map_reset" }
-  | {
+   | {
        type: "farm_toggle";
        payload: {
          enabled: boolean;
@@ -194,22 +194,11 @@ type ClientEvent =
          healThresholdPercent: number;
          lootValues: string[];
          periodicAction: PeriodicActionConfig;
-          survival: {
-            enabled: boolean;
-            eatCommands: string[];
-            eatCount: number;
-            drinkCommands: string[];
-            drinkCount: number;
-            buyFoodAlias: string;
-            buyFoodCommands: string[];
-            fillFlaskAlias: string;
-            fillFlaskCommands: string[];
-          };
        };
      }
   | { type: "alias_set"; payload: { vnum: number; alias: string } }
   | { type: "alias_delete"; payload: { vnum: number } }
-  | { type: "navigate_to"; payload: { vnum: number } }
+  | { type: "navigate_to"; payload: { vnums: number[] } }
   | { type: "navigate_stop" }
   | { type: "farm_settings_get"; payload: { zoneId: number } }
   | {
@@ -310,10 +299,9 @@ const farmModalSurvivalEnabled = requireElement<HTMLInputElement>("#farm-modal-s
 const survivalSettingsButton = requireElement<HTMLButtonElement>("#survival-settings-button");
 const survivalSettingsModal = requireElement<HTMLDivElement>("#survival-settings-modal");
 const survivalModalBackdrop = requireElement<HTMLDivElement>("#survival-settings-modal .farm-modal__backdrop");
-const survivalModalEat = requireElement<HTMLTextAreaElement>("#survival-modal-eat");
-const survivalModalEatCount = requireElement<HTMLInputElement>("#survival-modal-eat-count");
-const survivalModalDrink = requireElement<HTMLTextAreaElement>("#survival-modal-drink");
-const survivalModalDrinkCount = requireElement<HTMLInputElement>("#survival-modal-drink-count");
+const survivalModalContainer = requireElement<HTMLInputElement>("#survival-modal-container");
+const survivalModalFoodItems = requireElement<HTMLTextAreaElement>("#survival-modal-food-items");
+const survivalModalFlaskItems = requireElement<HTMLTextAreaElement>("#survival-modal-flask-items");
 const survivalModalBuyFoodAlias = requireElement<HTMLInputElement>("#survival-modal-buy-food-alias");
 const survivalModalBuyFoodCommands = requireElement<HTMLTextAreaElement>("#survival-modal-buy-food-commands");
 const survivalModalFillFlaskAlias = requireElement<HTMLInputElement>("#survival-modal-fill-flask-alias");
@@ -321,6 +309,9 @@ const survivalModalFillFlaskCommands = requireElement<HTMLTextAreaElement>("#sur
 const survivalModalClose = requireElement<HTMLButtonElement>("#survival-modal-close");
 const survivalModalCancel = requireElement<HTMLButtonElement>("#survival-modal-cancel");
 const survivalModalSave = requireElement<HTMLButtonElement>("#survival-modal-save");
+
+const buyFoodBtn = requireElement<HTMLButtonElement>("#buy-food-btn");
+const fillFlaskBtn = requireElement<HTMLButtonElement>("#fill-flask-btn");
 
 const triggersButton = requireElement<HTMLButtonElement>("#triggers-button");
 const triggersModal = requireElement<HTMLDivElement>("#triggers-modal");
@@ -357,10 +348,9 @@ interface FarmSettings {
 }
 
 interface SurvivalSettings {
-  eatCommand: string;
-  eatCount: number;
-  drinkCommand: string;
-  drinkCount: number;
+  container: string;
+  foodItems: string;
+  flaskItems: string;
   buyFoodAlias: string;
   buyFoodCommands: string;
   fillFlaskAlias: string;
@@ -379,7 +369,7 @@ function defaultFarmSettings(): FarmSettings {
 }
 
 function defaultSurvivalSettings(): SurvivalSettings {
-  return { eatCommand: "", eatCount: 1, drinkCommand: "", drinkCount: 1, buyFoodAlias: "", buyFoodCommands: "", fillFlaskAlias: "", fillFlaskCommands: "" };
+  return { container: "", foodItems: "", flaskItems: "", buyFoodAlias: "", buyFoodCommands: "", fillFlaskAlias: "", fillFlaskCommands: "" };
 }
 
 function normalizeFarmSettings(raw: Partial<FarmSettings>): FarmSettings {
@@ -401,10 +391,9 @@ function normalizeFarmSettings(raw: Partial<FarmSettings>): FarmSettings {
 function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSettings {
   const def = defaultSurvivalSettings();
   return {
-    eatCommand: typeof raw.eatCommand === "string" ? raw.eatCommand : def.eatCommand,
-    eatCount: typeof raw.eatCount === "number" && Number.isFinite(raw.eatCount) ? raw.eatCount : def.eatCount,
-    drinkCommand: typeof raw.drinkCommand === "string" ? raw.drinkCommand : def.drinkCommand,
-    drinkCount: typeof raw.drinkCount === "number" && Number.isFinite(raw.drinkCount) ? raw.drinkCount : def.drinkCount,
+    container: typeof raw.container === "string" ? raw.container : def.container,
+    foodItems: typeof raw.foodItems === "string" ? raw.foodItems : def.foodItems,
+    flaskItems: typeof raw.flaskItems === "string" ? raw.flaskItems : def.flaskItems,
     buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : def.buyFoodAlias,
     buyFoodCommands: typeof raw.buyFoodCommands === "string" ? raw.buyFoodCommands : def.buyFoodCommands,
     fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : def.fillFlaskAlias,
@@ -425,10 +414,9 @@ function fillFarmModal(settings: FarmSettings): void {
 }
 
 function fillSurvivalModal(settings: SurvivalSettings): void {
-  survivalModalEat.value = settings.eatCommand;
-  survivalModalEatCount.value = String(settings.eatCount);
-  survivalModalDrink.value = settings.drinkCommand;
-  survivalModalDrinkCount.value = String(settings.drinkCount);
+  survivalModalContainer.value = settings.container;
+  survivalModalFoodItems.value = settings.foodItems;
+  survivalModalFlaskItems.value = settings.flaskItems;
   survivalModalBuyFoodAlias.value = settings.buyFoodAlias;
   survivalModalBuyFoodCommands.value = settings.buyFoodCommands;
   survivalModalFillFlaskAlias.value = settings.fillFlaskAlias;
@@ -461,7 +449,7 @@ function closeFarmSettingsModal(): void {
 function openSurvivalSettingsModal(): void {
   fillSurvivalModal(currentSurvivalSettings);
   survivalSettingsModal.classList.remove("farm-modal--hidden");
-  survivalModalEat.focus();
+  survivalModalContainer.focus();
   sendClientEvent({ type: "survival_settings_get" });
 }
 
@@ -640,10 +628,9 @@ function closeItemDbModal(): void {
 
 function commitSurvivalSettings(): void {
   currentSurvivalSettings = normalizeSurvivalSettings({
-    eatCommand: survivalModalEat.value.trim(),
-    eatCount: Number(survivalModalEatCount.value) || 1,
-    drinkCommand: survivalModalDrink.value.trim(),
-    drinkCount: Number(survivalModalDrinkCount.value) || 1,
+    container: survivalModalContainer.value.trim(),
+    foodItems: survivalModalFoodItems.value.trim(),
+    flaskItems: survivalModalFlaskItems.value.trim(),
     buyFoodAlias: survivalModalBuyFoodAlias.value.trim(),
     buyFoodCommands: survivalModalBuyFoodCommands.value.trim(),
     fillFlaskAlias: survivalModalFillFlaskAlias.value.trim(),
@@ -655,30 +642,13 @@ function commitSurvivalSettings(): void {
     payload: currentSurvivalSettings,
   });
 
-  sendClientEvent({
-    type: "farm_toggle",
-    payload: {
-      enabled: farmEnabled,
-      targetValues: farmTargetValues,
-      healCommands: farmHealCommands,
-      healThresholdPercent: farmHealThresholdPercent,
-      lootValues: farmLootValues,
-      periodicAction: farmPeriodicAction,
-      survival: {
-        enabled: farmEnabled && (currentSurvivalSettings.eatCommand.length > 0 || currentSurvivalSettings.drinkCommand.length > 0),
-        eatCommands: parseFarmCommandValues(currentSurvivalSettings.eatCommand),
-        eatCount: currentSurvivalSettings.eatCount,
-        drinkCommands: parseFarmCommandValues(currentSurvivalSettings.drinkCommand),
-        drinkCount: currentSurvivalSettings.drinkCount,
-        buyFoodAlias: currentSurvivalSettings.buyFoodAlias,
-        buyFoodCommands: parseFarmCommandValues(currentSurvivalSettings.buyFoodCommands),
-        fillFlaskAlias: currentSurvivalSettings.fillFlaskAlias,
-        fillFlaskCommands: parseFarmCommandValues(currentSurvivalSettings.fillFlaskCommands),
-      },
-    },
-  });
-
+  updateActionButtons();
   closeSurvivalSettingsModal();
+}
+
+function updateActionButtons(): void {
+  buyFoodBtn.disabled = !currentSurvivalSettings.buyFoodCommands.trim();
+  fillFlaskBtn.disabled = !currentSurvivalSettings.fillFlaskCommands.trim();
 }
 
 function commitFarmSettings(): void {
@@ -721,17 +691,6 @@ function commitFarmSettings(): void {
         commands: parseFarmCommandValues(settings.periodicActionCommand),
         gotoAlias2: settings.periodicActionGotoAlias2,
         intervalMs: settings.periodicActionIntervalMin * 60 * 1000,
-      },
-      survival: {
-        enabled: settings.survivalEnabled,
-        eatCommands: parseFarmCommandValues(currentSurvivalSettings.eatCommand),
-        eatCount: currentSurvivalSettings.eatCount,
-        drinkCommands: parseFarmCommandValues(currentSurvivalSettings.drinkCommand),
-        drinkCount: currentSurvivalSettings.drinkCount,
-        buyFoodAlias: currentSurvivalSettings.buyFoodAlias,
-        buyFoodCommands: parseFarmCommandValues(currentSurvivalSettings.buyFoodCommands),
-        fillFlaskAlias: currentSurvivalSettings.fillFlaskAlias,
-        fillFlaskCommands: parseFarmCommandValues(currentSurvivalSettings.fillFlaskCommands),
       },
     },
   });
@@ -815,7 +774,11 @@ function renderAliasList(): void {
     goBtn.className = "button-small alias-list__go";
     goBtn.textContent = "Идти";
     goBtn.addEventListener("click", () => {
-      sendClientEvent({ type: "navigate_to", payload: { vnum: entry.vnum } });
+      const aliasName = entry.alias.toLowerCase();
+      const allVnums = currentAliases
+        .filter(a => a.alias.toLowerCase() === aliasName)
+        .map(a => a.vnum);
+      sendClientEvent({ type: "navigate_to", payload: { vnums: allVnums } });
     });
 
     li.appendChild(label);
@@ -1837,6 +1800,7 @@ function createSocket(): WebSocket {
           if (!survivalSettingsModal.classList.contains("farm-modal--hidden")) {
             fillSurvivalModal(currentSurvivalSettings);
           }
+          updateActionButtons();
         }
         break;
       }
@@ -2064,17 +2028,6 @@ farmToggleButton.addEventListener("click", () => {
         healThresholdPercent: farmHealThresholdPercent,
         lootValues: farmLootValues,
         periodicAction: farmPeriodicAction,
-        survival: {
-          enabled: false,
-          eatCommands: parseFarmCommandValues(currentSurvivalSettings.eatCommand),
-          eatCount: currentSurvivalSettings.eatCount,
-          drinkCommands: parseFarmCommandValues(currentSurvivalSettings.drinkCommand),
-          drinkCount: currentSurvivalSettings.drinkCount,
-          buyFoodAlias: currentSurvivalSettings.buyFoodAlias,
-          buyFoodCommands: parseFarmCommandValues(currentSurvivalSettings.buyFoodCommands),
-          fillFlaskAlias: currentSurvivalSettings.fillFlaskAlias,
-          fillFlaskCommands: parseFarmCommandValues(currentSurvivalSettings.fillFlaskCommands),
-        },
       },
     });
   }
@@ -2101,6 +2054,46 @@ survivalModalClose.addEventListener("click", closeSurvivalSettingsModal);
 survivalModalCancel.addEventListener("click", closeSurvivalSettingsModal);
 survivalModalBackdrop.addEventListener("click", closeSurvivalSettingsModal);
 survivalModalSave.addEventListener("click", commitSurvivalSettings);
+
+buyFoodBtn.addEventListener("click", () => {
+  const alias = currentSurvivalSettings.buyFoodAlias.trim();
+  if (alias) {
+    const aliasName = alias.toLowerCase();
+    const allVnums = currentAliases
+      .filter(a => a.alias.toLowerCase() === aliasName)
+      .map(a => a.vnum);
+    if (allVnums.length > 0) {
+      sendClientEvent({ type: "navigate_to", payload: { vnums: allVnums } });
+    }
+  }
+  const commands = currentSurvivalSettings.buyFoodCommands
+    .split(/\r?\n/g)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  for (const command of commands) {
+    sendClientEvent({ type: "send", payload: { command } });
+  }
+});
+
+fillFlaskBtn.addEventListener("click", () => {
+  const alias = currentSurvivalSettings.fillFlaskAlias.trim();
+  if (alias) {
+    const aliasName = alias.toLowerCase();
+    const allVnums = currentAliases
+      .filter(a => a.alias.toLowerCase() === aliasName)
+      .map(a => a.vnum);
+    if (allVnums.length > 0) {
+      sendClientEvent({ type: "navigate_to", payload: { vnums: allVnums } });
+    }
+  }
+  const commands = currentSurvivalSettings.fillFlaskCommands
+    .split(/\r?\n/g)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  for (const command of commands) {
+    sendClientEvent({ type: "send", payload: { command } });
+  }
+});
 
 triggersButton.addEventListener("click", openTriggersModal);
 triggersModalClose.addEventListener("click", closeTriggersModal);
@@ -2175,7 +2168,7 @@ aliasPopupInput.addEventListener("keydown", (e) => {
 
 mapContextGo.addEventListener("click", () => {
   if (mapContextMenuVnum !== null) {
-    sendClientEvent({ type: "navigate_to", payload: { vnum: mapContextMenuVnum } });
+    sendClientEvent({ type: "navigate_to", payload: { vnums: [mapContextMenuVnum] } });
   }
   closeMapContextMenu();
 });
