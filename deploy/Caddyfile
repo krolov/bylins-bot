@@ -1,0 +1,9 @@
+{$DOMAIN} {
+  encode zstd gzip
+
+  basic_auth {
+    {$BASIC_AUTH_USERNAME} {$BASIC_AUTH_PASSWORD_HASH}
+  }
+
+  reverse_proxy {$APP_UPSTREAM:app:3000}
+}

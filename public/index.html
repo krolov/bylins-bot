@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>sc.kerat.ru MUD client</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <form id="connect-form" class="topbar__form">
+        <input id="host" name="host" type="text" autocomplete="off" required placeholder="host" class="topbar__input" />
+        <input id="port" name="port" type="number" min="1" max="65535" required placeholder="port" class="topbar__input topbar__input--port" />
+        <label class="topbar__tls">
+          <input id="tls" name="tls" type="checkbox" />
+          <span>TLS</span>
+        </label>
+        <button id="connect-button" type="submit" class="button-small">Connect</button>
+        <button id="disconnect-button" type="button" class="button-secondary button-small">Disconnect</button>
+      </form>
+      <input
+        id="farm-targets-input"
+        type="text"
+        class="topbar__input topbar__input--farm-targets"
+        placeholder="цели фарма: букашка, комар"
+        autocomplete="off"
+      />
+      <button id="farm-toggle-button" type="button" class="button-secondary button-small">Фарм: выкл</button>
+
+      <div class="topbar-menu">
+        <button id="topbar-menu-trigger" type="button" class="button-secondary button-small topbar-menu__trigger" aria-haspopup="true" aria-expanded="false" title="Меню">⋮</button>
+        <div id="topbar-menu-dropdown" class="topbar-dropdown" role="menu">
+          <button id="survival-settings-button" type="button" class="topbar-dropdown__item" role="menuitem">Питание</button>
+          <button id="triggers-button" type="button" class="topbar-dropdown__item" role="menuitem">Триггеры</button>
+          <button id="item-db-button" type="button" class="topbar-dropdown__item" role="menuitem">База предметов</button>
+          <button id="hotkeys-button" type="button" class="topbar-dropdown__item" role="menuitem">Хоткеи</button>
+        </div>
+      </div>
+
+      <div id="stats-bar" class="stats-bar">
+        <div class="stat-bar stat-bar--hp">
+          <div id="hp-bar-fill" class="stat-bar__fill"></div>
+          <span id="hp-bar-label" class="stat-bar__label">HP</span>
+        </div>
+        <div class="stat-bar stat-bar--energy">
+          <div id="energy-bar-fill" class="stat-bar__fill"></div>
+          <span id="energy-bar-label" class="stat-bar__label">Energy</span>
+        </div>
+      </div>
+
+      <span id="status" class="topbar__status">Idle</span>
+
+      <textarea id="startup-commands" name="startupCommands" hidden></textarea>
+      <input id="command-delay-ms" name="commandDelayMs" type="number" hidden />
+    </header>
+
+    <main class="shell">
+      <section class="panel panel--output">
+        <div class="terminal-toolbar">
+          <span>Session output</span>
+          <button id="clear-output-button" type="button" class="button-secondary button-small">Clear</button>
+        </div>
+        <pre id="output" class="terminal-output"></pre>
+
+        <form id="command-form" class="command-row">
+          <input id="command-input" type="text" placeholder="Type a command and press Enter" autocomplete="off" />
+          <button id="send-button" type="submit">Send</button>
+        </form>
+      </section>
+
+      <section class="panel panel--map">
+        <div class="terminal-toolbar map-toolbar">
+          <div class="map-tabs">
+            <button id="map-tab-map" type="button" class="map-tab map-tab--active">Карта</button>
+            <button id="map-tab-nav" type="button" class="map-tab">Навигация</button>
+          </div>
+          <div class="map-z-controls">
+            <button id="z-level-down" type="button" class="button-secondary button-small">−</button>
+            <span id="z-level-label" class="map-z-label">+0</span>
+            <button id="z-level-up" type="button" class="button-secondary button-small">+</button>
+          </div>
+          <button id="reset-map-button" type="button" class="button-secondary button-small">Delete map</button>
+        </div>
+
+        <div id="map-panel-map" class="map-tab-panel">
+          <div id="map-canvas" class="map-canvas"></div>
+        </div>
+
+        <div id="map-panel-nav" class="map-tab-panel map-tab-panel--hidden">
+          <div id="nav-status" class="nav-status nav-status--hidden"></div>
+          <ul id="alias-list" class="alias-list"></ul>
+          <p id="alias-list-empty" class="alias-list-empty">Алиасы не заданы. Кликните по комнате на карте.</p>
+        </div>
+      </section>
+
+      <div id="map-context-menu" class="map-context-menu map-context-menu--hidden" role="menu">
+        <button id="map-context-go" type="button" class="map-context-menu__item" role="menuitem">Идти</button>
+        <div class="map-context-menu__separator"></div>
+        <button id="map-context-alias" type="button" class="map-context-menu__item" role="menuitem">Алиас…</button>
+        <button id="map-context-alias-delete" type="button" class="map-context-menu__item map-context-menu__item--danger" role="menuitem">Удалить алиас</button>
+        <div class="map-context-menu__separator"></div>
+        <button id="map-context-auto-cmd" type="button" class="map-context-menu__item" role="menuitem">Авто-команда…</button>
+        <button id="map-context-auto-cmd-delete" type="button" class="map-context-menu__item map-context-menu__item--danger" role="menuitem">Удалить авто-команду</button>
+      </div>
+
+      <div id="auto-cmd-popup" class="alias-popup alias-popup--hidden" role="dialog" aria-modal="true">
+        <div class="alias-popup__content">
+          <div class="alias-popup__header">
+            <span id="auto-cmd-popup-title" class="alias-popup__title">Авто-команда при входе</span>
+            <button id="auto-cmd-popup-close" type="button" class="alias-popup__close button-secondary button-small">✕</button>
+          </div>
+          <input id="auto-cmd-popup-input" type="text" class="alias-popup__input topbar__input" placeholder="Команда (например: open chest)" autocomplete="off" />
+          <div class="alias-popup__actions">
+            <button id="auto-cmd-popup-save" type="button" class="button-small">Сохранить</button>
+            <button id="auto-cmd-popup-delete" type="button" class="button-secondary button-small alias-popup__delete">Удалить</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="alias-popup" class="alias-popup alias-popup--hidden" role="dialog" aria-modal="true">
+        <div class="alias-popup__content">
+          <div class="alias-popup__header">
+            <span id="alias-popup-title" class="alias-popup__title">Алиас комнаты</span>
+            <button id="alias-popup-close" type="button" class="alias-popup__close button-secondary button-small">✕</button>
+          </div>
+          <input id="alias-popup-input" type="text" class="alias-popup__input topbar__input" placeholder="Название алиаса" autocomplete="off" />
+          <div class="alias-popup__actions">
+            <button id="alias-popup-save" type="button" class="button-small">Сохранить</button>
+            <button id="alias-popup-delete" type="button" class="button-secondary button-small alias-popup__delete">Удалить</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="farm-settings-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="farm-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content">
+          <div class="farm-modal__header">
+            <span id="farm-modal-title" class="farm-modal__title">Настройки фарма</span>
+            <button id="farm-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+
+          <div class="farm-modal__body">
+            <div class="farm-modal__field">
+              <label for="farm-modal-targets" class="farm-modal__label">
+                Цели фарма
+                <span class="farm-modal__hint">по одной на строку или через запятую</span>
+              </label>
+              <textarea
+                id="farm-modal-targets"
+                class="farm-modal__textarea"
+                placeholder="букашка&#10;комар&#10;мышь"
+                rows="4"
+                autocomplete="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+
+            <div class="farm-modal__field">
+              <label for="farm-modal-heal" class="farm-modal__label">
+                Команды лечения
+                <span class="farm-modal__hint">отправляются когда HP падает ниже порога</span>
+              </label>
+              <textarea
+                id="farm-modal-heal"
+                class="farm-modal__textarea"
+                placeholder="исцелить себя&#10;выпить зелье"
+                rows="3"
+                autocomplete="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-heal-threshold" class="farm-modal__label">Порог HP для лечения (%)</label>
+              <input
+                id="farm-modal-heal-threshold"
+                type="number"
+                min="0"
+                max="100"
+                class="farm-modal__number-input topbar__input"
+                value="50"
+              />
+            </div>
+
+            <div class="farm-modal__field">
+              <label for="farm-modal-loot" class="farm-modal__label">
+                Что подбирать
+                <span class="farm-modal__hint">ключевые слова для команды взять, по одному на строку</span>
+              </label>
+              <textarea
+                id="farm-modal-loot"
+                class="farm-modal__textarea"
+                placeholder="бобр&#10;труп выдры&#10;шкурка"
+                rows="3"
+                autocomplete="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--section-header">
+              <span class="farm-modal__label">Периодическое действие</span>
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-periodic-enabled" class="farm-modal__label">Включить</label>
+              <input id="farm-modal-periodic-enabled" type="checkbox" />
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-periodic-alias1" class="farm-modal__label">Куда идти (алиас 1)</label>
+              <input
+                id="farm-modal-periodic-alias1"
+                type="text"
+                class="topbar__input"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </div>
+
+            <div class="farm-modal__field">
+              <label for="farm-modal-periodic-command" class="farm-modal__label">
+                Команды
+                <span class="farm-modal__hint">по одной на строку</span>
+              </label>
+              <textarea
+                id="farm-modal-periodic-command"
+                class="farm-modal__textarea"
+                rows="3"
+                autocomplete="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-periodic-alias2" class="farm-modal__label">Куда вернуться (алиас 2)</label>
+              <input
+                id="farm-modal-periodic-alias2"
+                type="text"
+                class="topbar__input"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+               <label for="farm-modal-periodic-interval" class="farm-modal__label">Интервал (мин)</label>
+               <input
+                 id="farm-modal-periodic-interval"
+                 type="number"
+                 min="1"
+                 class="farm-modal__number-input topbar__input"
+                 value="30"
+               />
+             </div>
+
+             <div class="farm-modal__field farm-modal__field--section-header">
+               <span class="farm-modal__label">Система питания</span>
+             </div>
+
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="farm-modal-survival-enabled" class="farm-modal__label">Включить</label>
+               <input id="farm-modal-survival-enabled" type="checkbox" />
+             </div>
+           </div>
+
+          <div class="farm-modal__footer">
+            <button id="farm-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
+            <button id="farm-modal-start" type="button" class="button-small farm-modal__start">Сохранить и запустить</button>
+          </div>
+        </div>
+      </div>
+      <div id="survival-settings-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="survival-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content">
+          <div class="farm-modal__header">
+            <span id="survival-modal-title" class="farm-modal__title">Настройки питания</span>
+            <button id="survival-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+
+          <div class="farm-modal__body">
+            <div class="farm-modal__field farm-modal__field--inline">
+               <label for="survival-modal-eat" class="farm-modal__label">
+                 Команда еды
+                 <span class="farm-modal__hint">по одной на строку</span>
+               </label>
+               <textarea
+                 id="survival-modal-eat"
+                 class="farm-modal__textarea"
+                 placeholder="есть каравай"
+                 rows="3"
+                 autocomplete="off"
+                 spellcheck="false"
+               ></textarea>
+             </div>
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="survival-modal-eat-count" class="farm-modal__label">Кол-во раз (еда)</label>
+               <input
+                 id="survival-modal-eat-count"
+                 type="number"
+                 min="1"
+                 value="1"
+                 class="topbar__input"
+               />
+             </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+               <label for="survival-modal-drink" class="farm-modal__label">
+                 Команда питья
+                 <span class="farm-modal__hint">по одной на строку</span>
+               </label>
+               <textarea
+                 id="survival-modal-drink"
+                 class="farm-modal__textarea"
+                 placeholder="пить фляга"
+                 rows="3"
+                 autocomplete="off"
+                 spellcheck="false"
+               ></textarea>
+             </div>
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="survival-modal-drink-count" class="farm-modal__label">Кол-во раз (питьё)</label>
+               <input
+                 id="survival-modal-drink-count"
+                 type="number"
+                 min="1"
+                 value="1"
+                 class="topbar__input"
+               />
+             </div>
+
+            <div class="farm-modal__field farm-modal__field--section-header">
+              <span class="farm-modal__label">Покупка еды</span>
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="survival-modal-buy-food-alias" class="farm-modal__label">Алиас места покупки еды</label>
+              <input
+                id="survival-modal-buy-food-alias"
+                type="text"
+                class="topbar__input"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </div>
+
+            <div class="farm-modal__field">
+              <label for="survival-modal-buy-food-commands" class="farm-modal__label">
+                Команды покупки еды
+                <span class="farm-modal__hint">по одной на строку</span>
+              </label>
+              <textarea
+                id="survival-modal-buy-food-commands"
+                class="farm-modal__textarea"
+                placeholder="купить каравай"
+                rows="3"
+                autocomplete="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--section-header">
+              <span class="farm-modal__label">Наполнение фляги</span>
+            </div>
+
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="survival-modal-fill-flask-alias" class="farm-modal__label">Алиас места с водой</label>
+              <input
+                id="survival-modal-fill-flask-alias"
+                type="text"
+                class="topbar__input"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </div>
+
+            <div class="farm-modal__field">
+              <label for="survival-modal-fill-flask-commands" class="farm-modal__label">
+                Команды наполнения фляги
+                <span class="farm-modal__hint">по одной на строку</span>
+              </label>
+              <textarea
+                id="survival-modal-fill-flask-commands"
+                class="farm-modal__textarea"
+                placeholder="налить фляга колодец"
+                rows="3"
+                autocomplete="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="farm-modal__footer">
+            <button id="survival-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
+            <button id="survival-modal-save" type="button" class="button-small">Сохранить</button>
+          </div>
+        </div>
+      </div>
+      <div id="triggers-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="triggers-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content">
+          <div class="farm-modal__header">
+            <span id="triggers-modal-title" class="farm-modal__title">Триггеры</span>
+            <button id="triggers-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+
+          <div class="farm-modal__body">
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="trigger-dodge" class="farm-modal__label">Уклон в бою</label>
+              <input id="trigger-dodge" type="checkbox" />
+            </div>
+          </div>
+
+          <div class="farm-modal__footer">
+            <button id="triggers-modal-cancel" type="button" class="button-secondary button-small">Закрыть</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="item-db-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="item-db-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content items-modal__content">
+          <div class="farm-modal__header">
+            <span id="item-db-modal-title" class="farm-modal__title">База предметов</span>
+            <button id="item-db-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+
+          <div class="items-modal__toolbar">
+            <div id="item-db-tabs" class="items-modal__tabs">
+              <button type="button" class="items-modal__tab items-modal__tab--active" data-tab="all">Все</button>
+            </div>
+            <input id="item-db-search" type="search" class="items-modal__search topbar__input" placeholder="Поиск по названию..." autocomplete="off" />
+          </div>
+
+          <div class="farm-modal__body items-modal__body">
+            <p id="item-db-empty" class="items-modal__empty">Предметов пока нет. Используйте команду <code>опознать</code> в игре.</p>
+            <div class="items-modal__table-wrap">
+              <table id="item-db-table" class="items-modal__table">
+                <thead id="item-db-thead"><tr></tr></thead>
+                <tbody id="item-db-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="farm-modal__footer">
+            <span id="item-db-count" class="items-modal__count"></span>
+            <button id="item-db-modal-close-footer" type="button" class="button-secondary button-small" onclick="document.getElementById('item-db-modal-close').click()">Закрыть</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="/client.js"></script>
+    <script>
+      (function () {
+        var trigger = document.getElementById('topbar-menu-trigger');
+        var dropdown = document.getElementById('topbar-menu-dropdown');
+
+        function openMenu() {
+          dropdown.classList.add('topbar-dropdown--open');
+          trigger.setAttribute('aria-expanded', 'true');
+        }
+
+        function closeMenu() {
+          dropdown.classList.remove('topbar-dropdown--open');
+          trigger.setAttribute('aria-expanded', 'false');
+        }
+
+        trigger.addEventListener('click', function (e) {
+          e.stopPropagation();
+          if (dropdown.classList.contains('topbar-dropdown--open')) {
+            closeMenu();
+          } else {
+            openMenu();
+          }
+        });
+
+        document.addEventListener('click', function (e) {
+          if (!dropdown.contains(e.target) && e.target !== trigger) {
+            closeMenu();
+          }
+        });
+
+        dropdown.addEventListener('click', function (e) {
+          if (e.target.tagName === 'BUTTON') {
+            closeMenu();
+          }
+        });
+      })();
+    </script>
+
+      <div id="hotkeys-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="hotkeys-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content">
+          <div class="farm-modal__header">
+            <span id="hotkeys-modal-title" class="farm-modal__title">Хоткеи</span>
+            <button id="hotkeys-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+
+          <div class="farm-modal__body">
+            <p class="hotkeys-modal__hint">Нажмите на поле клавиши, чтобы назначить. Хоткеи срабатывают когда фокус не в поле ввода.</p>
+            <table class="hotkeys-modal__table">
+              <thead>
+                <tr>
+                  <th class="hotkeys-modal__th">Клавиша</th>
+                  <th class="hotkeys-modal__th">Команда</th>
+                  <th class="hotkeys-modal__th"></th>
+                </tr>
+              </thead>
+              <tbody id="hotkeys-table-body"></tbody>
+            </table>
+            <button id="hotkeys-modal-add-row" type="button" class="button-secondary button-small hotkeys-modal__add">+ Добавить</button>
+          </div>
+
+          <div class="farm-modal__footer">
+            <button id="hotkeys-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
+            <button id="hotkeys-modal-save" type="button" class="button-small">Сохранить</button>
+          </div>
+        </div>
+      </div>
+  </body>
+</html>

@@ -1,0 +1,63 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      MUD_AUTO_CONNECT: ${MUD_AUTO_CONNECT:-true}
+      MUD_HOST: ${MUD_HOST}
+      MUD_PORT: ${MUD_PORT}
+      MUD_TLS: ${MUD_TLS:-false}
+      MUD_STARTUP_COMMANDS: ${MUD_STARTUP_COMMANDS:-}
+      MUD_COMMAND_DELAY_MS: ${MUD_COMMAND_DELAY_MS:-150}
+      MUD_LINE_ENDING: ${MUD_LINE_ENDING:-crlf}
+      DATABASE_URL: ${DATABASE_URL:-postgres://bylins:${POSTGRES_PASSWORD:-bylins}@postgres:5432/bylins_bot}
+    expose:
+      - "3000"
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bylins
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bylins}
+      POSTGRES_DB: bylins_bot
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bylins -d bylins_bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN}
+      APP_UPSTREAM: app:3000
+      BASIC_AUTH_USERNAME: ${BASIC_AUTH_USERNAME}
+      BASIC_AUTH_PASSWORD_HASH: ${BASIC_AUTH_PASSWORD_HASH}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

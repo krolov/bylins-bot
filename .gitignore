@@ -1,0 +1,8 @@
+node_modules/
+bun.lock
+dist/
+public/client.js
+public/client.js.map
+src/client.js
+src/client.js.map
+.env

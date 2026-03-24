@@ -1,0 +1,21 @@
+{
+  "name": "sc-kerat-mud-client",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cytoscape": "^3.33.1",
+    "postgres": "^3.4.7"
+  },
+  "scripts": {
+    "dev": "bun run build:client && bun --watch src/server.ts",
+    "start": "bun run build:client && bun run src/server.ts",
+    "build:client": "bun run scripts/build-client.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "bun run build:client && bun run typecheck",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.9.2"
+  }
+}
