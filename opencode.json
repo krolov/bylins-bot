@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "bylins-wiki": {
+      "type": "local",
+      "command": ["bash", ".opencode/bin/run-wiki-mcp.sh"],
+      "enabled": true
+    },
+    "bylins-client": {
+      "type": "local",
+      "command": ["bash", ".opencode/bin/run-client-mcp.sh"],
+      "enabled": true
+    }
+  }
+}

@@ -3,8 +3,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "cytoscape": "^3.33.1",
-    "postgres": "^3.4.7"
+    "postgres": "^3.4.7",
+    "zod": "^4.3.6"
   },
   "scripts": {
     "dev": "bun run build:client && bun --watch src/server.ts",
@@ -12,7 +14,8 @@
     "build:client": "bun run scripts/build-client.ts",
     "typecheck": "tsc --noEmit",
     "build": "bun run build:client && bun run typecheck",
-    "test": "bun test"
+    "test": "bun test",
+    "gear": "bun run scripts/gear-advisor.ts"
   },
   "devDependencies": {
     "bun-types": "latest",

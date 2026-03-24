@@ -6,3 +6,4 @@ public/client.js.map
 src/client.js
 src/client.js.map
 .env
+scripts/wiki-mcp-cache.json
