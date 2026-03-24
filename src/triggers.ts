@@ -7,6 +7,7 @@ const DODGE_INITIAL_DELAY_MS = 200;
 
 export interface TriggerState {
   dodge: boolean;
+  standUp: boolean;
 }
 
 interface TriggerDependencies {
@@ -17,6 +18,7 @@ interface TriggerDependencies {
 export function createTriggers(deps: TriggerDependencies) {
   const enabled: TriggerState = {
     dodge: true,
+    standUp: true,
   };
 
   let inCombat = false;
@@ -56,6 +58,10 @@ export function createTriggers(deps: TriggerDependencies) {
 
     if (!inCombat && wasInCombat) {
       stopDodge();
+    }
+
+    if (enabled.standUp && stripped.includes("Вам лучше встать на ноги!")) {
+      deps.sendCommand("встать");
     }
   }
 

@@ -324,7 +324,9 @@ export function createFarmController(deps: FarmControllerDependencies) {
 
     if (options.roomChanged || (options.roomDescriptionReceived && state.pendingRoomScanAfterKill)) {
       state.currentVisibleTargets.clear();
-      state.pendingLoot = [];
+      if (options.roomChanged) {
+        state.pendingLoot = [];
+      }
       parseMobsFromRoomDescription(text);
     }
 
