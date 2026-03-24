@@ -4,7 +4,7 @@ import { sql } from "./db";
 import { createCombatState } from "./combat-state";
 import { createFarmController } from "./farm-script";
 import type { PeriodicActionConfig } from "./farm-script";
-import { createSurvivalController, normalizeSurvivalConfig } from "./survival-script";
+import { createSurvivalController, normalizeSurvivalConfig, parseInspectItems } from "./survival-script";
 import { findPath } from "./map/pathfinder";
 import type { PathStep } from "./map/pathfinder";
 import { createParserState, feedText } from "./map/parser";
@@ -14,6 +14,8 @@ import { createTrackerState, processParsedEvents, trackOutgoingCommand } from ".
 import type { Direction, MapAlias, MapSnapshot } from "./map/types";
 import { createTriggers } from "./triggers";
 import type { TriggerState } from "./triggers";
+import { runGearScan } from "./gear-scan";
+import type { GearScanRow, SellItem } from "./gear-scan";
 
 type MudSocket = Awaited<ReturnType<typeof Bun.connect>>;
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
@@ -68,6 +70,7 @@ type ClientEvent =
   | { type: "alias_set"; payload?: { vnum?: number; alias?: string } }
   | { type: "alias_delete"; payload?: { vnum?: number } }
   | { type: "navigate_to"; payload?: { vnums?: number[] } }
+  | { type: "goto_and_run"; payload?: { vnums?: number[]; commands?: string[]; action?: "buy_food" | "fill_flask" } }
   | { type: "navigate_stop" }
   | { type: "farm_settings_get"; payload?: { zoneId?: number } }
   | {
@@ -86,7 +89,11 @@ type ClientEvent =
   | { type: "item_db_get" }
   | { type: "room_auto_command_set"; payload?: { vnum?: number; command?: string } }
   | { type: "room_auto_command_delete"; payload?: { vnum?: number } }
-  | { type: "room_auto_commands_get" };
+  | { type: "room_auto_commands_get" }
+  | { type: "gear_scan_start" }
+  | { type: "gear_sell"; payload: { sellCommand: string } }
+  | { type: "gear_drop"; payload: { dropCommand: string } }
+  | { type: "gear_apply"; payload: { commands: string[] } };
 
 type ServerEvent =
   | {
@@ -176,6 +183,13 @@ type ServerEvent =
       payload: SurvivalSettings | null;
     }
   | {
+      type: "survival_status";
+      payload: {
+        foodEmpty: boolean;
+        flaskEmpty: boolean;
+      };
+    }
+  | {
       type: "triggers_state";
       payload: TriggerState;
     }
@@ -189,6 +203,15 @@ type ServerEvent =
       type: "room_auto_commands_snapshot";
       payload: {
         entries: Array<{ vnum: number; command: string }>;
+      };
+    }
+  | { type: "gear_scan_progress"; payload: { message: string } }
+  | {
+      type: "gear_scan_result";
+      payload: {
+        coins: number;
+        rows: Array<GearScanRow>;
+        sellItems: Array<SellItem>;
       };
     };
 
@@ -286,6 +309,12 @@ const survivalController = createSurvivalController({
       payload: { state: sharedSession.state, message },
     });
   },
+  onStatusChange: (status) => {
+    broadcastServerEvent({
+      type: "survival_status",
+      payload: status,
+    });
+  },
 });
 mkdirSync(LOG_DIR, { recursive: true });
 appendFileSync(LOG_FILE, "");
@@ -318,6 +347,7 @@ const navigationState: NavigationState = {
 
 type RoomChangedListener = (vnum: number) => void;
 const roomChangedListeners = new Set<RoomChangedListener>();
+const mudTextHandlers = new Set<(text: string) => void>();
 
 function onceRoomChanged(timeoutMs: number): Promise<number | null> {
   return new Promise((resolve) => {
@@ -351,8 +381,44 @@ let statsHpMax = 0;
 let statsEnergy = 0;
 let statsEnergyMax = 0;
 
+let pendingContainerInspectResolve: ((text: string) => void) | null = null;
+let pendingContainerInspectTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingContainerInspectBuffer = "";
+
 let survivalTickTimer: ReturnType<typeof setTimeout> | null = null;
 let survivalPreviousInCombat = false;
+let survivalTickRunning = false;
+
+function clearPendingContainerInspect(): void {
+  if (pendingContainerInspectTimer !== null) {
+    clearTimeout(pendingContainerInspectTimer);
+    pendingContainerInspectTimer = null;
+  }
+  pendingContainerInspectResolve = null;
+  pendingContainerInspectBuffer = "";
+}
+
+function resolvePendingContainerInspect(text: string): void {
+  if (pendingContainerInspectResolve === null) return;
+  pendingContainerInspectBuffer += text;
+  const stripped = pendingContainerInspectBuffer.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
+  if (!/\d+H\s+\d+M\b/i.test(stripped)) return;
+  const resolve = pendingContainerInspectResolve;
+  clearPendingContainerInspect();
+  resolve(stripped);
+}
+
+function waitForContainerInspectResult(timeoutMs = 3000): Promise<string> {
+  clearPendingContainerInspect();
+  return new Promise((resolve) => {
+    pendingContainerInspectResolve = resolve;
+    pendingContainerInspectTimer = setTimeout(() => {
+      const buf = pendingContainerInspectBuffer;
+      clearPendingContainerInspect();
+      resolve(buf);
+    }, timeoutMs);
+  });
+}
 
 // ── Item identify parser ──────────────────────────────────────────────────────
 // Collects MUD text chunks into a rolling buffer to detect multi-line identify
@@ -456,7 +522,10 @@ async function handleItemIdentifyBuffer(chunk: string): Promise<void> {
   const parsed = parseItemIdentifyBlock(block);
   if (!parsed) return;
 
-  await mapStore.upsertItem(parsed.name, parsed.itemType, parsed.data);
+  const existing = await mapStore.getItemByName(parsed.name.toLowerCase());
+  if (existing && typeof (existing.data as Record<string, unknown>)["id"] === "number") return;
+
+  await mapStore.upsertItem(parsed.name.toLowerCase(), parsed.itemType, parsed.data);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -545,6 +614,11 @@ function rememberOutput(text: string): void {
   }
 }
 
+async function sendSurvivalSettings(ws: BunServerWebSocket): Promise<void> {
+  const survival = await mapStore.getSurvivalSettings();
+  sendServerEvent(ws, { type: "survival_settings_data", payload: survival });
+}
+
 function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "defaults",
@@ -566,6 +640,11 @@ function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "triggers_state",
     payload: triggers.getState(),
+  });
+
+  sendServerEvent(ws, {
+    type: "survival_status",
+    payload: survivalController.getStatus(),
   });
 
   if (statsHpMax > 0 || statsEnergyMax > 0) {
@@ -815,6 +894,9 @@ function teardownSession(
 
   combatState.reset();
   clearSurvivalTickTimer();
+  survivalTickRunning = false;
+  clearPendingContainerInspect();
+  mudTextHandlers.clear();
   survivalController.reset();
 
   logEvent(ws, options.state === "error" ? "error" : "session", reason, {
@@ -879,6 +961,12 @@ async function connectToMud(ws: BunServerWebSocket | null, payload: ConnectPaylo
           });
 
           if (text.length > 0) {
+            if (/(Заполнен|Пуст)/i.test(text)) {
+              resolvePendingContainerInspect(text);
+            } else if (pendingContainerInspectResolve !== null) {
+              resolvePendingContainerInspect(text);
+            }
+            for (const handler of mudTextHandlers) handler(text);
             rememberOutput(text);
             broadcastServerEvent({
               type: "output",
@@ -1120,9 +1208,8 @@ async function startNavigation(ws: BunServerWebSocket | null, targetVnum: number
   navigationState.abortController = abort;
   broadcastNavigationState();
 
-  await (async () => {
-    for (let i = 0; i < path.length; i++) {
-      if (abort.signal.aborted) return;
+  for (let i = 0; i < path.length; i++) {
+    if (abort.signal.aborted) return;
 
       const step = path[i]!;
       navigationState.currentStep = i;
@@ -1172,7 +1259,6 @@ async function startNavigation(ws: BunServerWebSocket | null, targetVnum: number
       navigationState.abortController = null;
       broadcastNavigationState();
     }
-  })();
 }
 
 async function startNavigationToNearest(ws: BunServerWebSocket | null, targetVnums: number[]): Promise<void> {
@@ -1202,11 +1288,35 @@ async function startNavigationToNearest(ws: BunServerWebSocket | null, targetVnu
   await startNavigation(ws, bestVnum);
 }
 
+async function inspectContainer(ws: BunServerWebSocket | null, container: string): Promise<string> {
+  if (!sharedSession.tcpSocket || !sharedSession.connected) {
+    return "";
+  }
+  writeAndLogMudCommand(ws, sharedSession, sharedSession.tcpSocket, `осм ${container}`, "inspect-container");
+  return waitForContainerInspectResult(2000);
+}
+
+function countItemsByKeyword(inspectText: string, keyword: string): number {
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  if (!normalizedKeyword) return 0;
+  let total = 0;
+  for (const item of parseInspectItems(inspectText)) {
+    if (item.name.toLowerCase().includes(normalizedKeyword)) {
+      total += item.count;
+    }
+  }
+  return total;
+}
+
 function scheduleSurvivalTick(delayMs: number): void {
   if (survivalTickTimer !== null) return;
   survivalTickTimer = setTimeout(() => {
     survivalTickTimer = null;
-    void survivalController.runTick((d) => scheduleSurvivalTick(d));
+    if (survivalTickRunning) return;
+    survivalTickRunning = true;
+    void survivalController.runTick((d) => scheduleSurvivalTick(d)).finally(() => {
+      survivalTickRunning = false;
+    });
   }, Math.max(0, delayMs));
 }
 
@@ -1286,15 +1396,17 @@ await mapStore.initialize();
 
 const savedSurvival = await mapStore.getSurvivalSettings();
 if (savedSurvival) {
+  const normalizedSavedSurvival = normalizeSurvivalSettings(savedSurvival);
   survivalController.updateConfig(normalizeSurvivalConfig({
-    enabled: savedSurvival.foodItems.trim().length > 0 || savedSurvival.flaskItems.trim().length > 0,
-    container: savedSurvival.container,
-    foodItems: savedSurvival.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
-    flaskItems: savedSurvival.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
-    buyFoodAlias: savedSurvival.buyFoodAlias,
-    buyFoodCommands: savedSurvival.buyFoodCommands.split("\n").map(s => s.trim()).filter(Boolean),
-    fillFlaskAlias: savedSurvival.fillFlaskAlias,
-    fillFlaskCommands: savedSurvival.fillFlaskCommands.split("\n").map(s => s.trim()).filter(Boolean),
+    enabled: normalizedSavedSurvival.foodItems.trim().length > 0 || normalizedSavedSurvival.flaskItems.trim().length > 0,
+    container: normalizedSavedSurvival.container,
+    foodItems: normalizedSavedSurvival.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
+    flaskItems: normalizedSavedSurvival.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
+    buyFoodItem: normalizedSavedSurvival.buyFoodItem,
+    buyFoodMax: normalizedSavedSurvival.buyFoodMax,
+    buyFoodAlias: normalizedSavedSurvival.buyFoodAlias,
+    fillFlaskAlias: normalizedSavedSurvival.fillFlaskAlias,
+    fillFlaskSource: normalizedSavedSurvival.fillFlaskSource,
   }));
 }
 
@@ -1383,6 +1495,7 @@ const server = Bun.serve({
       }
 
       void sendMapSnapshot(ws);
+      void sendSurvivalSettings(ws);
     },
     async message(ws, message) {
       let event: ClientEvent;
@@ -1466,6 +1579,63 @@ const server = Bun.serve({
           }
           break;
         }
+        case "goto_and_run": {
+          const vnums = event.payload?.vnums;
+          const commands = event.payload?.commands;
+          if (Array.isArray(vnums) && vnums.length > 0) {
+            logEvent(ws, "browser-in", "goto_and_run", { vnums: vnums.join(","), commands: (commands ?? []).join(";") });
+            let resolvedCommands: string[] = Array.isArray(commands) ? commands : [];
+            if (event.payload?.action === "buy_food") {
+              const survival = await mapStore.getSurvivalSettings();
+              const normalized = normalizeSurvivalSettings(survival ?? {});
+              const buyFoodItem = normalized.buyFoodItem.trim();
+              const buyFoodMax = normalized.buyFoodMax;
+              const container = normalized.container.trim();
+
+              if (buyFoodItem.length > 0 && container.length > 0 && buyFoodMax > 0) {
+                const inspectText = await inspectContainer(ws, container);
+                const count = countItemsByKeyword(inspectText, buyFoodItem);
+                if (count >= buyFoodMax) {
+                  broadcastServerEvent({
+                    type: "status",
+                    payload: {
+                      state: sharedSession.state,
+                      message: `[survival] уже достаточно еды (${count}/${buyFoodMax})`,
+                    },
+                  });
+                  break;
+                }
+                const needed = buyFoodMax - count;
+                resolvedCommands = [
+                  `купи ${needed} ${buyFoodItem}`,
+                  `положи ${needed} ${buyFoodItem} ${container}`,
+                ];
+              }
+            }
+            if (event.payload?.action === "fill_flask") {
+              const survival = await mapStore.getSurvivalSettings();
+              const normalized = normalizeSurvivalSettings(survival ?? {});
+              const container = normalized.container.trim();
+              const flaskKeyword = normalized.flaskItems.split("\n").map(s => s.trim()).filter(Boolean)[0] ?? "";
+
+              if (flaskKeyword.length > 0 && container.length > 0) {
+                const source = normalized.fillFlaskSource.trim();
+                resolvedCommands = [
+                  `взять ${flaskKeyword} ${container}`,
+                  ...(source.length > 0 ? [`налить ${flaskKeyword} ${source}`] : []),
+                  `положить ${flaskKeyword} ${container}`,
+                ];
+              }
+            }
+            await startNavigationToNearest(ws, vnums);
+            for (const cmd of resolvedCommands) {
+              if (sharedSession.tcpSocket && sharedSession.connected) {
+                writeAndLogMudCommand(ws, sharedSession, sharedSession.tcpSocket, cmd, "goto_and_run");
+              }
+            }
+          }
+          break;
+        }
         case "navigate_stop": {
           logEvent(ws, "browser-in", "navigate_stop");
           stopNavigation();
@@ -1495,8 +1665,7 @@ const server = Bun.serve({
         }
         case "survival_settings_get": {
           logEvent(ws, "browser-in", "survival_settings_get");
-          const survival = await mapStore.getSurvivalSettings();
-          sendServerEvent(ws, { type: "survival_settings_data", payload: survival });
+          await sendSurvivalSettings(ws);
           break;
         }
         case "survival_settings_save": {
@@ -1510,10 +1679,11 @@ const server = Bun.serve({
               container: settings.container,
               foodItems: settings.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
               flaskItems: settings.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
+              buyFoodItem: settings.buyFoodItem,
+              buyFoodMax: settings.buyFoodMax,
               buyFoodAlias: settings.buyFoodAlias,
-              buyFoodCommands: settings.buyFoodCommands.split("\n").map(s => s.trim()).filter(Boolean),
               fillFlaskAlias: settings.fillFlaskAlias,
-              fillFlaskCommands: settings.fillFlaskCommands.split("\n").map(s => s.trim()).filter(Boolean),
+              fillFlaskSource: settings.fillFlaskSource,
             }));
           }
           break;
@@ -1553,6 +1723,76 @@ const server = Bun.serve({
           sendServerEvent(ws, { type: "room_auto_commands_snapshot", payload: { entries } });
           break;
         }
+        case "gear_sell": {
+          logEvent(ws, "browser-in", `gear_sell: ${event.payload.sellCommand}`);
+          if (!sharedSession.tcpSocket || !sharedSession.connected) {
+            sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
+            break;
+          }
+          writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, event.payload.sellCommand, "gear-sell");
+          break;
+        }
+        case "gear_drop": {
+          logEvent(ws, "browser-in", `gear_drop: ${event.payload.dropCommand}`);
+          if (!sharedSession.tcpSocket || !sharedSession.connected) {
+            sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
+            break;
+          }
+          writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, event.payload.dropCommand, "gear-drop");
+          break;
+        }
+        case "gear_apply": {
+          logEvent(ws, "browser-in", `gear_apply: ${event.payload.commands.join(" ; ")}`);
+          if (!sharedSession.tcpSocket || !sharedSession.connected) {
+            sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
+            break;
+          }
+          const applySocket = sharedSession.tcpSocket;
+          const applyCommands = event.payload.commands;
+          for (const cmd of applyCommands) {
+            writeAndLogMudCommand(null, sharedSession, applySocket, cmd, "gear-apply");
+          }
+          broadcastServerEvent({ type: "gear_scan_progress", payload: { message: "Применяю... перезапускаю анализ." } });
+          void new Promise<void>((resolve) => setTimeout(resolve, 1500)).then(() => runGearScan({
+            sendCommand: (cmd) => writeAndLogMudCommand(null, sharedSession, applySocket, cmd, "gear-scan"),
+            registerTextHandler: (h) => mudTextHandlers.add(h),
+            unregisterTextHandler: (h) => mudTextHandlers.delete(h),
+            onProgress: (msg) => { logEvent(ws, "browser-out", `[gear-scan] ${msg}`); broadcastServerEvent({ type: "gear_scan_progress", payload: { message: msg } }); },
+            waitForOutput: (_ms) => Promise.resolve(""),
+            cancelWait: () => {},
+            getItemByName: (name) => mapStore.getItemByName(name),
+            upsertItem: (name, itemType, data) => mapStore.upsertItem(name, itemType, data),
+            wikiProxies: runtimeConfig.wikiProxies,
+          })).then((result) => {
+            broadcastServerEvent({ type: "gear_scan_result", payload: result });
+          }).catch((err: unknown) => {
+            broadcastServerEvent({ type: "error", payload: { message: err instanceof Error ? err.message : "Ошибка советника." } });
+          });
+          break;
+        }
+        case "gear_scan_start": {
+          logEvent(ws, "browser-in", "gear_scan_start");
+          if (!sharedSession.tcpSocket || !sharedSession.connected) {
+            sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
+            break;
+          }
+          void runGearScan({
+            sendCommand: (cmd) => writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket!, cmd, "gear-scan"),
+            registerTextHandler: (h) => mudTextHandlers.add(h),
+            unregisterTextHandler: (h) => mudTextHandlers.delete(h),
+            onProgress: (msg) => { logEvent(ws, "browser-out", `[gear-scan] ${msg}`); broadcastServerEvent({ type: "gear_scan_progress", payload: { message: msg } }); },
+            waitForOutput: (_ms) => Promise.resolve(""),
+            cancelWait: () => {},
+            getItemByName: (name) => mapStore.getItemByName(name),
+            upsertItem: (name, itemType, data) => mapStore.upsertItem(name, itemType, data),
+            wikiProxies: runtimeConfig.wikiProxies,
+          }).then((result) => {
+            broadcastServerEvent({ type: "gear_scan_result", payload: result });
+          }).catch((err: unknown) => {
+            broadcastServerEvent({ type: "error", payload: { message: err instanceof Error ? err.message : "Ошибка советника." } });
+          });
+          break;
+        }
       }
     },
     close(ws) {
@@ -1589,9 +1829,10 @@ function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSett
     container: typeof raw.container === "string" ? raw.container : "",
     foodItems: typeof raw.foodItems === "string" ? raw.foodItems : "",
     flaskItems: typeof raw.flaskItems === "string" ? raw.flaskItems : "",
+    buyFoodItem: typeof raw.buyFoodItem === "string" ? raw.buyFoodItem : "",
+    buyFoodMax: typeof raw.buyFoodMax === "number" && Number.isFinite(raw.buyFoodMax) && raw.buyFoodMax > 0 ? Math.floor(raw.buyFoodMax) : 20,
     buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : "",
-    buyFoodCommands: typeof raw.buyFoodCommands === "string" ? raw.buyFoodCommands : "",
     fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : "",
-    fillFlaskCommands: typeof raw.fillFlaskCommands === "string" ? raw.fillFlaskCommands : "",
+    fillFlaskSource: typeof raw.fillFlaskSource === "string" ? raw.fillFlaskSource : "",
   };
 }
