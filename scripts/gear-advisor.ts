@@ -1,14 +1,6 @@
 #!/usr/bin/env bun
-/**
- * gear-advisor.ts — анализатор снаряжения для татя
- *
- * Использование:
- *   bun run scripts/gear-advisor.ts "предмет1\nпредмет2\n..."
- *   echo -e "предмет1\nпредмет2" | bun run scripts/gear-advisor.ts
- *
- * Формат входных данных — построчно, одно название = одна строка.
- * Можно также вставить сырой вывод из магазина MUD — скрипт сам вытащит названия.
- */
+
+import { parseEquipLine, getEquipCommand } from "../src/equip-utils.ts";
 
 const BASE_URL = "https://wiki.bylins.su/stuff.php";
 
@@ -322,10 +314,9 @@ function parseInputList(input: string): string[] {
     }
 
     // формат экипировки/инвентаря MUD: "<слот>   название предмета   <состояние>   ..флаги"
-    // например: "<на шее>                    амулет из раковин улиток  <великолепно>  ..шумит!"
-    const equipM = /^<[^>]+>\s{2,}(.+?)\s{2,}<[^>]+>/.exec(trimmed);
-    if (equipM) {
-      names.push(equipM[1].trim());
+    const equipParsed = parseEquipLine(trimmed);
+    if (equipParsed) {
+      names.push(equipParsed.name);
       continue;
     }
 
@@ -602,9 +593,8 @@ async function analyze(itemNames: string[]): Promise<void> {
     console.log("\n📋 КОМАНДЫ НАДЕВАНИЯ:");
     const wearCmds: string[] = [];
     for (const rec of recommendations) {
-      if (rec.slot === "правая рука") wearCmds.push(`воор ${rec.item.name}`);
-      else if (rec.slot === "левая рука") wearCmds.push(`держать ${rec.item.name}`);
-      else wearCmds.push(`надеть ${rec.item.name}`);
+      const slot = rec.slot === "правая рука" ? "в правой руке" : rec.slot === "левая рука" ? "в левой руке" : rec.slot;
+      wearCmds.push(getEquipCommand(slot, rec.item.name));
     }
     console.log(wearCmds.join("; "));
   }

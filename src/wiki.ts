@@ -100,6 +100,13 @@ export interface WikiItemCard {
   loadLocation: string;
 }
 
+export type StatName = "сила" | "ловкость" | "мудрость" | "ум" | "здоровье" | "обаяние";
+
+export interface StatRequirement {
+  stat: StatName;
+  value: number;
+}
+
 export interface GearItemCard {
   id: number;
   name: string;
@@ -112,12 +119,16 @@ export interface GearItemCard {
   damageDice: string | null;
   canWearRight: boolean;
   canWearLeft: boolean;
+  rightHandReqs: StatRequirement[];
+  leftHandReqs: StatRequirement[];
+  wearReqs: StatRequirement[];
   material: string;
   isMetal: boolean;
   isShiny: boolean;
   affects: string[];
   properties: string[];
   forbidden: string[];
+  remorts: number;
 }
 
 export interface GearItem {
@@ -196,6 +207,33 @@ export function parseGearWearSlots(text: string): GearWearSlot[] {
   return slots;
 }
 
+const STAT_NAME_MAP: Record<string, StatName> = {
+  "сила": "сила",
+  "силы": "сила",
+  "ловкость": "ловкость",
+  "ловкости": "ловкость",
+  "мудрость": "мудрость",
+  "мудрости": "мудрость",
+  "ум": "ум",
+  "ума": "ум",
+  "здоровье": "здоровье",
+  "здоровья": "здоровье",
+  "обаяние": "обаяние",
+  "обаяния": "обаяние",
+};
+
+function parseStatReqs(text: string): StatRequirement[] {
+  const reqs: StatRequirement[] = [];
+  const re = /требуется\s+(\d+)\s+([а-яёА-ЯЁ]+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const stat = STAT_NAME_MAP[m[2].toLowerCase()];
+    if (stat) reqs.push({ stat, value: parseInt(m[1]) });
+  }
+  return reqs;
+}
+
+
 export function parseGearItemCard(html: string, id: number): GearItemCard | null {
   const cardM =
     /Предмет\s+"([^"]+)",\s*тип\s*:\s*(\S+)([\s\S]*?)(?=Предполагаемое место лоада|$)/i.exec(
@@ -258,6 +296,24 @@ export function parseGearItemCard(html: string, id: number): GearItemCard | null
 
   const acM = /защита\s*\(AC\)\s*:\s*(-?\d+)/i.exec(rawText);
   const armorM = /броня\s*:\s*(\d+)/i.exec(rawText);
+  const remortsM = /Требует\s+перевоплощений\s*:\s*(\d+)/i.exec(rawText);
+  const remorts = remortsM ? parseInt(remortsM[1]) : 0;
+
+  const rightHandReqs: StatRequirement[] = [];
+  const leftHandReqs: StatRequirement[] = [];
+  const wearReqs: StatRequirement[] = [];
+
+  for (const line of rawText.split("\n")) {
+    const lineReqs = parseStatReqs(line);
+    if (!lineReqs.length) continue;
+    if (/правую руку/i.test(line)) {
+      rightHandReqs.push(...lineReqs);
+    } else if (/левую руку/i.test(line)) {
+      leftHandReqs.push(...lineReqs);
+    } else {
+      wearReqs.push(...lineReqs);
+    }
+  }
 
   return {
     id,
@@ -271,12 +327,16 @@ export function parseGearItemCard(html: string, id: number): GearItemCard | null
     damageDice,
     canWearRight: /правую руку/i.test(rawText),
     canWearLeft: /левую руку/i.test(rawText),
+    rightHandReqs,
+    leftHandReqs,
+    wearReqs,
     material,
     isMetal,
     isShiny,
     affects,
     properties: props,
     forbidden,
+    remorts,
   };
 }
 
@@ -389,13 +449,23 @@ export function gearItemCardToData(card: GearItemCard): Record<string, unknown> 
     damageDice: card.damageDice,
     canWearRight: card.canWearRight,
     canWearLeft: card.canWearLeft,
+    rightHandReqs: card.rightHandReqs,
+    leftHandReqs: card.leftHandReqs,
+    wearReqs: card.wearReqs,
     material: card.material,
     isMetal: card.isMetal,
     isShiny: card.isShiny,
     affects: card.affects,
     properties: card.properties,
     forbidden: card.forbidden,
+    remorts: card.remorts,
   };
+}
+
+function isStatReqArray(v: unknown): v is StatRequirement[] {
+  return Array.isArray(v) && v.every(
+    (x) => typeof x === "object" && x !== null && typeof (x as StatRequirement).stat === "string" && typeof (x as StatRequirement).value === "number",
+  );
 }
 
 export function gearItemCardFromCache(
@@ -416,12 +486,16 @@ export function gearItemCardFromCache(
     damageDice: typeof data.damageDice === "string" ? data.damageDice : null,
     canWearRight: data.canWearRight === true,
     canWearLeft: data.canWearLeft === true,
+    rightHandReqs: isStatReqArray(data.rightHandReqs) ? data.rightHandReqs : [],
+    leftHandReqs: isStatReqArray(data.leftHandReqs) ? data.leftHandReqs : [],
+    wearReqs: isStatReqArray(data.wearReqs) ? data.wearReqs : [],
     material: typeof data.material === "string" ? data.material : "НЕИЗВЕСТНО",
     isMetal: data.isMetal === true,
     isShiny: data.isShiny === true,
     affects: Array.isArray(data.affects) ? (data.affects as string[]) : [],
     properties: Array.isArray(data.properties) ? (data.properties as string[]) : [],
     forbidden: Array.isArray(data.forbidden) ? (data.forbidden as string[]) : [],
+    remorts: typeof data.remorts === "number" ? data.remorts : 0,
   };
 }
 

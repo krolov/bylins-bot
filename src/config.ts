@@ -1,4 +1,6 @@
 import { startupConnectionScript } from "./startup-script";
+import type { CharacterProfile } from "./profiles";
+import { profiles, defaultProfileId } from "./profiles";
 
 export interface RuntimeConfig {
   host: string;
@@ -12,6 +14,8 @@ export interface RuntimeConfig {
   lineEnding: "\n" | "\r\n";
   databaseUrl: string;
   wikiProxies: string[];
+  profiles: CharacterProfile[];
+  defaultProfileId: string;
 }
 
 function readString(name: string, fallback: string): string {
@@ -94,6 +98,8 @@ export const runtimeConfig: RuntimeConfig = {
   lineEnding: readLineEnding(),
   databaseUrl: readString("DATABASE_URL", ""),
   wikiProxies: readWikiProxies(),
+  profiles,
+  defaultProfileId,
 };
 
 if (!runtimeConfig.databaseUrl) {

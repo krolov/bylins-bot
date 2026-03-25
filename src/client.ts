@@ -2,6 +2,7 @@ interface PeriodicActionConfig {
   enabled: boolean;
   gotoAlias1: string;
   commands: string[];
+  commandDelayMs: number;
   gotoAlias2: string;
   intervalMs: number;
 }
@@ -13,6 +14,16 @@ interface ConnectDefaults {
   tls: boolean;
   startupCommands: string[];
   commandDelayMs: number;
+}
+
+interface ProfileInfo {
+  id: string;
+  name: string;
+}
+
+interface ProfilesResponse {
+  profiles: ProfileInfo[];
+  defaultProfileId: string;
 }
 
 type AnsiColorName =
@@ -126,6 +137,8 @@ type ServerEvent =
         targetValues: string[];
         healCommands: string[];
         healThresholdPercent: number;
+        fleeCommand: string;
+        fleeThresholdPercent: number;
         lootValues: string[];
         periodicAction: PeriodicActionConfig;
       };
@@ -168,8 +181,8 @@ type ServerEvent =
       payload: SurvivalSettings | null;
     }
   | {
-      type: "triggers_state";
-      payload: { dodge: boolean; standUp: boolean };
+       type: "triggers_state";
+        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean };
     }
   | {
       type: "items_data";
@@ -211,25 +224,34 @@ type ServerEvent =
           sellCommand: string;
         }>;
       };
+    }
+  | { type: "repair_state"; payload: { running: boolean; message: string } }
+  | {
+      type: "auto_spells_settings_data";
+      payload: import("./auto-spells-ui.ts").AutoSpellsSettings | null;
     };
 
 type ClientEvent =
   | {
       type: "connect";
-      payload: Omit<ConnectDefaults, "autoConnect">;
+      payload: Omit<ConnectDefaults, "autoConnect" | "startupCommands"> & { profileId?: string; startupCommands?: string[] };
     }
   | { type: "send"; payload: { command: string } }
   | { type: "disconnect" }
   | { type: "map_reset" }
+  | { type: "map_reset_area" }
    | {
        type: "farm_toggle";
        payload: {
-         enabled: boolean;
-         targetValues: string[];
-         healCommands: string[];
-         healThresholdPercent: number;
-         lootValues: string[];
-         periodicAction: PeriodicActionConfig;
+          enabled: boolean;
+          targetValues: string[];
+          healCommands: string[];
+          healThresholdPercent: number;
+          fleeCommand: string;
+          fleeThresholdPercent: number;
+          lootValues: string[];
+          periodicAction: PeriodicActionConfig;
+          useStab?: boolean;
        };
      }
   | { type: "alias_set"; payload: { vnum: number; alias: string } }
@@ -247,7 +269,7 @@ type ClientEvent =
     }
   | {
       type: "triggers_toggle";
-      payload: { dodge?: boolean; standUp?: boolean };
+      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean };
     }
   | { type: "item_db_get" }
   | { type: "room_auto_command_set"; payload: { vnum: number; command: string } }
@@ -258,7 +280,12 @@ type ClientEvent =
   | { type: "gear_scan_start" }
   | { type: "gear_sell"; payload: { sellCommand: string } }
   | { type: "gear_drop"; payload: { dropCommand: string } }
-  | { type: "gear_apply"; payload: { commands: string[] } };
+  | { type: "gear_apply"; payload: { commands: string[] } }
+  | { type: "repair_start" }
+  | { type: "auto_spells_settings_get" }
+  | { type: "auto_spells_settings_save"; payload: import("./auto-spells-ui.ts").AutoSpellsSettings };
+
+import { initAutoSpellsUi } from "./auto-spells-ui.ts";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -275,6 +302,7 @@ const commandForm = requireElement<HTMLFormElement>("#command-form");
 const hostInput = requireElement<HTMLInputElement>("#host");
 const portInput = requireElement<HTMLInputElement>("#port");
 const tlsInput = requireElement<HTMLInputElement>("#tls");
+const profileSelectInput = requireElement<HTMLSelectElement>("#profile-select");
 const startupCommandsInput = requireElement<HTMLTextAreaElement>("#startup-commands");
 const commandDelayInput = requireElement<HTMLInputElement>("#command-delay-ms");
 const commandInput = requireElement<HTMLInputElement>("#command-input");
@@ -316,7 +344,7 @@ const mapContextAutoCmdDelete = requireElement<HTMLButtonElement>("#map-context-
 
 const autoCmdPopup = requireElement<HTMLDivElement>("#auto-cmd-popup");
 const autoCmdPopupTitle = requireElement<HTMLSpanElement>("#auto-cmd-popup-title");
-const autoCmdPopupInput = requireElement<HTMLInputElement>("#auto-cmd-popup-input");
+const autoCmdPopupInput = requireElement<HTMLTextAreaElement>("#auto-cmd-popup-input");
 const autoCmdPopupSave = requireElement<HTMLButtonElement>("#auto-cmd-popup-save");
 const autoCmdPopupDelete = requireElement<HTMLButtonElement>("#auto-cmd-popup-delete");
 const autoCmdPopupClose = requireElement<HTMLButtonElement>("#auto-cmd-popup-close");
@@ -326,6 +354,8 @@ const farmModalBackdrop = requireElement<HTMLDivElement>("#farm-settings-modal .
 const farmModalTargets = requireElement<HTMLTextAreaElement>("#farm-modal-targets");
 const farmModalHeal = requireElement<HTMLTextAreaElement>("#farm-modal-heal");
 const farmModalHealThreshold = requireElement<HTMLInputElement>("#farm-modal-heal-threshold");
+const farmModalFleeCommand = requireElement<HTMLInputElement>("#farm-modal-flee-command");
+const farmModalFleeThreshold = requireElement<HTMLInputElement>("#farm-modal-flee-threshold");
 const farmModalLoot = requireElement<HTMLTextAreaElement>("#farm-modal-loot");
 const farmModalClose = requireElement<HTMLButtonElement>("#farm-modal-close");
 const farmModalCancel = requireElement<HTMLButtonElement>("#farm-modal-cancel");
@@ -333,9 +363,10 @@ const farmModalStart = requireElement<HTMLButtonElement>("#farm-modal-start");
 const farmModalPeriodicEnabled = requireElement<HTMLInputElement>("#farm-modal-periodic-enabled");
 const farmModalPeriodicAlias1 = requireElement<HTMLInputElement>("#farm-modal-periodic-alias1");
 const farmModalPeriodicCommand = requireElement<HTMLTextAreaElement>("#farm-modal-periodic-command");
+const farmModalPeriodicCommandDelay = requireElement<HTMLInputElement>("#farm-modal-periodic-command-delay");
 const farmModalPeriodicAlias2 = requireElement<HTMLInputElement>("#farm-modal-periodic-alias2");
 const farmModalPeriodicInterval = requireElement<HTMLInputElement>("#farm-modal-periodic-interval");
-const farmModalSurvivalEnabled = requireElement<HTMLInputElement>("#farm-modal-survival-enabled");
+const farmModalUseStab = requireElement<HTMLInputElement>("#farm-modal-use-stab");
 
 const survivalSettingsButton = requireElement<HTMLButtonElement>("#survival-settings-button");
 const survivalSettingsModal = requireElement<HTMLDivElement>("#survival-settings-modal");
@@ -355,6 +386,7 @@ const survivalModalSave = requireElement<HTMLButtonElement>("#survival-modal-sav
 
 const buyFoodBtn = requireElement<HTMLButtonElement>("#buy-food-btn");
 const fillFlaskBtn = requireElement<HTMLButtonElement>("#fill-flask-btn");
+const repairBtn = requireElement<HTMLButtonElement>("#repair-btn");
 const buyFoodBadge = requireElement<HTMLSpanElement>("#buy-food-badge");
 const fillFlaskBadge = requireElement<HTMLSpanElement>("#fill-flask-badge");
 
@@ -365,6 +397,8 @@ const triggersModalClose = requireElement<HTMLButtonElement>("#triggers-modal-cl
 const triggersModalCancel = requireElement<HTMLButtonElement>("#triggers-modal-cancel");
 const triggerDodgeCheckbox = requireElement<HTMLInputElement>("#trigger-dodge");
 const triggerStandUpCheckbox = requireElement<HTMLInputElement>("#trigger-stand-up");
+const triggerRearmCheckbox = requireElement<HTMLInputElement>("#trigger-rearm");
+const triggerCurseCheckbox = requireElement<HTMLInputElement>("#trigger-curse");
 
 const itemDbButton = requireElement<HTMLButtonElement>("#item-db-button");
 const itemDbModal = requireElement<HTMLDivElement>("#item-db-modal");
@@ -392,13 +426,16 @@ interface FarmSettings {
   targets: string;
   healCommands: string;
   healThreshold: number;
+  fleeCommand: string;
+  fleeThreshold: number;
   loot: string;
   periodicActionEnabled: boolean;
   periodicActionGotoAlias1: string;
   periodicActionCommand: string;
+  periodicActionCommandDelayMs: number;
   periodicActionGotoAlias2: string;
   periodicActionIntervalMin: number;
-  survivalEnabled: boolean;
+  useStab: boolean;
 }
 
 interface SurvivalSettings {
@@ -420,7 +457,7 @@ interface FarmRuntimeStats {
 }
 
 function defaultFarmSettings(): FarmSettings {
-  return { targets: "", healCommands: "", healThreshold: 50, loot: "", periodicActionEnabled: false, periodicActionGotoAlias1: "", periodicActionCommand: "", periodicActionGotoAlias2: "", periodicActionIntervalMin: 30, survivalEnabled: false };
+  return { targets: "", healCommands: "", healThreshold: 50, fleeCommand: "", fleeThreshold: 0, loot: "", periodicActionEnabled: false, periodicActionGotoAlias1: "", periodicActionCommand: "", periodicActionCommandDelayMs: 0, periodicActionGotoAlias2: "", periodicActionIntervalMin: 30, useStab: true };
 }
 
 function defaultSurvivalSettings(): SurvivalSettings {
@@ -433,13 +470,16 @@ function normalizeFarmSettings(raw: Partial<FarmSettings>): FarmSettings {
     targets: typeof raw.targets === "string" ? raw.targets : def.targets,
     healCommands: typeof raw.healCommands === "string" ? raw.healCommands : def.healCommands,
     healThreshold: typeof raw.healThreshold === "number" && Number.isFinite(raw.healThreshold) ? raw.healThreshold : def.healThreshold,
+    fleeCommand: typeof raw.fleeCommand === "string" ? raw.fleeCommand : def.fleeCommand,
+    fleeThreshold: typeof raw.fleeThreshold === "number" && Number.isFinite(raw.fleeThreshold) ? raw.fleeThreshold : def.fleeThreshold,
     loot: typeof raw.loot === "string" ? raw.loot : def.loot,
     periodicActionEnabled: raw.periodicActionEnabled === true,
     periodicActionGotoAlias1: typeof raw.periodicActionGotoAlias1 === "string" ? raw.periodicActionGotoAlias1 : def.periodicActionGotoAlias1,
     periodicActionCommand: typeof raw.periodicActionCommand === "string" ? raw.periodicActionCommand : def.periodicActionCommand,
+    periodicActionCommandDelayMs: typeof raw.periodicActionCommandDelayMs === "number" && Number.isFinite(raw.periodicActionCommandDelayMs) ? raw.periodicActionCommandDelayMs : def.periodicActionCommandDelayMs,
     periodicActionGotoAlias2: typeof raw.periodicActionGotoAlias2 === "string" ? raw.periodicActionGotoAlias2 : def.periodicActionGotoAlias2,
     periodicActionIntervalMin: typeof raw.periodicActionIntervalMin === "number" && Number.isFinite(raw.periodicActionIntervalMin) ? raw.periodicActionIntervalMin : def.periodicActionIntervalMin,
-    survivalEnabled: raw.survivalEnabled === true,
+    useStab: raw.useStab !== false,
   };
 }
 
@@ -460,13 +500,16 @@ function fillFarmModal(settings: FarmSettings): void {
   farmModalTargets.value = settings.targets;
   farmModalHeal.value = settings.healCommands;
   farmModalHealThreshold.value = String(settings.healThreshold);
+  farmModalFleeCommand.value = settings.fleeCommand;
+  farmModalFleeThreshold.value = String(settings.fleeThreshold);
   farmModalLoot.value = settings.loot;
   farmModalPeriodicEnabled.checked = settings.periodicActionEnabled;
   farmModalPeriodicAlias1.value = settings.periodicActionGotoAlias1;
   farmModalPeriodicCommand.value = settings.periodicActionCommand;
+  farmModalPeriodicCommandDelay.value = String(settings.periodicActionCommandDelayMs);
   farmModalPeriodicAlias2.value = settings.periodicActionGotoAlias2;
   farmModalPeriodicInterval.value = String(settings.periodicActionIntervalMin);
-  farmModalSurvivalEnabled.checked = settings.survivalEnabled;
+  farmModalUseStab.checked = settings.useStab;
 }
 
 function fillSurvivalModal(settings: SurvivalSettings): void {
@@ -514,11 +557,13 @@ function closeSurvivalSettingsModal(): void {
   survivalSettingsModal.classList.add("farm-modal--hidden");
 }
 
-let currentTriggerState: { dodge: boolean; standUp: boolean } = { dodge: true, standUp: true };
+let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean } = { dodge: true, standUp: true, rearm: true, curse: false };
 
 function openTriggersModal(): void {
   triggerDodgeCheckbox.checked = currentTriggerState.dodge;
   triggerStandUpCheckbox.checked = currentTriggerState.standUp;
+  triggerRearmCheckbox.checked = currentTriggerState.rearm;
+  triggerCurseCheckbox.checked = currentTriggerState.curse;
   triggersModal.classList.remove("farm-modal--hidden");
 }
 
@@ -720,13 +765,16 @@ function commitFarmSettings(): void {
     targets: farmModalTargets.value.trim(),
     healCommands: farmModalHeal.value.trim(),
     healThreshold: Number(farmModalHealThreshold.value) || 50,
+    fleeCommand: farmModalFleeCommand.value.trim(),
+    fleeThreshold: Number(farmModalFleeThreshold.value) || 0,
     loot: farmModalLoot.value.trim(),
     periodicActionEnabled: farmModalPeriodicEnabled.checked,
     periodicActionGotoAlias1: farmModalPeriodicAlias1.value.trim(),
     periodicActionCommand: farmModalPeriodicCommand.value.trim(),
+    periodicActionCommandDelayMs: Math.max(0, Number(farmModalPeriodicCommandDelay.value) || 0),
     periodicActionGotoAlias2: farmModalPeriodicAlias2.value.trim(),
     periodicActionIntervalMin: Number(farmModalPeriodicInterval.value) || 30,
-    survivalEnabled: farmModalSurvivalEnabled.checked,
+    useStab: farmModalUseStab.checked,
   };
 
   if (farmModalZoneId !== null) {
@@ -736,28 +784,30 @@ function commitFarmSettings(): void {
     });
   }
 
-  // survivalEnabled is part of FarmSettings (zone-specific toggle), survival details are global
-
   const targetValues = parseFarmTargetValues(settings.targets);
   farmTargetsInput.value = targetValues.join(", ");
 
   sendClientEvent({
-    type: "farm_toggle",
-    payload: {
-      enabled: true,
-      targetValues,
-      healCommands: parseFarmCommandValues(settings.healCommands),
-      healThresholdPercent: settings.healThreshold,
-      lootValues: parseFarmCommandValues(settings.loot),
-      periodicAction: {
-        enabled: settings.periodicActionEnabled,
-        gotoAlias1: settings.periodicActionGotoAlias1,
-        commands: parseFarmCommandValues(settings.periodicActionCommand),
-        gotoAlias2: settings.periodicActionGotoAlias2,
-        intervalMs: settings.periodicActionIntervalMin * 60 * 1000,
+      type: "farm_toggle",
+      payload: {
+        enabled: true,
+        targetValues,
+        healCommands: parseFarmCommandValues(settings.healCommands),
+        healThresholdPercent: settings.healThreshold,
+        fleeCommand: settings.fleeCommand,
+        fleeThresholdPercent: settings.fleeThreshold,
+        lootValues: parseFarmCommandValues(settings.loot),
+        periodicAction: {
+          enabled: settings.periodicActionEnabled,
+          gotoAlias1: settings.periodicActionGotoAlias1,
+          commands: parseFarmCommandValues(settings.periodicActionCommand),
+          commandDelayMs: settings.periodicActionCommandDelayMs,
+          gotoAlias2: settings.periodicActionGotoAlias2,
+          intervalMs: settings.periodicActionIntervalMin * 60 * 1000,
+        },
+        useStab: settings.useStab,
       },
-    },
-  });
+    });
   closeFarmSettingsModal();
 }
 
@@ -901,11 +951,14 @@ let farmPendingActivation = false;
 let farmTargetValues: string[] = [];
 let farmHealCommands: string[] = [];
 let farmHealThresholdPercent = 50;
+let farmFleeCommand = "";
+let farmFleeThresholdPercent = 0;
 let farmLootValues: string[] = [];
 let farmPeriodicAction: PeriodicActionConfig = {
   enabled: false,
   gotoAlias1: "",
   commands: [],
+  commandDelayMs: 0,
   gotoAlias2: "",
   intervalMs: 0,
 };
@@ -954,8 +1007,8 @@ const DIRECTION_PRIORITY: Record<string, number> = {
   down: 5,
 };
 
-const CELL = 72;
-const TILE = 60;
+const CELL = 48;
+const TILE = 40;
 const PAD = 2;
 
 interface GridCell {
@@ -1358,7 +1411,7 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
     wrapper.appendChild(tile);
   }
 
-  const STUB = 20;
+  const STUB = 14;
 
   for (const cell of levelCells.values()) {
     const node = nodeByVnum.get(cell.vnum);
@@ -1952,6 +2005,8 @@ function createSocket(): WebSocket {
         farmTargetValues = message.payload.targetValues;
         farmHealCommands = message.payload.healCommands;
         farmHealThresholdPercent = message.payload.healThresholdPercent;
+        farmFleeCommand = message.payload.fleeCommand;
+        farmFleeThresholdPercent = message.payload.fleeThresholdPercent;
         farmLootValues = message.payload.lootValues;
         farmPeriodicAction = message.payload.periodicAction;
         farmTargetsInput.value = farmTargetValues.join(", ");
@@ -2002,6 +2057,8 @@ function createSocket(): WebSocket {
         currentTriggerState = message.payload;
         triggerDodgeCheckbox.checked = message.payload.dodge;
         triggerStandUpCheckbox.checked = message.payload.standUp;
+        triggerRearmCheckbox.checked = message.payload.rearm;
+        triggerCurseCheckbox.checked = message.payload.curse;
         break;
       case "items_data":
         renderItemDbTable(message.payload.items);
@@ -2058,6 +2115,17 @@ function createSocket(): WebSocket {
           gearAdvisorSellList.classList.add("gear-advisor__sell--hidden");
         }
         break;
+      case "repair_state":
+        repairBtn.disabled = message.payload.running;
+        repairBtn.title = message.payload.running
+          ? `Починка: ${message.payload.message}`
+          : "Починить снаряжение";
+        break;
+      case "auto_spells_settings_data": {
+        const payload = message.payload;
+        if (payload !== null) onAutoSpellsData(payload);
+        break;
+      }
     }
   });
 
@@ -2133,19 +2201,38 @@ function sendClientEvent(message: ClientEvent): void {
 }
 
 async function loadDefaults(): Promise<void> {
-  const response = await fetch("/api/config", { cache: "no-store" });
+  const [configResponse, profilesResponse] = await Promise.all([
+    fetch("/api/config", { cache: "no-store" }),
+    fetch("/api/profiles", { cache: "no-store" }),
+  ]);
 
-  if (!response.ok) {
-    throw new Error(`Failed to load defaults: ${response.status}`);
+  if (!configResponse.ok) {
+    throw new Error(`Failed to load defaults: ${configResponse.status}`);
   }
 
-  const defaults = (await response.json()) as ConnectDefaults;
+  const defaults = (await configResponse.json()) as ConnectDefaults;
   autoConnectEnabled = defaults.autoConnect;
   hostInput.value = defaults.host;
   portInput.value = String(defaults.port);
   tlsInput.checked = defaults.tls;
   startupCommandsInput.value = defaults.startupCommands.join("\n");
   commandDelayInput.value = String(defaults.commandDelayMs);
+
+  if (profilesResponse.ok) {
+    const data = (await profilesResponse.json()) as ProfilesResponse;
+    const savedProfileId = localStorage.getItem(LAST_PROFILE_KEY);
+    const selectId = savedProfileId ?? data.defaultProfileId;
+    profileSelectInput.innerHTML = "";
+    for (const profile of data.profiles) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.name;
+      if (profile.id === selectId) {
+        option.selected = true;
+      }
+      profileSelectInput.appendChild(option);
+    }
+  }
 }
 
 connectForm.addEventListener("submit", async (event) => {
@@ -2158,13 +2245,18 @@ connectForm.addEventListener("submit", async (event) => {
     return;
   }
 
+  const selectedProfileId = profileSelectInput.value || undefined;
+  if (selectedProfileId) {
+    localStorage.setItem(LAST_PROFILE_KEY, selectedProfileId);
+  }
   sendClientEvent({
     type: "connect",
     payload: {
       host: hostInput.value.trim(),
       port: Number(portInput.value),
       tls: tlsInput.checked,
-      startupCommands: readStartupCommands(),
+      profileId: selectedProfileId,
+      startupCommands: selectedProfileId ? undefined : readStartupCommands(),
       commandDelayMs: Number(commandDelayInput.value) || 0,
     },
   });
@@ -2240,13 +2332,7 @@ clearOutputButton.addEventListener("click", () => {
 });
 
 resetMapButton.addEventListener("click", () => {
-  latestMapSnapshot = {
-    currentVnum: null,
-    nodes: [],
-    edges: [],
-  };
-  updateMap(latestMapSnapshot, true);
-  sendClientEvent({ type: "map_reset" });
+  sendClientEvent({ type: "map_reset_area" });
 });
 
 zLevelDownButton.addEventListener("click", () => {
@@ -2278,6 +2364,8 @@ farmToggleButton.addEventListener("click", () => {
         targetValues: parseFarmTargetValues(farmTargetsInput.value),
         healCommands: farmHealCommands,
         healThresholdPercent: farmHealThresholdPercent,
+        fleeCommand: farmFleeCommand,
+        fleeThresholdPercent: farmFleeThresholdPercent,
         lootValues: farmLootValues,
         periodicAction: farmPeriodicAction,
       },
@@ -2341,6 +2429,10 @@ fillFlaskBtn.addEventListener("click", () => {
   appendSystemLine("[survival] не задан алиас места с водой");
 });
 
+repairBtn.addEventListener("click", () => {
+  sendClientEvent({ type: "repair_start" });
+});
+
 triggersButton.addEventListener("click", openTriggersModal);
 triggersModalClose.addEventListener("click", closeTriggersModal);
 triggersModalCancel.addEventListener("click", closeTriggersModal);
@@ -2372,6 +2464,16 @@ triggerDodgeCheckbox.addEventListener("change", () => {
 triggerStandUpCheckbox.addEventListener("change", () => {
   currentTriggerState = { ...currentTriggerState, standUp: triggerStandUpCheckbox.checked };
   sendClientEvent({ type: "triggers_toggle", payload: { standUp: triggerStandUpCheckbox.checked } });
+});
+
+triggerRearmCheckbox.addEventListener("change", () => {
+  currentTriggerState = { ...currentTriggerState, rearm: triggerRearmCheckbox.checked };
+  sendClientEvent({ type: "triggers_toggle", payload: { rearm: triggerRearmCheckbox.checked } });
+});
+
+triggerCurseCheckbox.addEventListener("change", () => {
+  currentTriggerState = { ...currentTriggerState, curse: triggerCurseCheckbox.checked };
+  sendClientEvent({ type: "triggers_toggle", payload: { curse: triggerCurseCheckbox.checked } });
 });
 
 document.addEventListener("keydown", (e) => {
@@ -2480,7 +2582,7 @@ autoCmdPopupDelete.addEventListener("click", () => {
 autoCmdPopupClose.addEventListener("click", closeAutoCmdPopup);
 
 autoCmdPopupInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") autoCmdPopupSave.click();
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) autoCmdPopupSave.click();
   if (e.key === "Escape") closeAutoCmdPopup();
 });
 
@@ -2495,6 +2597,7 @@ document.addEventListener("click", (e) => {
 // ── Hotkey system ─────────────────────────────────────────────────────────────
 
 const HOTKEYS_STORAGE_KEY = "mud_hotkeys";
+const LAST_PROFILE_KEY = "mud_last_profile";
 
 interface HotkeyEntry {
   key: string;       // e.g. "ArrowUp", "KeyW", "F1"
@@ -2713,19 +2816,19 @@ hotkeysModalAddRow.addEventListener("click", () => {
   const currentEntries = readHotkeysFromTable();
   currentEntries.push({ key: "", label: "", command: "" });
   renderHotkeysTable(currentEntries);
-  // Focus the new row's key input
   const rows = hotkeysTableBody.querySelectorAll<HTMLTableRowElement>(".hotkeys-modal__row");
   const lastRow = rows[rows.length - 1];
   lastRow?.querySelector<HTMLInputElement>(".hotkeys-modal__key-input")?.click();
 });
 
-// Escape in hotkeys modal
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !hotkeysModal.classList.contains("farm-modal--hidden")) {
-    if (capturingCell) return; // handled inside modal keydown
+    if (capturingCell) return;
     closeHotkeysModal();
   }
 });
+
+const onAutoSpellsData = initAutoSpellsUi({ sendClientEvent });
 
 renderFarmButton();
 updateActionBadges();

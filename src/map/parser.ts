@@ -57,7 +57,7 @@ export function feedText(state: ParserState, text: string): ParsedEvent[] {
     const roomHeaderMatch = ROOM_HEADER_REGEXP.exec(line);
 
     if (roomHeaderMatch) {
-      flushPendingRoomHeader(state, events, []);
+      flushPendingRoomHeader(state, events, [], []);
       state.pendingRoomHeader = {
         name: sanitizeRoomName(roomHeaderMatch[1]),
         vnum: Number(roomHeaderMatch[2]),

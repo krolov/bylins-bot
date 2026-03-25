@@ -54,6 +54,48 @@ kill $(pgrep -f "opencode web") && sleep 2 && nohup /root/.opencode/bin/opencode
 
 ---
 
+## Логи
+
+Все логи пишутся в `/var/log/bylins-bot/`:
+
+| Файл | Содержимое |
+|---|---|
+| `mud-traffic.log` | Текущий лог: весь MUD-трафик (входящий/исходящий), события сессий, ошибки. Ротируется ежедневно через logrotate. |
+| `mud-traffic.log.1` | Лог за предыдущие сутки (plain text, не сжат). |
+| `mud-traffic.log.2.gz` | Лог за позапрошлые сутки (gzip). |
+| `last-profile.txt` | ID последнего активного профиля MUD. |
+| `server.log` | Текущий stdout/stderr systemd-сервиса. |
+| `server.log.1` | stdout/stderr за предыдущие сутки. |
+
+### Формат записей в mud-traffic.log
+
+```
+[2026-03-25T07:32:43.078Z] session=<uuid> direction=mud-in message="текст от MUD"
+[2026-03-25T07:32:43.078Z] session=<uuid> direction=mud-out message="команда отправленная в MUD"
+[2026-03-25T07:32:43.078Z] session=<uuid> direction=session message="Connect requested."
+[2026-03-25T07:32:43.078Z] session=system direction=error message="описание ошибки"
+```
+
+Направления: `mud-in` (MUD → бот), `mud-out` (бот → MUD), `browser-in` (браузер → бот), `browser-out` (бот → браузер), `session` (события жизненного цикла), `error`.
+
+### Просмотр логов
+
+```bash
+# Последние N строк текущего лога
+tail -n 100 /var/log/bylins-bot/mud-traffic.log
+
+# Поиск по времени смерти / конкретному событию
+grep "07:3[0-9]" /var/log/bylins-bot/mud-traffic.log
+
+# Лог за предыдущие сутки
+tail -n 200 /var/log/bylins-bot/mud-traffic.log.1
+
+# Лог позапрошлых суток (сжат)
+zcat /var/log/bylins-bot/mud-traffic.log.2.gz | tail -n 200
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -282,3 +324,45 @@ To restart opencode (e.g. after adding a new MCP server):
 ```bash
 kill $(pgrep -f "opencode web") && sleep 2 && cd /root/bylins-bot && nohup /root/.opencode/bin/opencode web --hostname 127.0.0.1 --port 4096 > /tmp/opencode.log 2>&1 &
 ```
+
+---
+
+## Farm Settings — Data Flow
+
+Когда нужно добавить новое поле в настройки фарма, его нужно прописать в **5 местах**:
+
+1. **`src/map/store.ts` — `FarmZoneSettings`**
+   Интерфейс "сырых" настроек зоны, хранящихся в PostgreSQL (JSON-колонка).
+   Это source of truth для персистенции.
+
+2. **`src/server.ts` — тип `periodicAction?` в `ClientEvent` (union-тип)**
+   Опциональные поля входящего WebSocket-события `farm_toggle`.
+
+3. **`src/server.ts` — `normalizeFarmZoneSettings()`**
+   Нормализация при чтении из БД и при сохранении через `farm_settings_save`.
+
+4. **`src/server.ts` — обработчик `farm_toggle`**
+   Маппинг входящего события → `farmController.updateConfig()`.
+
+5. **`src/farm-script.ts` — `PeriodicActionConfig` + `normalizePeriodicAction()`**
+   Внутренний тип контроллера фарма. Если поле относится к периодическому действию — добавить сюда и в нормализацию.
+
+**На стороне браузера (`src/client.ts`):**
+- `PeriodicActionConfig` — локальная копия интерфейса (дублирует farm-script)
+- `FarmSettings` — плоская структура настроек UI
+- `defaultFarmSettings()` / `normalizeFarmSettings()` — дефолты и нормализация при чтении из localStorage
+- `fillFarmModal()` — заполнение формы из `FarmSettings`
+- `commitFarmSettings()` — сборка `FarmSettings` из DOM-элементов → отправка на сервер
+- Каждое поле формы требует `requireElement<T>("#id")` в начале файла
+
+**Цепочка сохранения:**
+```
+commitFarmSettings() → farm_settings_save → normalizeFarmZoneSettings → mapStore.setFarmSettings
+```
+
+**Цепочка применения при старте фарма:**
+```
+farm_toggle (browser) → updateConfig → normalizePeriodicAction → farmController state
+```
+
+**Примечание:** `bun run typecheck` может показывать pre-existing ошибки в `parser.test.ts` и `tracker.test.ts` (про `closedExits`) — они не связаны с настройками фарма и существовали до этого.

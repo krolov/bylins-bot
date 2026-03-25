@@ -7,7 +7,7 @@ import {
   gearItemCardFromCache,
   createProxyPicker,
 } from "./wiki.ts";
-import type { GearItemCard, GearWearSlot } from "./wiki.ts";
+import type { GearItemCard, GearWearSlot, StatName, StatRequirement } from "./wiki.ts";
 import { selectProfile } from "./gear-profile.ts";
 import type { GearProfile } from "./gear-profile.ts";
 
@@ -16,6 +16,31 @@ const SHOP_PAGE_TIMEOUT_MS = 3000;
 const STRIP_ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const STRIP_CR = /\r/g;
 const PROMPT_RE = /\d+H\s+\d+M\b/;
+
+type CharStats = Partial<Record<StatName, number>> & { remorts?: number };
+
+function parseCharStats(levelText: string): CharStats {
+  const stats: CharStats = {};
+  const strM = /Сила\s*:\s*(\d+)/i.exec(levelText);
+  if (strM) stats["сила"] = parseInt(strM[1]);
+  const dexM = /Подв\s*:\s*(\d+)/i.exec(levelText);
+  if (dexM) stats["ловкость"] = parseInt(dexM[1]);
+  const conM = /Тело\s*:\s*(\d+)/i.exec(levelText);
+  if (conM) stats["здоровье"] = parseInt(conM[1]);
+  const wisM = /Мудр\s*:\s*(\d+)/i.exec(levelText);
+  if (wisM) stats["мудрость"] = parseInt(wisM[1]);
+  const intM = /Ум\s*:\s*(\d+)/i.exec(levelText);
+  if (intM) stats["ум"] = parseInt(intM[1]);
+  const chaM = /Обаян\s*:\s*(\d+)/i.exec(levelText);
+  if (chaM) stats["обаяние"] = parseInt(chaM[1]);
+  const remortsM = /Перевоплощений\s*:\s*(\d+)/i.exec(levelText);
+  stats.remorts = remortsM ? parseInt(remortsM[1]) : 0;
+  return stats;
+}
+
+function meetsReqs(reqs: StatRequirement[], stats: CharStats): boolean {
+  return reqs.every((r) => (stats[r.stat] ?? 0) >= r.value);
+}
 
 export interface GearScanRow {
   slot: string;
@@ -306,7 +331,8 @@ export async function runGearScan(
 
     const coins = parseCoins(levelText);
     const profile = selectProfile(levelText);
-    onProgress(`Монет на руках: ${coins}. Профиль: ${profile.id}`);
+    const charStats = parseCharStats(levelText);
+    onProgress(`Монет на руках: ${coins}. Профиль: ${profile.id}. Сила: ${charStats["сила"] ?? "?"}, Подв: ${charStats["ловкость"] ?? "?"}, Перевоплощений: ${charStats.remorts ?? 0}`);
 
     const equipped: Map<string, string[]> = new Map();
     for (const line of equipText.split("\n")) {
@@ -401,10 +427,12 @@ export async function runGearScan(
     const shopWristbands: Candidate[] = [];
 
     for (const entry of allCandidates) {
+      if (entry.card.remorts > (charStats.remorts ?? 0)) continue;
       if (entry.card.itemType === "ОРУЖИЕ") {
-        if (entry.card.canWearRight) shopRightWeapons.push(entry);
-        if (entry.card.canWearLeft) shopLeftWeapons.push(entry);
+        if (entry.card.canWearRight && meetsReqs(entry.card.rightHandReqs, charStats)) shopRightWeapons.push(entry);
+        if (entry.card.canWearLeft && meetsReqs(entry.card.leftHandReqs, charStats)) shopLeftWeapons.push(entry);
       } else {
+        if (!meetsReqs(entry.card.wearReqs, charStats)) continue;
         for (const slot of entry.card.wearSlots) {
           if (slot === "палец") {
             shopRings.push(entry);
@@ -434,6 +462,14 @@ export async function runGearScan(
       "на запястьях": "запястья",
       "на шее": "шею",
       "на пальце": "палец",
+      "правый указательный палец": "палец",
+      "левый указательный палец": "палец",
+      "правый средний палец": "палец",
+      "левый средний палец": "палец",
+      "правый безымянный палец": "палец",
+      "левый безымянный палец": "палец",
+      "правый мизинец": "палец",
+      "левый мизинец": "палец",
     };
 
     for (const { slot: mudSlot, card } of validCurrent) {
@@ -669,7 +705,9 @@ export async function runGearScan(
         });
       }
     }
-    const equippedRings = equipped.get("на пальце") ?? equipped.get("палец") ?? [];
+    const equippedRings = [...equipped.entries()]
+      .filter(([s]) => MUD_SLOT_TO_WIKI[s.toLowerCase()] === "палец" || s.toLowerCase() === "палец" || s.toLowerCase() === "на пальце")
+      .flatMap(([, names]) => names);
     const ringSubSlots = ["палец 1", "палец 2"] as const;
     for (let i = 0; i < 2; i++) {
       const subSlot = ringSubSlots[i];

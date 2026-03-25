@@ -1,13 +1,18 @@
 const ANSI_SEQUENCE_REGEXP = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const DEFAULT_RETRY_DELAY_MS = 1200;
+const IN_FLIGHT_WATCHDOG_MS = 15_000;
 const HUNGER_REGEXP = /Вы (?:голодны|очень голодны|готовы сожрать быка)/i;
 const THIRST_REGEXP = /Вас (?:мучает|сильно мучает) жажда|Вам хочется выпить озеро/i;
-const SATIATED_REGEXP = /Вы полностью насытились/i;
+const SATIATED_REGEXP = /Вы полностью насытились|Вы наелись/i;
 const ATE_REGEXP = /Вы съели /i;
 const TOO_FULL_REGEXP = /Вы слишком сыты для этого/i;
 const THIRST_QUENCHED_REGEXP = /Вы не чувствуете жажды/i;
 const DRANK_REGEXP = /Вы выпили .+ из /i;
+const FLASK_FILLED_REGEXP = /Вы наполнили /i;
+const FLASK_EMPTY_REGEXP = /^Пусто\.$/im;
 const NOT_FOUND_REGEXP = /Вы не смогли это найти|Вы не видите .+ в |У вас нет '/i;
+const DARK_ROOM_REGEXP = /Слишком темно/i;
+const CANDLE_COOLDOWN_MS = 10_000;
 const CONSUME_COMMAND_DELAY_MS = 800;
 const INSPECT_TIMEOUT_MS = 2000;
 const ITEM_LINE_REGEXP = /^\s*(.+?)\s*(?:\[(\d+)\])?\s*$/;
@@ -38,6 +43,7 @@ export interface SurvivalControllerDependencies {
   navigateTo(vnum: number): Promise<void>;
   isInCombat(): boolean;
   onLog(message: string): void;
+  onDebugLog(message: string): void;
   onStatusChange(status: SurvivalStatus): void;
 }
 
@@ -45,6 +51,7 @@ interface SurvivalState {
   hungry: boolean;
   thirsty: boolean;
   inFlight: boolean;
+  inFlightSince: number;
   nextActionAt: number;
   foodEmpty: boolean;
   flaskEmpty: boolean;
@@ -56,6 +63,7 @@ interface SurvivalState {
   eatIterations: number;
   drinkIterations: number;
   eatNextTimer: ReturnType<typeof setTimeout> | null;
+  lastCandleAt: number;
 }
 
 export function normalizeSurvivalConfig(config: SurvivalConfig): SurvivalConfig {
@@ -83,6 +91,7 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     hungry: false,
     thirsty: false,
     inFlight: false,
+    inFlightSince: 0,
     nextActionAt: 0,
     foodEmpty: false,
     flaskEmpty: false,
@@ -93,6 +102,7 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     eatIterations: 0,
     drinkIterations: 0,
     eatNextTimer: null,
+    lastCandleAt: 0,
     config: {
       enabled: false,
       container: "",
@@ -119,6 +129,7 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     state.drinkingKeyword = null;
     state.eatIterations = 0;
     state.drinkIterations = 0;
+    state.lastCandleAt = 0;
     cancelEatNextTimer();
     deps.onStatusChange({ foodEmpty: state.foodEmpty, flaskEmpty: state.flaskEmpty });
   }
@@ -146,6 +157,18 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     if (HUNGER_REGEXP.test(normalized)) state.hungry = true;
     if (THIRST_REGEXP.test(normalized)) state.thirsty = true;
 
+    if (DARK_ROOM_REGEXP.test(normalized)) {
+      const now = Date.now();
+      if (now - state.lastCandleAt >= CANDLE_COOLDOWN_MS) {
+        state.lastCandleAt = now;
+        deps.onLog("[survival] темно: создаём шар света");
+        deps.sendCommand("колд !созд.све");
+        setTimeout(() => {
+          deps.sendCommand("держ шар");
+        }, CONSUME_COMMAND_DELAY_MS);
+      }
+    }
+
     if (SATIATED_REGEXP.test(normalized) || TOO_FULL_REGEXP.test(normalized)) {
       cancelEatNextTimer();
       state.hungry = false;
@@ -157,24 +180,19 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
 
     if (NOT_FOUND_REGEXP.test(normalized)) {
       if (state.eatingKeyword !== null) {
-        state.hungry = false;
         state.inFlight = false;
         state.eatingKeyword = null;
         state.eatIterations = 0;
         cancelEatNextTimer();
-        setFoodEmpty(true);
-        deps.onLog("[survival] еда не найдена, попробуем позже");
       }
       if (state.drinkingKeyword !== null) {
-        state.thirsty = false;
         state.inFlight = false;
         state.drinkingKeyword = null;
         state.drinkIterations = 0;
-        setFlaskEmpty(true);
         if (state.pendingPutBack !== null) {
           state.pendingPutBack = null;
         }
-        deps.onLog("[survival] фляга не найдена, попробуем позже");
+        deps.onDebugLog("[survival] фляга не найдена (NOT_FOUND), повторим попытку");
       }
     }
 
@@ -232,6 +250,24 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
         deps.sendCommand(`положить ${keyword} ${container}`);
       }
     }
+
+    if (FLASK_EMPTY_REGEXP.test(normalized) && state.drinkingKeyword !== null) {
+      state.inFlight = false;
+      if (state.pendingPutBack !== null) {
+        const { keyword, container } = state.pendingPutBack;
+        state.pendingPutBack = null;
+        deps.sendCommand(`положить ${keyword} ${container}`);
+      }
+      state.drinkingKeyword = null;
+      state.drinkIterations = 0;
+      state.thirsty = false;
+      setFlaskEmpty(true);
+      deps.onLog("[survival] фляга пустая, нужно наполнить");
+    }
+
+    if (FLASK_FILLED_REGEXP.test(normalized)) {
+      setFlaskEmpty(false);
+    }
   }
 
   function isInFlight(): boolean {
@@ -239,14 +275,38 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
   }
 
   async function runTick(onSchedule: (delayMs: number) => void): Promise<boolean> {
-    if (!state.config.enabled || deps.isInCombat()) return false;
-    if (state.inFlight) return true;
+    if (!state.config.enabled) {
+      deps.onDebugLog("[survival] runTick: скрипт отключён, пропуск");
+      return false;
+    }
+    if (deps.isInCombat()) {
+      deps.onDebugLog("[survival] runTick: в бою, пропуск");
+      return false;
+    }
+    if (state.inFlight) {
+      if (Date.now() - state.inFlightSince > IN_FLIGHT_WATCHDOG_MS) {
+        deps.onDebugLog(`[survival] watchdog: inFlight завис >15с, сброс (eating=${state.eatingKeyword ?? "null"}, drinking=${state.drinkingKeyword ?? "null"})`);
+        state.inFlight = false;
+        state.eatingKeyword = null;
+        state.drinkingKeyword = null;
+        state.eatIterations = 0;
+        state.drinkIterations = 0;
+        state.pendingPutBack = null;
+        state.inspectPending = null;
+      } else {
+        deps.onDebugLog(`[survival] runTick: inFlight=true, ждём (eating=${state.eatingKeyword ?? "null"}, drinking=${state.drinkingKeyword ?? "null"})`);
+        return true;
+      }
+    }
 
     const waitMs = state.nextActionAt - Date.now();
     if (waitMs > 0) {
+      deps.onDebugLog(`[survival] runTick: nextActionAt через ${waitMs}мс`);
       onSchedule(waitMs);
       return true;
     }
+
+    deps.onDebugLog(`[survival] runTick: hungry=${state.hungry} thirsty=${state.thirsty}`);
 
     if (state.hungry) {
       const { foodItems, container } = state.config;
@@ -259,8 +319,11 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
       }
 
       state.inFlight = true;
+      state.inFlightSince = Date.now();
+      deps.onDebugLog(`[survival] голод: осм ${container}`);
       deps.sendCommand(`осм ${container}`);
       const inspectText = await waitForInspect();
+      deps.onDebugLog(`[survival] осм ответ (${inspectText.length} симв): ${inspectText.slice(0, 80).replace(/\n/g, "↵")}`);
       const foodKeyword = findFirstMatchingKeyword(inspectText, foodItems);
 
       if (foodKeyword !== null) {
@@ -294,8 +357,11 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
       }
 
       state.inFlight = true;
+      state.inFlightSince = Date.now();
+      deps.onDebugLog(`[survival] жажда: осм ${container}`);
       deps.sendCommand(`осм ${container}`);
       const inspectText = await waitForInspect();
+      deps.onDebugLog(`[survival] осм ответ (${inspectText.length} симв): ${inspectText.slice(0, 80).replace(/\n/g, "↵")}`);
       const flaskKeyword = findFirstMatchingKeyword(inspectText, flaskItems);
 
       if (flaskKeyword !== null) {
@@ -315,6 +381,7 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
       state.inFlight = false;
       setFlaskEmpty(true);
       state.thirsty = false;
+      deps.onDebugLog(`[survival] фляга не найдена в мешке (inspectText пустой: ${inspectText.length === 0})`);
       deps.onLog("[survival] вода в мешке кончилась");
 
       return false;

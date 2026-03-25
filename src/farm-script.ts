@@ -17,7 +17,11 @@ const TARGET_ACTION_SPLIT_REGEXP = /\s+(?:так\s+и\s+)?(?:тихо|велич
 const RESTING_PROMPT_REGEXP = /\b(?:ОЗ|Вых):/i;
 const SITTING_REGEXP = /^Вы (?:сели|пристроились поудобнее)/i;
 const STANDING_REGEXP = /^Вы прекратили отдыхать и встали/i;
+const DARK_ROOM_REGEXP = /^Слишком темно\b/i;
+const MOVEMENT_BLOCKED_REGEXP = /^Вы не сможете туда пройти/i;
 const DEFAULT_RETRY_DELAY_MS = 1200;
+const DARK_ROOM_RETRY_DELAY_MS = 2000;
+const MAX_CONSECUTIVE_BLOCKED = 3;
 const MOVE_DELAY_MS = 900;
 const HEAL_COMMAND_DELAY_MS = 700;
 const REST_COMMAND_DELAY_MS = 1600;
@@ -46,6 +50,7 @@ export interface PeriodicActionConfig {
   enabled: boolean;
   gotoAlias1: string;
   commands: string[];
+  commandDelayMs: number;
   gotoAlias2: string;
   intervalMs: number;
 }
@@ -57,6 +62,8 @@ export interface FarmStateSnapshot {
   targetValues: string[];
   healCommands: string[];
   healThresholdPercent: number;
+  fleeCommand: string;
+  fleeThresholdPercent: number;
   lootValues: string[];
   periodicAction: PeriodicActionConfig;
 }
@@ -79,8 +86,11 @@ interface FarmConfig {
   targetValues: string[];
   healCommands: string[];
   healThresholdPercent: number;
+  fleeCommand: string;
+  fleeThresholdPercent: number;
   lootValues: string[];
   periodicAction: PeriodicActionConfig;
+  useStab: boolean;
 }
 
 interface FarmStats {
@@ -105,6 +115,7 @@ interface FarmState {
   resting: boolean;
   healingInProgress: boolean;
   healCommandIndex: number;
+  fleeInProgress: boolean;
   roomVisitOrder: Map<number, number>;
   visitSequence: number;
   lastRecordedRoomId: number | null;
@@ -112,6 +123,8 @@ interface FarmState {
   lastPeriodicActionAt: number;
   periodicActionInFlight: boolean;
   pendingRoomScanAfterKill: boolean;
+  isDark: boolean;
+  consecutiveBlocked: number;
 }
 
 export function createFarmController(deps: FarmControllerDependencies) {
@@ -129,14 +142,18 @@ export function createFarmController(deps: FarmControllerDependencies) {
       targetValues: [],
       healCommands: [],
       healThresholdPercent: 50,
+      fleeCommand: "",
+      fleeThresholdPercent: 0,
       lootValues: [],
       periodicAction: {
-        enabled: false,
-        gotoAlias1: "",
-        commands: [],
-        gotoAlias2: "",
-        intervalMs: 0,
-      },
+          enabled: false,
+          gotoAlias1: "",
+          commands: [],
+          commandDelayMs: 0,
+          gotoAlias2: "",
+          intervalMs: 0,
+        },
+      useStab: true,
     },
     stats: {
       hp: 0,
@@ -147,6 +164,7 @@ export function createFarmController(deps: FarmControllerDependencies) {
     resting: false,
     healingInProgress: false,
     healCommandIndex: 0,
+    fleeInProgress: false,
     roomVisitOrder: new Map<number, number>(),
     visitSequence: 0,
     lastRecordedRoomId: null,
@@ -154,6 +172,8 @@ export function createFarmController(deps: FarmControllerDependencies) {
     lastPeriodicActionAt: 0,
     periodicActionInFlight: false,
     pendingRoomScanAfterKill: false,
+    isDark: false,
+    consecutiveBlocked: 0,
   };
 
 
@@ -165,6 +185,8 @@ export function createFarmController(deps: FarmControllerDependencies) {
       targetValues: [...state.config.targetValues],
       healCommands: [...state.config.healCommands],
       healThresholdPercent: state.config.healThresholdPercent,
+      fleeCommand: state.config.fleeCommand,
+      fleeThresholdPercent: state.config.fleeThresholdPercent,
       lootValues: [...state.config.lootValues],
       periodicAction: { ...state.config.periodicAction },
     };
@@ -211,6 +233,7 @@ export function createFarmController(deps: FarmControllerDependencies) {
     state.resting = false;
     state.healingInProgress = false;
     state.healCommandIndex = 0;
+    state.fleeInProgress = false;
     state.roomVisitOrder.clear();
     state.visitSequence = 0;
     state.lastRecordedRoomId = null;
@@ -218,6 +241,8 @@ export function createFarmController(deps: FarmControllerDependencies) {
     state.lastPeriodicActionAt = 0;
     state.periodicActionInFlight = false;
     state.pendingRoomScanAfterKill = false;
+    state.isDark = false;
+    state.consecutiveBlocked = 0;
   }
 
   function disable(reason?: string): void {
@@ -289,12 +314,15 @@ export function createFarmController(deps: FarmControllerDependencies) {
     disable("Фарм выключен.");
   }
 
-  function updateConfig(config: { targetValues: string[]; healCommands: string[]; healThresholdPercent: number; lootValues: string[]; periodicAction: PeriodicActionConfig }): void {
+  function updateConfig(config: { targetValues: string[]; healCommands: string[]; healThresholdPercent: number; fleeCommand: string; fleeThresholdPercent: number; lootValues: string[]; periodicAction: PeriodicActionConfig; useStab: boolean }): void {
     state.config.targetValues = normalizeTargetValues(config.targetValues);
     state.config.healCommands = normalizeCommands(config.healCommands);
     state.config.healThresholdPercent = normalizePercent(config.healThresholdPercent, 50);
+    state.config.fleeCommand = typeof config.fleeCommand === "string" ? config.fleeCommand.trim() : "";
+    state.config.fleeThresholdPercent = normalizePercent(config.fleeThresholdPercent, 0);
     state.config.lootValues = normalizeTargetValues(config.lootValues);
     state.config.periodicAction = normalizePeriodicAction(config.periodicAction);
+    state.config.useStab = config.useStab === true;
     deps.onLog(`[farm] config targetValues: [${state.config.targetValues.join(", ") || "пусто"}]`);
     publishState();
   }
@@ -326,6 +354,9 @@ export function createFarmController(deps: FarmControllerDependencies) {
       state.currentVisibleTargets.clear();
       if (options.roomChanged) {
         state.pendingLoot = [];
+        state.fleeInProgress = false;
+        state.isDark = false;
+        state.consecutiveBlocked = 0;
       }
       parseMobsFromRoomDescription(text);
     }
@@ -336,6 +367,7 @@ export function createFarmController(deps: FarmControllerDependencies) {
 
     if (ROOM_PROMPT_REGEXP.test(normalized)) {
       state.inCombat = false;
+      state.fleeInProgress = false;
       if (state.pendingRoomScanAfterKill) {
         state.pendingRoomScanAfterKill = false;
       }
@@ -355,6 +387,33 @@ export function createFarmController(deps: FarmControllerDependencies) {
       if (STANDING_REGEXP.test(line)) {
         state.resting = false;
         break;
+      }
+    }
+
+    for (const line of lines) {
+      if (DARK_ROOM_REGEXP.test(line)) {
+        if (!state.isDark) {
+          state.isDark = true;
+          deps.onLog("[farm] Тёмная комната — движение приостановлено до появления света.");
+        }
+        break;
+      }
+    }
+
+    for (const line of lines) {
+      if (MOVEMENT_BLOCKED_REGEXP.test(line)) {
+        state.consecutiveBlocked += 1;
+        state.lastMoveFromRoomId = null;
+        if (state.consecutiveBlocked >= MAX_CONSECUTIVE_BLOCKED) {
+          deps.onLog(`[farm] Движение заблокировано ${state.consecutiveBlocked} раз подряд — сброс маршрута.`);
+          state.consecutiveBlocked = 0;
+          state.roomVisitOrder.clear();
+          state.visitSequence = 0;
+          state.lastRecordedRoomId = null;
+        }
+        break;
+      } else if (ROOM_PROMPT_REGEXP.test(line)) {
+        state.consecutiveBlocked = 0;
       }
     }
 
@@ -487,6 +546,11 @@ export function createFarmController(deps: FarmControllerDependencies) {
         return;
       }
 
+      if (state.isDark) {
+        scheduleTick(DARK_ROOM_RETRY_DELAY_MS);
+        return;
+      }
+
       if (state.zoneId === null) {
         state.zoneId = getZoneId(currentRoomId);
         state.pendingActivation = false;
@@ -522,6 +586,21 @@ export function createFarmController(deps: FarmControllerDependencies) {
         state.resting = false;
         state.nextActionAt = Date.now() + REST_COMMAND_DELAY_MS;
         scheduleTick(REST_COMMAND_DELAY_MS);
+        return;
+      }
+
+      if (
+        state.inCombat &&
+        !state.fleeInProgress &&
+        state.config.fleeCommand !== "" &&
+        state.config.fleeThresholdPercent > 0 &&
+        shouldFlee(state.stats, state.config.fleeThresholdPercent)
+      ) {
+        deps.onLog(`[farm] HP низкий (${state.stats.hp}/${state.stats.hpMax}), бегу: ${state.config.fleeCommand}`);
+        deps.sendCommand(state.config.fleeCommand);
+        state.fleeInProgress = true;
+        state.nextActionAt = Date.now() + DEFAULT_RETRY_DELAY_MS;
+        scheduleTick(DEFAULT_RETRY_DELAY_MS);
         return;
       }
 
@@ -572,6 +651,7 @@ export function createFarmController(deps: FarmControllerDependencies) {
             const alias1 = state.config.periodicAction.gotoAlias1.trim();
             const alias2 = state.config.periodicAction.gotoAlias2.trim();
             const cmds = state.config.periodicAction.commands;
+            const cmdDelay = state.config.periodicAction.commandDelayMs;
 
             deps.onLog(`[farm] periodicAction: идём к "${alias1}"`);
             const vnum1 = await deps.resolveAlias(alias1);
@@ -583,8 +663,11 @@ export function createFarmController(deps: FarmControllerDependencies) {
 
             if (cmds.length > 0) {
               deps.onLog(`[farm] periodicAction: команды [${cmds.join(", ")}]`);
-              for (const cmd of cmds) {
-                deps.sendCommand(cmd);
+              for (let i = 0; i < cmds.length; i++) {
+                if (i > 0 && cmdDelay > 0) {
+                  await new Promise<void>((resolve) => setTimeout(resolve, cmdDelay));
+                }
+                deps.sendCommand(cmds[i]);
               }
             }
 
@@ -615,7 +698,8 @@ export function createFarmController(deps: FarmControllerDependencies) {
       const target = pickVisibleTarget(state.currentVisibleTargets, state.config.targetValues);
 
       if (target) {
-        deps.sendCommand(`заколоть ${target}`);
+        const attackCommand = state.config.useStab ? `заколоть ${target}` : `убить ${target}`;
+        deps.sendCommand(attackCommand);
         state.inCombat = true;
         scheduleTick(DEFAULT_RETRY_DELAY_MS);
         return;
@@ -730,6 +814,14 @@ function shouldHeal(stats: FarmStats, thresholdPercent: number): boolean {
   return (stats.hp / stats.hpMax) * 100 < thresholdPercent;
 }
 
+function shouldFlee(stats: FarmStats, thresholdPercent: number): boolean {
+  if (stats.hpMax <= 0) {
+    return false;
+  }
+
+  return (stats.hp / stats.hpMax) * 100 < thresholdPercent;
+}
+
 function shouldRestForEnergy(stats: FarmStats): boolean {
   if (stats.energyMax <= 0) {
     return false;
@@ -807,7 +899,8 @@ function chooseNextDirection(
     }
   }
 
-  const choices = adjacency.get(currentRoomId) ?? [];
+  const choices = (adjacency.get(currentRoomId) ?? [])
+    .filter((c) => c.direction !== "up" && c.direction !== "down");
 
   if (choices.length === 0) {
     return null;
@@ -840,6 +933,7 @@ function normalizePeriodicAction(config: PeriodicActionConfig): PeriodicActionCo
     commands: Array.isArray(config.commands)
       ? config.commands.map((c) => c.trim()).filter((c) => c.length > 0)
       : [],
+    commandDelayMs: Math.max(0, Math.round(Number.isFinite(config.commandDelayMs) ? config.commandDelayMs : 0)),
     gotoAlias2: (config.gotoAlias2 ?? "").trim(),
     intervalMs: Math.max(0, Math.round(Number.isFinite(config.intervalMs) ? config.intervalMs : 0)),
   };

@@ -1,5 +1,6 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { runtimeConfig } from "./config";
+import { profiles } from "./profiles";
 import { sql } from "./db";
 import { createCombatState } from "./combat-state";
 import { createFarmController } from "./farm-script";
@@ -9,13 +10,16 @@ import { findPath } from "./map/pathfinder";
 import type { PathStep } from "./map/pathfinder";
 import { createParserState, feedText } from "./map/parser";
 import { createMapStore } from "./map/store";
-import type { FarmZoneSettings, SurvivalSettings, GameItem } from "./map/store";
+import type { FarmZoneSettings, SurvivalSettings, TriggerSettings, GameItem, AutoSpellsSettings } from "./map/store";
 import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker";
 import type { Direction, MapAlias, MapSnapshot } from "./map/types";
 import { createTriggers } from "./triggers";
 import type { TriggerState } from "./triggers";
 import { runGearScan } from "./gear-scan";
 import type { GearScanRow, SellItem } from "./gear-scan";
+import { createRepairController } from "./repair-script";
+import { createSpellController } from "./spell-script";
+import type { SpellControllerConfig } from "./spell-script";
 
 type MudSocket = Awaited<ReturnType<typeof Bun.connect>>;
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
@@ -30,8 +34,24 @@ const SE = 240;
 const STARTUP_COMMAND_FALLBACK_MS = 1200;
 const LOG_DIR = "/var/log/bylins-bot";
 const LOG_FILE = `${LOG_DIR}/mud-traffic.log`;
+const LAST_PROFILE_FILE = `${LOG_DIR}/last-profile.txt`;
 const MAX_OUTPUT_CHUNKS = 200;
 const NAVIGATION_STEP_TIMEOUT_MS = 3000;
+
+function readLastProfileId(): string {
+  try {
+    return readFileSync(LAST_PROFILE_FILE, "utf8").trim();
+  } catch {
+    return runtimeConfig.defaultProfileId;
+  }
+}
+
+function saveLastProfileId(profileId: string): void {
+  try {
+    writeFileSync(LAST_PROFILE_FILE, profileId, "utf8");
+  } catch {
+  }
+}
 
 interface WsData {
   sessionId: string;
@@ -43,6 +63,7 @@ interface ConnectPayload {
   tls?: boolean;
   startupCommands?: string[];
   commandDelayMs?: number;
+  profileId?: string;
 }
 
 type ClientEvent =
@@ -50,6 +71,7 @@ type ClientEvent =
   | { type: "send"; payload?: { command?: string } }
   | { type: "disconnect" }
   | { type: "map_reset" }
+  | { type: "map_reset_area" }
    | {
       type: "farm_toggle";
       payload?: {
@@ -57,14 +79,18 @@ type ClientEvent =
         targetValues?: string[];
         healCommands?: string[];
         healThresholdPercent?: number;
+        fleeCommand?: string;
+        fleeThresholdPercent?: number;
         lootValues?: string[];
         periodicAction?: {
           enabled?: boolean;
           gotoAlias1?: string;
           commands?: string[];
+          commandDelayMs?: number;
           gotoAlias2?: string;
           intervalMs?: number;
         };
+        useStab?: boolean;
       };
     }
   | { type: "alias_set"; payload?: { vnum?: number; alias?: string } }
@@ -93,7 +119,13 @@ type ClientEvent =
   | { type: "gear_scan_start" }
   | { type: "gear_sell"; payload: { sellCommand: string } }
   | { type: "gear_drop"; payload: { dropCommand: string } }
-  | { type: "gear_apply"; payload: { commands: string[] } };
+  | { type: "gear_apply"; payload: { commands: string[] } }
+  | { type: "repair_start" }
+  | { type: "auto_spells_settings_get" }
+  | {
+      type: "auto_spells_settings_save";
+      payload?: Partial<AutoSpellsSettings>;
+    };
 
 type ServerEvent =
   | {
@@ -143,6 +175,8 @@ type ServerEvent =
         targetValues: string[];
         healCommands: string[];
         healThresholdPercent: number;
+        fleeCommand: string;
+        fleeThresholdPercent: number;
         lootValues: string[];
         periodicAction: PeriodicActionConfig;
       };
@@ -213,6 +247,11 @@ type ServerEvent =
         rows: Array<GearScanRow>;
         sellItems: Array<SellItem>;
       };
+    }
+  | { type: "repair_state"; payload: { running: boolean; message: string } }
+  | {
+      type: "auto_spells_settings_data";
+      payload: AutoSpellsSettings | null;
     };
 
 interface Session {
@@ -241,6 +280,7 @@ interface TelnetState {
 
 const browserClients = new Set<BunServerWebSocket>();
 const sharedSession = createSession();
+let activeProfileId: string = readLastProfileId();
 const recentOutputChunks: string[] = [];
 const parserState = createParserState();
 const trackerState = createTrackerState();
@@ -304,10 +344,9 @@ const survivalController = createSurvivalController({
   isInCombat: () => combatState.getInCombat(),
   onLog: (message) => {
     appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
-    broadcastServerEvent({
-      type: "status",
-      payload: { state: sharedSession.state, message },
-    });
+  },
+  onDebugLog: (message) => {
+    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
   },
   onStatusChange: (status) => {
     broadcastServerEvent({
@@ -316,6 +355,58 @@ const survivalController = createSurvivalController({
     });
   },
 });
+
+const repairController = createRepairController({
+  getCurrentRoomId: () => trackerState.currentRoomId,
+  sendCommand: (command) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "repair-script");
+  },
+  resolveNearest: async (alias) => {
+    const vnums = await mapStore.resolveAliasAll(alias);
+    if (vnums.length === 0) return null;
+    const currentVnum = trackerState.currentRoomId;
+    if (currentVnum === null || vnums.length === 1) return vnums[0] ?? null;
+    let bestVnum: number | null = null;
+    let bestLen = Infinity;
+    const snapshot = await mapStore.getSnapshot(currentVnum);
+    for (const vnum of vnums) {
+      const path = findPath(snapshot, currentVnum, vnum);
+      if (path !== null && path.length < bestLen) {
+        bestLen = path.length;
+        bestVnum = vnum;
+      }
+    }
+    return bestVnum ?? vnums[0] ?? null;
+  },
+  navigateTo: (vnum) => startNavigation(null, vnum),
+  isInCombat: () => combatState.getInCombat(),
+  isConnected: () => sharedSession.connected,
+  registerTextHandler: (h) => mudTextHandlers.add(h),
+  unregisterTextHandler: (h) => mudTextHandlers.delete(h),
+  onStateChange: (state) => {
+    broadcastServerEvent({ type: "repair_state", payload: state });
+  },
+  onLog: (message) => {
+    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+  },
+});
+
+const spellController = createSpellController({
+  sendCommand: (command) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "spell-script");
+  },
+  isInCombat: () => combatState.getInCombat(),
+  onLog: (message) => {
+    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+    broadcastServerEvent({
+      type: "status",
+      payload: { state: sharedSession.state, message },
+    });
+  },
+});
+
 mkdirSync(LOG_DIR, { recursive: true });
 appendFileSync(LOG_FILE, "");
 
@@ -326,6 +417,9 @@ const triggers = createTriggers({
   },
   onStateChange: (state) => {
     broadcastServerEvent({ type: "triggers_state", payload: state });
+  },
+  onLog: (message) => {
+    logEvent(null, "session", message);
   },
 });
 
@@ -619,6 +713,11 @@ async function sendSurvivalSettings(ws: BunServerWebSocket): Promise<void> {
   sendServerEvent(ws, { type: "survival_settings_data", payload: survival });
 }
 
+async function sendAutoSpellsSettings(ws: BunServerWebSocket): Promise<void> {
+  const settings = await mapStore.getAutoSpellsSettings(activeProfileId);
+  sendServerEvent(ws, { type: "auto_spells_settings_data", payload: settings });
+}
+
 function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "defaults",
@@ -645,6 +744,11 @@ function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "survival_status",
     payload: survivalController.getStatus(),
+  });
+
+  sendServerEvent(ws, {
+    type: "repair_state",
+    payload: { running: repairController.isRunning(), message: "" },
   });
 
   if (statsHpMax > 0 || statsEnergyMax > 0) {
@@ -710,6 +814,13 @@ function normalizeTextMessage(message: string | ArrayBuffer | Uint8Array): strin
 }
 
 function normalizeConnectPayload(payload: ConnectPayload | undefined) {
+  const profile = payload?.profileId
+    ? (profiles.find((p) => p.id === payload.profileId) ?? null)
+    : null;
+
+  const defaultStartupCommands = profile?.startupCommands ?? runtimeConfig.startupCommands;
+  const defaultCommandDelayMs = profile?.commandDelayMs ?? runtimeConfig.commandDelayMs;
+
   return {
     host: payload?.host?.trim() || runtimeConfig.mudHost,
     port: Number.isFinite(payload?.port) ? Number(payload?.port) : runtimeConfig.mudPort,
@@ -717,11 +828,11 @@ function normalizeConnectPayload(payload: ConnectPayload | undefined) {
     startupCommands:
       payload?.startupCommands
         ?.map((command) => command.trim())
-        .filter((command) => command.length > 0) ?? runtimeConfig.startupCommands,
+        .filter((command) => command.length > 0) ?? defaultStartupCommands,
     commandDelayMs:
       typeof payload?.commandDelayMs === "number" && payload.commandDelayMs >= 0
         ? payload.commandDelayMs
-        : runtimeConfig.commandDelayMs,
+        : defaultCommandDelayMs,
   };
 }
 
@@ -898,6 +1009,7 @@ function teardownSession(
   clearPendingContainerInspect();
   mudTextHandlers.clear();
   survivalController.reset();
+  spellController.reset();
 
   logEvent(ws, options.state === "error" ? "error" : "session", reason, {
     state: options.state ?? "disconnected",
@@ -1334,6 +1446,7 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
   const wasInCombat = survivalPreviousInCombat;
   combatState.handleMudText(text);
   survivalController.handleMudText(text);
+  spellController.handleMudText(text);
   const nowInCombat = combatState.getInCombat();
   survivalPreviousInCombat = nowInCombat;
 
@@ -1410,10 +1523,23 @@ if (savedSurvival) {
   }));
 }
 
+const savedTriggers = await mapStore.getTriggerSettings(activeProfileId);
+if (savedTriggers) {
+  triggers.setEnabled(savedTriggers);
+}
+
+const savedAutoSpells = await mapStore.getAutoSpellsSettings(activeProfileId);
+if (savedAutoSpells) {
+  spellController.updateConfig(normalizeAutoSpellsSettings(savedAutoSpells));
+}
+
 roomChangedListeners.add((vnum: number) => {
   void mapStore.getRoomAutoCommand(vnum).then((command) => {
     if (command && sharedSession.tcpSocket && sharedSession.connected) {
-      writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "room-auto-cmd");
+      const lines = command.split("\n").map((l) => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, line, "room-auto-cmd");
+      }
     }
   });
 });
@@ -1449,6 +1575,13 @@ const server = Bun.serve({
         tls: runtimeConfig.mudTls,
         startupCommands: runtimeConfig.startupCommands,
         commandDelayMs: runtimeConfig.commandDelayMs,
+      });
+    }
+
+    if (url.pathname === "/api/profiles") {
+      return jsonResponse({
+        profiles: runtimeConfig.profiles.map((p) => ({ id: p.id, name: p.name })),
+        defaultProfileId: runtimeConfig.defaultProfileId,
       });
     }
 
@@ -1496,6 +1629,7 @@ const server = Bun.serve({
 
       void sendMapSnapshot(ws);
       void sendSurvivalSettings(ws);
+      void sendAutoSpellsSettings(ws);
     },
     async message(ws, message) {
       let event: ClientEvent;
@@ -1514,7 +1648,21 @@ const server = Bun.serve({
       switch (event.type) {
         case "connect":
           logEvent(ws, "browser-in", "connect");
+          if (event.payload?.profileId) {
+            activeProfileId = event.payload.profileId;
+            saveLastProfileId(event.payload.profileId);
+          }
           await connectToMud(ws, event.payload);
+          void mapStore.getTriggerSettings(activeProfileId).then((saved) => {
+            if (saved) triggers.setEnabled(saved);
+          }).catch((error: unknown) => {
+            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading trigger settings");
+          });
+          void mapStore.getAutoSpellsSettings(activeProfileId).then((saved) => {
+            if (saved) spellController.updateConfig(normalizeAutoSpellsSettings(saved));
+          }).catch((error: unknown) => {
+            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading auto spells settings");
+          });
           break;
         case "send":
           logEvent(ws, "browser-in", sanitizeLogText(event.payload?.command?.trim() || ""), {
@@ -1532,6 +1680,17 @@ const server = Bun.serve({
           await mapStore.reset();
           await broadcastMapSnapshot("map_snapshot");
           break;
+        case "map_reset_area": {
+          logEvent(ws, "browser-in", "map_reset_area");
+          const currentVnum = trackerState.currentRoomId;
+          if (currentVnum !== null) {
+            const zoneId = Math.floor(currentVnum / 100);
+            await mapStore.deleteZone(zoneId);
+            trackerState.currentRoomId = null;
+            await broadcastMapSnapshot("map_snapshot");
+          }
+          break;
+        }
         case "farm_toggle": {
           const enabled = event.payload?.enabled === true;
           const pa = event.payload?.periodicAction;
@@ -1539,14 +1698,18 @@ const server = Bun.serve({
             targetValues: event.payload?.targetValues ?? [],
             healCommands: event.payload?.healCommands ?? [],
             healThresholdPercent: event.payload?.healThresholdPercent ?? 50,
+            fleeCommand: event.payload?.fleeCommand ?? "",
+            fleeThresholdPercent: event.payload?.fleeThresholdPercent ?? 0,
             lootValues: event.payload?.lootValues ?? [],
             periodicAction: {
               enabled: pa?.enabled === true,
               gotoAlias1: pa?.gotoAlias1 ?? "",
               commands: pa?.commands ?? [],
+              commandDelayMs: pa?.commandDelayMs ?? 0,
               gotoAlias2: pa?.gotoAlias2 ?? "",
               intervalMs: pa?.intervalMs ?? 0,
             },
+            useStab: event.payload?.useStab !== false,
           });
           logEvent(ws, "browser-in", "farm_toggle", { enabled });
           farmController.setEnabled(enabled);
@@ -1631,6 +1794,7 @@ const server = Bun.serve({
             for (const cmd of resolvedCommands) {
               if (sharedSession.tcpSocket && sharedSession.connected) {
                 writeAndLogMudCommand(ws, sharedSession, sharedSession.tcpSocket, cmd, "goto_and_run");
+                await new Promise<void>((resolve) => setTimeout(resolve, runtimeConfig.commandDelayMs));
               }
             }
           }
@@ -1690,6 +1854,27 @@ const server = Bun.serve({
         }
         case "triggers_toggle": {
           triggers.setEnabled(event.payload ?? {});
+          void mapStore.setTriggerSettings(activeProfileId, triggers.getState()).catch((error: unknown) => {
+            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error saving trigger settings");
+          });
+          break;
+        }
+        case "auto_spells_settings_get": {
+          logEvent(ws, "browser-in", "auto_spells_settings_get");
+          await sendAutoSpellsSettings(ws);
+          break;
+        }
+        case "auto_spells_settings_save": {
+          const raw = event.payload;
+          if (raw) {
+            const settings: AutoSpellsSettings = {
+              spells: Array.isArray(raw.spells) ? raw.spells : [],
+              checkIntervalMs: typeof raw.checkIntervalMs === "number" ? raw.checkIntervalMs : 60_000,
+            };
+            logEvent(ws, "browser-in", "auto_spells_settings_save");
+            await mapStore.setAutoSpellsSettings(activeProfileId, settings);
+            spellController.updateConfig(normalizeAutoSpellsSettings(settings));
+          }
           break;
         }
         case "item_db_get": {
@@ -1770,8 +1955,7 @@ const server = Bun.serve({
           });
           break;
         }
-        case "gear_scan_start": {
-          logEvent(ws, "browser-in", "gear_scan_start");
+        case "gear_scan_start": {          logEvent(ws, "browser-in", "gear_scan_start");
           if (!sharedSession.tcpSocket || !sharedSession.connected) {
             sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
             break;
@@ -1793,6 +1977,11 @@ const server = Bun.serve({
           });
           break;
         }
+        case "repair_start": {
+          logEvent(ws, "browser-in", "repair_start");
+          void repairController.run();
+          break;
+        }
       }
     },
     close(ws) {
@@ -1806,7 +1995,7 @@ logEvent(null, "session", `MUD client server listening on http://${server.hostna
 console.log(`MUD client server listening on http://${server.hostname}:${server.port}`);
 
 if (runtimeConfig.autoConnect) {
-  void connectToMud(null, undefined);
+  void connectToMud(null, { profileId: readLastProfileId() });
 }
 
 function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZoneSettings {
@@ -1814,13 +2003,17 @@ function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZoneSett
     targets: typeof raw.targets === "string" ? raw.targets : "",
     healCommands: typeof raw.healCommands === "string" ? raw.healCommands : "",
     healThreshold: typeof raw.healThreshold === "number" && Number.isFinite(raw.healThreshold) ? raw.healThreshold : 50,
+    fleeCommand: typeof raw.fleeCommand === "string" ? raw.fleeCommand : "",
+    fleeThreshold: typeof raw.fleeThreshold === "number" && Number.isFinite(raw.fleeThreshold) ? raw.fleeThreshold : 0,
     loot: typeof raw.loot === "string" ? raw.loot : "",
     periodicActionEnabled: raw.periodicActionEnabled === true,
     periodicActionGotoAlias1: typeof raw.periodicActionGotoAlias1 === "string" ? raw.periodicActionGotoAlias1 : "",
     periodicActionCommand: typeof raw.periodicActionCommand === "string" ? raw.periodicActionCommand : "",
+    periodicActionCommandDelayMs: typeof raw.periodicActionCommandDelayMs === "number" && Number.isFinite(raw.periodicActionCommandDelayMs) ? raw.periodicActionCommandDelayMs : 0,
     periodicActionGotoAlias2: typeof raw.periodicActionGotoAlias2 === "string" ? raw.periodicActionGotoAlias2 : "",
     periodicActionIntervalMin: typeof raw.periodicActionIntervalMin === "number" && Number.isFinite(raw.periodicActionIntervalMin) ? raw.periodicActionIntervalMin : 30,
     survivalEnabled: raw.survivalEnabled === true,
+    useStab: raw.useStab !== false,
   };
 }
 
@@ -1834,5 +2027,29 @@ function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSett
     buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : "",
     fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : "",
     fillFlaskSource: typeof raw.fillFlaskSource === "string" ? raw.fillFlaskSource : "",
+  };
+}
+
+function normalizeAutoSpellsSettings(raw: Partial<AutoSpellsSettings>): SpellControllerConfig {
+  const spells = Array.isArray(raw.spells)
+    ? raw.spells
+        .filter((s): s is { name: string; command: string; enabled: boolean } =>
+          typeof s === "object" && s !== null &&
+          typeof s.name === "string" && s.name.trim().length > 0 &&
+          typeof s.command === "string" && s.command.trim().length > 0,
+        )
+        .map((s) => ({
+          name: s.name.trim(),
+          command: s.command.trim(),
+          enabled: s.enabled === true,
+        }))
+    : [];
+  const hasEnabledSpell = spells.some((s) => s.enabled);
+  return {
+    enabled: hasEnabledSpell,
+    spells,
+    checkIntervalMs: typeof raw.checkIntervalMs === "number" && Number.isFinite(raw.checkIntervalMs) && raw.checkIntervalMs >= 10_000
+      ? raw.checkIntervalMs
+      : 60_000,
   };
 }

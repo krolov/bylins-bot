@@ -5,13 +5,17 @@ export interface FarmZoneSettings {
   targets: string;
   healCommands: string;
   healThreshold: number;
+  fleeCommand: string;
+  fleeThreshold: number;
   loot: string;
   periodicActionEnabled: boolean;
   periodicActionGotoAlias1: string;
   periodicActionCommand: string;
+  periodicActionCommandDelayMs: number;
   periodicActionGotoAlias2: string;
   periodicActionIntervalMin: number;
   survivalEnabled: boolean;
+  useStab: boolean;
 }
 
 export interface SurvivalSettings {
@@ -23,6 +27,23 @@ export interface SurvivalSettings {
   buyFoodAlias: string;
   fillFlaskAlias: string;
   fillFlaskSource: string;
+}
+
+export interface TriggerSettings {
+  dodge: boolean;
+  standUp: boolean;
+  rearm: boolean;
+}
+
+export interface AutoSpell {
+  name: string;
+  command: string;
+  enabled: boolean;
+}
+
+export interface AutoSpellsSettings {
+  spells: AutoSpell[];
+  checkIntervalMs: number;
 }
 
 export interface GameItem {
@@ -44,6 +65,7 @@ export interface MapStore {
   upsertEdge(edge: MapEdge): Promise<void>;
   getSnapshot(currentVnum: number | null): Promise<MapSnapshot>;
   reset(): Promise<void>;
+  deleteZone(zoneId: number): Promise<void>;
   setAlias(vnum: number, alias: string): Promise<void>;
   deleteAlias(vnum: number): Promise<void>;
   getAliases(): Promise<MapAlias[]>;
@@ -52,6 +74,10 @@ export interface MapStore {
   setFarmSettings(zoneId: number, settings: FarmZoneSettings): Promise<void>;
   getSurvivalSettings(): Promise<SurvivalSettings | null>;
   setSurvivalSettings(settings: SurvivalSettings): Promise<void>;
+  getTriggerSettings(profileId: string): Promise<TriggerSettings | null>;
+  setTriggerSettings(profileId: string, settings: TriggerSettings): Promise<void>;
+  getAutoSpellsSettings(profileId: string): Promise<AutoSpellsSettings | null>;
+  setAutoSpellsSettings(profileId: string, settings: AutoSpellsSettings): Promise<void>;
   upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void>;
   getItemByName(name: string): Promise<GameItem | null>;
   getItems(): Promise<GameItem[]>;
@@ -182,10 +208,26 @@ export function createMapStore(database: DatabaseClient): MapStore {
       `;
 
       await database`
+        CREATE TABLE IF NOT EXISTS trigger_settings (
+          profile_id TEXT PRIMARY KEY,
+          settings JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      await database`
         CREATE TABLE IF NOT EXISTS room_auto_commands (
           vnum INTEGER PRIMARY KEY REFERENCES map_rooms(vnum) ON DELETE CASCADE,
           command TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS auto_spells_settings (
+          profile_id TEXT PRIMARY KEY,
+          settings JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `;
     },
@@ -280,6 +322,10 @@ export function createMapStore(database: DatabaseClient): MapStore {
       await database`TRUNCATE TABLE map_rooms CASCADE`;
     },
 
+    async deleteZone(zoneId: number): Promise<void> {
+      await database`DELETE FROM map_rooms WHERE FLOOR(vnum::float / 100) = ${zoneId}`;
+    },
+
     async setAlias(vnum: number, alias: string): Promise<void> {
       await database`
         INSERT INTO map_aliases (vnum, alias)
@@ -348,6 +394,28 @@ export function createMapStore(database: DatabaseClient): MapStore {
         INSERT INTO survival_settings (id, settings, updated_at)
         VALUES (1, ${settingsJson}::jsonb, NOW())
         ON CONFLICT (id)
+        DO UPDATE SET
+          settings = EXCLUDED.settings,
+          updated_at = NOW()
+      `;
+    },
+
+    async getTriggerSettings(profileId: string): Promise<TriggerSettings | null> {
+      const rows = await database<{ settings: TriggerSettings }[]>`
+        SELECT settings FROM trigger_settings WHERE profile_id = ${profileId}
+      `;
+      const raw = rows[0]?.settings ?? null;
+      if (raw === null) return null;
+      if (typeof raw === "string") return JSON.parse(raw) as TriggerSettings;
+      return raw;
+    },
+
+    async setTriggerSettings(profileId: string, settings: TriggerSettings): Promise<void> {
+      const settingsJson = JSON.stringify(settings);
+      await database`
+        INSERT INTO trigger_settings (profile_id, settings, updated_at)
+        VALUES (${profileId}, ${settingsJson}::jsonb, NOW())
+        ON CONFLICT (profile_id)
         DO UPDATE SET
           settings = EXCLUDED.settings,
           updated_at = NOW()
@@ -425,6 +493,28 @@ export function createMapStore(database: DatabaseClient): MapStore {
         SELECT command FROM room_auto_commands WHERE vnum = ${vnum}
       `;
       return rows[0]?.command ?? null;
+    },
+
+    async getAutoSpellsSettings(profileId: string): Promise<AutoSpellsSettings | null> {
+      const rows = await database<{ settings: AutoSpellsSettings }[]>`
+        SELECT settings FROM auto_spells_settings WHERE profile_id = ${profileId}
+      `;
+      const raw = rows[0]?.settings ?? null;
+      if (raw === null) return null;
+      if (typeof raw === "string") return JSON.parse(raw) as AutoSpellsSettings;
+      return raw;
+    },
+
+    async setAutoSpellsSettings(profileId: string, settings: AutoSpellsSettings): Promise<void> {
+      const settingsJson = JSON.stringify(settings);
+      await database`
+        INSERT INTO auto_spells_settings (profile_id, settings, updated_at)
+        VALUES (${profileId}, ${settingsJson}::jsonb, NOW())
+        ON CONFLICT (profile_id)
+        DO UPDATE SET
+          settings = EXCLUDED.settings,
+          updated_at = NOW()
+      `;
     },
   };
 }

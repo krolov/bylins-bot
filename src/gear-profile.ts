@@ -44,7 +44,34 @@ export const TATY_PROFILE: GearProfile = {
   ],
 };
 
-const ALL_PROFILES: GearProfile[] = [TATY_PROFILE];
+export const MERCHANT_PROFILE: GearProfile = {
+  id: "купец",
+  classKeywords: ["купец", "торговец"],
+
+  acWeight: 5,
+  armorWeight: 2,
+
+  armorAffects: [
+    { affect: "ловкость", affectScore: 30, propertyScorePerPoint: 20 },
+    { affect: "память",   affectScore: 5,  propertyScorePerPoint: 3  },
+    { affect: "здоровье", affectScore: 5,  propertyScorePerPoint: 0.1 },
+  ],
+
+  rejectMetal: false,
+  metalPenalty: 0,
+  rejectShiny: false,
+
+  rightWeaponClass: "иное оружие",
+  leftWeaponClass: "иное оружие",
+  damageAvgWeight: 8,
+
+  weaponAffects: [
+    { affect: "попадание",   affectScore: 5, propertyScorePerPoint: 15 },
+    { affect: "повреждение", affectScore: 0, propertyScorePerPoint: 10 },
+  ],
+};
+
+const ALL_PROFILES: GearProfile[] = [TATY_PROFILE, MERCHANT_PROFILE];
 
 export function selectProfile(levelText: string): GearProfile {
   const lower = levelText.toLowerCase();

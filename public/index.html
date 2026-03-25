@@ -15,6 +15,7 @@
           <input id="tls" name="tls" type="checkbox" />
           <span>TLS</span>
         </label>
+        <select id="profile-select" class="topbar__input topbar__select"></select>
         <button id="connect-button" type="submit" class="button-small">Connect</button>
         <button id="disconnect-button" type="button" class="button-secondary button-small">Disconnect</button>
       </form>
@@ -27,15 +28,6 @@
       />
       <button id="farm-toggle-button" type="button" class="button-secondary button-small">Фарм: выкл</button>
 
-      <div class="topbar-menu">
-        <button id="topbar-menu-trigger" type="button" class="button-secondary button-small topbar-menu__trigger" aria-haspopup="true" aria-expanded="false" title="Меню">⋮</button>
-        <div id="topbar-menu-dropdown" class="topbar-dropdown" role="menu">
-          <button id="survival-settings-button" type="button" class="topbar-dropdown__item" role="menuitem">Питание</button>
-          <button id="triggers-button" type="button" class="topbar-dropdown__item" role="menuitem">Триггеры</button>
-          <button id="item-db-button" type="button" class="topbar-dropdown__item" role="menuitem">База предметов</button>
-          <button id="hotkeys-button" type="button" class="topbar-dropdown__item" role="menuitem">Хоткеи</button>
-        </div>
-      </div>
 
       <div id="stats-bar" class="stats-bar">
         <div class="stat-bar stat-bar--hp">
@@ -58,7 +50,14 @@
       <aside class="panel panel--actions">
         <button id="buy-food-btn" type="button" class="action-btn" title="Купить еду">🍞<span id="buy-food-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
         <button id="fill-flask-btn" type="button" class="action-btn" title="Наполнить флягу">💧<span id="fill-flask-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
+        <button id="repair-btn" type="button" class="action-btn" title="Починить снаряжение">🔨</button>
         <button id="gear-advisor-button" type="button" class="action-btn" title="Советник по снаряжению">🗡️</button>
+        <div class="panel--actions__divider"></div>
+        <button id="survival-settings-button" type="button" class="action-btn" title="Питание">🍖</button>
+        <button id="triggers-button" type="button" class="action-btn" title="Триггеры">⚡</button>
+        <button id="auto-spells-button" type="button" class="action-btn" title="Авто-заклинания">✨</button>
+        <button id="hotkeys-button" type="button" class="action-btn" title="Хоткеи">⌨️</button>
+        <button id="item-db-button" type="button" class="action-btn" title="База предметов">📦</button>
       </aside>
 
       <section id="panel-output" class="panel panel--output">
@@ -87,7 +86,7 @@
             <span id="z-level-label" class="map-z-label">+0</span>
             <button id="z-level-up" type="button" class="button-secondary button-small">+</button>
           </div>
-          <button id="reset-map-button" type="button" class="button-secondary button-small">Delete map</button>
+          <button id="reset-map-button" type="button" class="button-secondary button-small">Delete area</button>
         </div>
 
         <div id="map-panel-map" class="map-tab-panel">
@@ -137,7 +136,7 @@
             <span id="auto-cmd-popup-title" class="alias-popup__title">Авто-команда при входе</span>
             <button id="auto-cmd-popup-close" type="button" class="alias-popup__close button-secondary button-small">✕</button>
           </div>
-          <input id="auto-cmd-popup-input" type="text" class="alias-popup__input topbar__input" placeholder="Команда (например: open chest)" autocomplete="off" />
+          <textarea id="auto-cmd-popup-input" class="alias-popup__input alias-popup__textarea" placeholder="Команды (каждая строка — отдельная команда)&#10;Пример:&#10;open chest&#10;get all chest" autocomplete="off" rows="4" spellcheck="false"></textarea>
           <div class="alias-popup__actions">
             <button id="auto-cmd-popup-save" type="button" class="button-small">Сохранить</button>
             <button id="auto-cmd-popup-delete" type="button" class="button-secondary button-small alias-popup__delete">Удалить</button>
@@ -168,128 +167,168 @@
           </div>
 
           <div class="farm-modal__body">
-            <div class="farm-modal__field">
-              <label for="farm-modal-targets" class="farm-modal__label">
-                Цели фарма
-                <span class="farm-modal__hint">по одной на строку или через запятую</span>
-              </label>
-              <textarea
-                id="farm-modal-targets"
-                class="farm-modal__textarea"
-                placeholder="букашка&#10;комар&#10;мышь"
-                rows="4"
-                autocomplete="off"
-                spellcheck="false"
-              ></textarea>
+            <div class="farm-modal__col">
+              <div class="farm-modal__field">
+                <label for="farm-modal-targets" class="farm-modal__label">
+                  Цели фарма
+                  <span class="farm-modal__hint">по одной на строку или через запятую</span>
+                </label>
+                <textarea
+                  id="farm-modal-targets"
+                  class="farm-modal__textarea"
+                  placeholder="букашка&#10;комар&#10;мышь"
+                  rows="4"
+                  autocomplete="off"
+                  spellcheck="false"
+                ></textarea>
+              </div>
+
+              <div class="farm-modal__field">
+                <label for="farm-modal-heal" class="farm-modal__label">
+                  Команды лечения
+                  <span class="farm-modal__hint">отправляются когда HP падает ниже порога</span>
+                </label>
+                <textarea
+                  id="farm-modal-heal"
+                  class="farm-modal__textarea"
+                  placeholder="исцелить себя&#10;выпить зелье"
+                  rows="3"
+                  autocomplete="off"
+                  spellcheck="false"
+                ></textarea>
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                <label for="farm-modal-heal-threshold" class="farm-modal__label">Порог HP для лечения (%)</label>
+                <input
+                  id="farm-modal-heal-threshold"
+                  type="number"
+                  min="0"
+                  max="100"
+                  class="farm-modal__number-input topbar__input"
+                  value="50"
+                />
+              </div>
+
+              <div class="farm-modal__field">
+                <label for="farm-modal-flee-command" class="farm-modal__label">
+                  Команда побега
+                  <span class="farm-modal__hint">отправляется при падении HP ниже порога</span>
+                </label>
+                <input
+                  id="farm-modal-flee-command"
+                  type="text"
+                  class="farm-modal__input topbar__input"
+                  placeholder="беж"
+                />
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                <label for="farm-modal-flee-threshold" class="farm-modal__label">Порог HP для побега (%)</label>
+                <input
+                  id="farm-modal-flee-threshold"
+                  type="number"
+                  min="0"
+                  max="100"
+                  class="farm-modal__number-input topbar__input"
+                  value="0"
+                />
+              </div>
+
+              <div class="farm-modal__field">
+                <label for="farm-modal-loot" class="farm-modal__label">
+                  Что подбирать
+                  <span class="farm-modal__hint">ключевые слова для команды взять, по одному на строку</span>
+                </label>
+                <textarea
+                  id="farm-modal-loot"
+                  class="farm-modal__textarea"
+                  placeholder="бобр&#10;труп выдры&#10;шкурка"
+                  rows="3"
+                  autocomplete="off"
+                  spellcheck="false"
+                ></textarea>
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--section-header">
+                <span class="farm-modal__label">Атака</span>
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                <label for="farm-modal-use-stab" class="farm-modal__label">Заколоть</label>
+                <input id="farm-modal-use-stab" type="checkbox" checked />
+              </div>
             </div>
 
-            <div class="farm-modal__field">
-              <label for="farm-modal-heal" class="farm-modal__label">
-                Команды лечения
-                <span class="farm-modal__hint">отправляются когда HP падает ниже порога</span>
-              </label>
-              <textarea
-                id="farm-modal-heal"
-                class="farm-modal__textarea"
-                placeholder="исцелить себя&#10;выпить зелье"
-                rows="3"
-                autocomplete="off"
-                spellcheck="false"
-              ></textarea>
+            <div class="farm-modal__col">
+              <div class="farm-modal__field farm-modal__field--section-header">
+                <span class="farm-modal__label">Периодическое действие</span>
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                <label for="farm-modal-periodic-enabled" class="farm-modal__label">Включить</label>
+                <input id="farm-modal-periodic-enabled" type="checkbox" />
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                <label for="farm-modal-periodic-alias1" class="farm-modal__label">Куда идти (алиас 1)</label>
+                <input
+                  id="farm-modal-periodic-alias1"
+                  type="text"
+                  class="topbar__input"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+
+              <div class="farm-modal__field">
+                <label for="farm-modal-periodic-command" class="farm-modal__label">
+                  Команды
+                  <span class="farm-modal__hint">по одной на строку</span>
+                </label>
+                <textarea
+                  id="farm-modal-periodic-command"
+                  class="farm-modal__textarea"
+                  rows="3"
+                  autocomplete="off"
+                  spellcheck="false"
+                ></textarea>
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                <label for="farm-modal-periodic-command-delay" class="farm-modal__label">Задержка между командами (мс)</label>
+                <input
+                  id="farm-modal-periodic-command-delay"
+                  type="number"
+                  min="0"
+                  class="farm-modal__number-input topbar__input"
+                  value="0"
+                />
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                <label for="farm-modal-periodic-alias2" class="farm-modal__label">Куда вернуться (алиас 2)</label>
+                <input
+                  id="farm-modal-periodic-alias2"
+                  type="text"
+                  class="topbar__input"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+
+              <div class="farm-modal__field farm-modal__field--inline">
+                 <label for="farm-modal-periodic-interval" class="farm-modal__label">Интервал (мин)</label>
+                 <input
+                   id="farm-modal-periodic-interval"
+                   type="number"
+                   min="1"
+                   class="farm-modal__number-input topbar__input"
+                   value="30"
+                 />
+               </div>
             </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-              <label for="farm-modal-heal-threshold" class="farm-modal__label">Порог HP для лечения (%)</label>
-              <input
-                id="farm-modal-heal-threshold"
-                type="number"
-                min="0"
-                max="100"
-                class="farm-modal__number-input topbar__input"
-                value="50"
-              />
-            </div>
-
-            <div class="farm-modal__field">
-              <label for="farm-modal-loot" class="farm-modal__label">
-                Что подбирать
-                <span class="farm-modal__hint">ключевые слова для команды взять, по одному на строку</span>
-              </label>
-              <textarea
-                id="farm-modal-loot"
-                class="farm-modal__textarea"
-                placeholder="бобр&#10;труп выдры&#10;шкурка"
-                rows="3"
-                autocomplete="off"
-                spellcheck="false"
-              ></textarea>
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--section-header">
-              <span class="farm-modal__label">Периодическое действие</span>
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-              <label for="farm-modal-periodic-enabled" class="farm-modal__label">Включить</label>
-              <input id="farm-modal-periodic-enabled" type="checkbox" />
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-              <label for="farm-modal-periodic-alias1" class="farm-modal__label">Куда идти (алиас 1)</label>
-              <input
-                id="farm-modal-periodic-alias1"
-                type="text"
-                class="topbar__input"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </div>
-
-            <div class="farm-modal__field">
-              <label for="farm-modal-periodic-command" class="farm-modal__label">
-                Команды
-                <span class="farm-modal__hint">по одной на строку</span>
-              </label>
-              <textarea
-                id="farm-modal-periodic-command"
-                class="farm-modal__textarea"
-                rows="3"
-                autocomplete="off"
-                spellcheck="false"
-              ></textarea>
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-              <label for="farm-modal-periodic-alias2" class="farm-modal__label">Куда вернуться (алиас 2)</label>
-              <input
-                id="farm-modal-periodic-alias2"
-                type="text"
-                class="topbar__input"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-               <label for="farm-modal-periodic-interval" class="farm-modal__label">Интервал (мин)</label>
-               <input
-                 id="farm-modal-periodic-interval"
-                 type="number"
-                 min="1"
-                 class="farm-modal__number-input topbar__input"
-                 value="30"
-               />
-             </div>
-
-             <div class="farm-modal__field farm-modal__field--section-header">
-               <span class="farm-modal__label">Система питания</span>
-             </div>
-
-             <div class="farm-modal__field farm-modal__field--inline">
-               <label for="farm-modal-survival-enabled" class="farm-modal__label">Включить</label>
-               <input id="farm-modal-survival-enabled" type="checkbox" />
-             </div>
-           </div>
+          </div>
 
           <div class="farm-modal__footer">
             <button id="farm-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
@@ -446,6 +485,14 @@
               <label for="trigger-stand-up" class="farm-modal__label">Вставать при сбивании с ног</label>
               <input id="trigger-stand-up" type="checkbox" />
             </div>
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="trigger-rearm" class="farm-modal__label">Перевооружиться при дисарме</label>
+               <input id="trigger-rearm" type="checkbox" />
+             </div>
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="trigger-curse" class="farm-modal__label">Проклятие в бою (авто)</label>
+               <input id="trigger-curse" type="checkbox" />
+             </div>
           </div>
 
           <div class="farm-modal__footer">
@@ -487,44 +534,7 @@
       </div>
     </main>
 
-    <script type="module" src="/client.js"></script>
-    <script>
-      (function () {
-        var trigger = document.getElementById('topbar-menu-trigger');
-        var dropdown = document.getElementById('topbar-menu-dropdown');
-
-        function openMenu() {
-          dropdown.classList.add('topbar-dropdown--open');
-          trigger.setAttribute('aria-expanded', 'true');
-        }
-
-        function closeMenu() {
-          dropdown.classList.remove('topbar-dropdown--open');
-          trigger.setAttribute('aria-expanded', 'false');
-        }
-
-        trigger.addEventListener('click', function (e) {
-          e.stopPropagation();
-          if (dropdown.classList.contains('topbar-dropdown--open')) {
-            closeMenu();
-          } else {
-            openMenu();
-          }
-        });
-
-        document.addEventListener('click', function (e) {
-          if (!dropdown.contains(e.target) && e.target !== trigger) {
-            closeMenu();
-          }
-        });
-
-        dropdown.addEventListener('click', function (e) {
-          if (e.target.tagName === 'BUTTON') {
-            closeMenu();
-          }
-        });
-      })();
-    </script>
+    <script type="module" src="/client.js?v=3"></script>
 
       <div id="hotkeys-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="hotkeys-modal-title">
         <div class="farm-modal__backdrop"></div>
@@ -552,6 +562,50 @@
           <div class="farm-modal__footer">
             <button id="hotkeys-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
             <button id="hotkeys-modal-save" type="button" class="button-small">Сохранить</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="auto-spells-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="auto-spells-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content">
+          <div class="farm-modal__header">
+            <span id="auto-spells-modal-title" class="farm-modal__title">Авто-заклинания</span>
+            <button id="auto-spells-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+
+          <div class="farm-modal__body">
+            <p class="farm-modal__hint">Бот периодически проверяет активные аффекты командой <code>афф</code> и перечитывает пропавшие заклинания.</p>
+
+            <table class="hotkeys-modal__table" id="auto-spells-table">
+              <thead>
+                <tr>
+                  <th class="hotkeys-modal__th">Аффект</th>
+                  <th class="hotkeys-modal__th">Команда заклинания</th>
+                  <th class="hotkeys-modal__th">Вкл</th>
+                  <th class="hotkeys-modal__th"></th>
+                </tr>
+              </thead>
+              <tbody id="auto-spells-table-body"></tbody>
+            </table>
+            <button id="auto-spells-add-row" type="button" class="button-secondary button-small hotkeys-modal__add">+ Добавить</button>
+
+            <div class="farm-modal__field farm-modal__field--inline" style="margin-top:12px">
+              <label for="auto-spells-interval" class="farm-modal__label">Интервал проверки (сек)</label>
+              <input
+                id="auto-spells-interval"
+                type="number"
+                min="10"
+                max="3600"
+                class="farm-modal__number-input topbar__input"
+                value="60"
+              />
+            </div>
+          </div>
+
+          <div class="farm-modal__footer">
+            <button id="auto-spells-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
+            <button id="auto-spells-modal-save" type="button" class="button-small">Сохранить</button>
           </div>
         </div>
       </div>

@@ -58,6 +58,15 @@ export function createMemoryMapStore(): MapStore {
       edges.clear();
     },
 
+    async deleteZone(zoneId: number): Promise<void> {
+      for (const vnum of rooms.keys()) {
+        if (getZoneId(vnum) === zoneId) rooms.delete(vnum);
+      }
+      for (const [key, edge] of edges.entries()) {
+        if (getZoneId(edge.fromVnum) === zoneId) edges.delete(key);
+      }
+    },
+
     async setAlias(vnum: number, alias: string): Promise<void> {
       aliases.set(vnum, alias);
     },
@@ -92,6 +101,12 @@ export function createMemoryMapStore(): MapStore {
 
     async setSurvivalSettings(_settings: unknown): Promise<void> {},
 
+    async getTriggerSettings(_profileId: string) {
+      return null;
+    },
+
+    async setTriggerSettings(_profileId: string, _settings: unknown): Promise<void> {},
+
     async upsertItem(_name: string, _itemType: string, _data: Record<string, unknown>): Promise<void> {},
 
     async getItemByName(_name: string): Promise<GameItem | null> {
@@ -119,6 +134,12 @@ export function createMemoryMapStore(): MapStore {
     async getRoomAutoCommand(vnum: number): Promise<string | null> {
       return autoCommands.get(vnum) ?? null;
     },
+
+    async getAutoSpellsSettings(_profileId: string) {
+      return null;
+    },
+
+    async setAutoSpellsSettings(_profileId: string, _settings: unknown): Promise<void> {},
   };
 }
 
