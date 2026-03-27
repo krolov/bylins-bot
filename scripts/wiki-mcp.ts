@@ -3,9 +3,64 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import postgres from "postgres";
 
 const BASE_URL = "https://wiki.bylins.su/stuff.php";
 const CACHE_FILE = resolve(import.meta.dirname, "wiki-mcp-cache.json");
+
+const DATABASE_URL = Bun.env.DATABASE_URL ?? "postgres://bylins:bylins@localhost:5432/bylins_bot";
+const db = postgres(DATABASE_URL, { max: 2 });
+
+interface DbGearItemCard {
+  id: number;
+  name: string;
+  itemType: string;
+  ac: number;
+  armor: number;
+  wearSlots: string[];
+  weaponClass: string | null;
+  damageAvg: number;
+  damageDice: string | null;
+  canWearRight: boolean;
+  canWearLeft: boolean;
+  material: string;
+  isMetal: boolean;
+  isShiny: boolean;
+  affects: string[];
+  properties: string[];
+  forbidden: string[];
+  remorts: number;
+}
+
+async function lookupByIdInDb(id: number): Promise<DbGearItemCard | null> {
+  try {
+    const rows = await db`
+      SELECT data #>> '{}' AS json
+      FROM game_items
+      WHERE (data #>> '{}')::jsonb ->> 'id' = ${String(id)}
+        AND data::text != '"{}"'
+    `;
+    if (!rows.length) return null;
+    return JSON.parse(rows[0].json as string) as DbGearItemCard;
+  } catch {
+    return null;
+  }
+}
+
+async function lookupByNameInDb(name: string): Promise<DbGearItemCard | null> {
+  try {
+    const rows = await db`
+      SELECT data #>> '{}' AS json
+      FROM game_items
+      WHERE lower(name) = lower(${name})
+        AND data::text != '"{}"'
+    `;
+    if (!rows.length) return null;
+    return JSON.parse(rows[0].json as string) as DbGearItemCard;
+  } catch {
+    return null;
+  }
+}
 
 type Cache = Record<string, string>;
 
@@ -103,8 +158,9 @@ async function fetchWiki(params: Record<string, string>): Promise<string> {
   const url = new URL(BASE_URL);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const key = url.search;
+  const isItemPage = "id" in params;
 
-  if (cache[key]) {
+  if (!isItemPage && cache[key]) {
     console.error(`[cache] hit: ${key}`);
     return cache[key];
   }
@@ -115,9 +171,11 @@ async function fetchWiki(params: Record<string, string>): Promise<string> {
   if (!res.ok) throw new Error(`HTTP ${res.status} при запросе ${url}`);
   const html = await res.text();
 
-  cache[key] = html;
-  saveCache(cache);
-  console.error(`[cache] saved: ${key} (всего ${Object.keys(cache).length})`);
+  if (!isItemPage) {
+    cache[key] = html;
+    saveCache(cache);
+    console.error(`[cache] saved: ${key} (всего ${Object.keys(cache).length})`);
+  }
 
   return html;
 }
@@ -161,6 +219,25 @@ server.registerTool(
     }),
   },
   async ({ id }) => {
+    const dbCard = await lookupByIdInDb(id);
+    if (dbCard) {
+      console.error(`[db] hit: id=${id}`);
+      const parts: string[] = [`=== ${dbCard.name} (ID: ${dbCard.id}) ===`];
+      if (dbCard.itemType) parts.push(`Тип: ${dbCard.itemType}`);
+      parts.push("");
+      if (dbCard.weaponClass) parts.push(`Класс оружия: ${dbCard.weaponClass}`);
+      if (dbCard.damageDice) parts.push(`Урон: ${dbCard.damageDice}`);
+      if (dbCard.ac) parts.push(`AC: ${dbCard.ac}`);
+      if (dbCard.armor) parts.push(`Броня: ${dbCard.armor}`);
+      if (dbCard.wearSlots.length) parts.push(`Слоты: ${dbCard.wearSlots.join(", ")}`);
+      parts.push(`Материал: ${dbCard.material}`);
+      if (dbCard.affects.length) parts.push(`Аффекты: ${dbCard.affects.join(", ")}`);
+      if (dbCard.properties.length) parts.push(`Свойства: ${dbCard.properties.join(", ")}`);
+      if (dbCard.forbidden.length) parts.push(`Запрещено: ${dbCard.forbidden.join(", ")}`);
+      if (dbCard.remorts) parts.push(`Реморты: ${dbCard.remorts}`);
+      return { content: [{ type: "text", text: parts.join("\n") }] };
+    }
+
     const html = await fetchWiki({ id: String(id) });
     const card = parseItemCard(html, id);
     if (!card) {
@@ -367,6 +444,27 @@ function parseGearItem(html: string, id: number): GearItem | null {
   };
 }
 
+function dbCardToGearItem(c: DbGearItemCard): GearItem {
+  return {
+    id: c.id,
+    name: c.name,
+    itemType: c.itemType,
+    ac: c.ac,
+    armor: c.armor,
+    wearSlots: c.wearSlots,
+    weaponClass: c.weaponClass,
+    damageAvg: c.damageAvg,
+    canRight: c.canWearRight,
+    canLeft: c.canWearLeft,
+    material: c.material,
+    isMetal: c.isMetal,
+    isShiny: c.isShiny,
+    affects: c.affects,
+    properties: c.properties,
+  };
+}
+
+
 function armorScore(item: GearItem): number {
   if (item.isMetal || item.isShiny) return -1000;
   let score = item.ac * 2 + item.armor * 3;
@@ -432,23 +530,21 @@ server.registerTool(
       return { content: [{ type: "text", text: "Не удалось извлечь названия предметов из входных данных." }] };
     }
 
-    const searchResults = await Promise.all(
+    const cards = await Promise.all(
       names.map(async (name) => {
+        const dbCard = await lookupByNameInDb(name);
+        if (dbCard) {
+          console.error(`[db] hit by name: ${name}`);
+          return dbCardToGearItem(dbCard);
+        }
         try {
           const html = await fetchWiki({ q: name });
           const results = parseSearchResults(html);
           const exact = results.find((r) => r.name.toLowerCase() === name.toLowerCase());
-          return exact ?? results[0] ?? null;
-        } catch { return null; }
-      })
-    );
-
-    const cards = await Promise.all(
-      searchResults.map(async (r) => {
-        if (!r) return null;
-        try {
-          const html = await fetchWiki({ id: String(r.id) });
-          return parseGearItem(html, r.id);
+          const match = exact ?? results[0] ?? null;
+          if (!match) return null;
+          const itemHtml = await fetchWiki({ id: String(match.id) });
+          return parseGearItem(itemHtml, match.id);
         } catch { return null; }
       })
     );

@@ -363,9 +363,7 @@ function weaponScore(item: ItemCard, hand: "right" | "left"): number {
   const wantClass = hand === "right" ? "проникающее оружие" : "иное оружие";
   if (item.weaponClass !== wantClass) return -1000;
 
-  // металл штрафует умения, но не запрет для оружия
   let score = item.damageAvg * 10;
-  if (item.isMetal) score -= 5;
 
   for (const p of item.properties) {
     if (p.includes("ловкость") && p.includes("улучшает")) score += 20;
@@ -394,8 +392,17 @@ async function analyze(itemNames: string[]): Promise<void> {
         const results = await searchItem(name);
         // берём точное совпадение или первый результат
         const exact = results.find((r) => r.name.toLowerCase() === name.toLowerCase());
-        return exact ?? results[0] ?? null;
-      } catch {
+        const found = exact ?? results[0] ?? null;
+        if (!found) {
+          console.log(`  [поиск] "${name}" → не найдено в wiki`);
+        } else if (!exact) {
+          console.log(`  [поиск] "${name}" → нет точного совпадения, берём первый результат: "${found.name}" (id=${found.id})`);
+        } else {
+          console.log(`  [поиск] "${name}" → id=${found.id}`);
+        }
+        return found;
+      } catch (e: unknown) {
+        console.log(`  [поиск] "${name}" → ошибка: ${e instanceof Error ? e.message : String(e)}`);
         return null;
       }
     })
@@ -427,15 +434,19 @@ async function analyze(itemNames: string[]): Promise<void> {
   const rightWeapons: ItemCard[] = [];
   const leftWeapons: ItemCard[] = [];
 
+  console.log("\n[группировка]");
   for (const card of validCards) {
     if (card.itemType === "ОРУЖИЕ") {
-      if (card.canWearRight) rightWeapons.push(card);
-      if (card.canWearLeft) leftWeapons.push(card);
+      const slots: string[] = [];
+      if (card.canWearRight) { rightWeapons.push(card); slots.push("правая рука"); }
+      if (card.canWearLeft)  { leftWeapons.push(card);  slots.push("левая рука"); }
+      console.log(`  ОРУЖИЕ  "${card.name}" → слоты: [${slots.join(", ") || "нет"}], класс: ${card.weaponClass ?? "?"}, урон: ${card.damageAvg}, металл: ${card.isMetal}`);
     } else {
       for (const slot of card.wearSlots) {
         if (!bySlot[slot]) bySlot[slot] = [];
         bySlot[slot].push(card);
       }
+      console.log(`  БРОНЯ   "${card.name}" → слоты: [${card.wearSlots.join(", ") || "нет"}], металл: ${card.isMetal}, ac: ${card.ac}, armor: ${card.armor}`);
     }
   }
 
@@ -451,6 +462,11 @@ async function analyze(itemNames: string[]): Promise<void> {
     const scored = rightWeapons
       .map((item) => ({ item, score: weaponScore(item, "right") }))
       .sort((a, b) => b.score - a.score);
+
+    console.log("\n[скоры: правая рука]");
+    for (const { item, score } of scored) {
+      console.log(`  score=${score.toFixed(1)}  "${item.name}"  (класс=${item.weaponClass}, урон=${item.damageAvg}, металл=${item.isMetal}, props=[${item.properties.join("; ")}])`);
+    }
 
     const best = scored[0];
     if (best.score > -1000) {
@@ -476,6 +492,11 @@ async function analyze(itemNames: string[]): Promise<void> {
     const scored = leftWeapons
       .map((item) => ({ item, score: weaponScore(item, "left") }))
       .sort((a, b) => b.score - a.score);
+
+    console.log("\n[скоры: левая рука]");
+    for (const { item, score } of scored) {
+      console.log(`  score=${score.toFixed(1)}  "${item.name}"  (класс=${item.weaponClass}, урон=${item.damageAvg}, металл=${item.isMetal}, props=[${item.properties.join("; ")}])`);
+    }
 
     const best = scored[0];
     if (best.score > -1000) {
@@ -505,6 +526,11 @@ async function analyze(itemNames: string[]): Promise<void> {
     const scored = items
       .map((item) => ({ item, score: armorScore(item) }))
       .sort((a, b) => b.score - a.score);
+
+    console.log(`\n[скоры: ${slot}]`);
+    for (const { item, score } of scored) {
+      console.log(`  score=${score.toFixed(1)}  "${item.name}"  (металл=${item.isMetal}, ac=${item.ac}, armor=${item.armor}, props=[${item.properties.join("; ")}])`);
+    }
 
     const best = scored[0];
     const reasons: string[] = [];
@@ -587,7 +613,7 @@ async function analyze(itemNames: string[]): Promise<void> {
     console.log("\n" + "═".repeat(60));
     console.log("📋 КОМАНДЫ ПОКУПКИ (через ; ):");
     console.log("═".repeat(60));
-    const cmds = toBuy.map((item) => `купить ${item.name}`);
+    const cmds = toBuy.map((item) => `купить !${item.name}!`);
     console.log(cmds.join("; "));
 
     console.log("\n📋 КОМАНДЫ НАДЕВАНИЯ:");

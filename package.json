@@ -19,6 +19,24 @@
   },
   "devDependencies": {
     "bun-types": "latest",
+    "gitnexus": "^1.4.9",
     "typescript": "^5.9.2"
-  }
+  },
+  "trustedDependencies": [
+    "@ladybugdb/core",
+    "onnxruntime-node",
+    "protobufjs",
+    "tree-sitter-c",
+    "tree-sitter-c-sharp",
+    "tree-sitter-cpp",
+    "tree-sitter-dart",
+    "tree-sitter-go",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-php",
+    "tree-sitter-python",
+    "tree-sitter-ruby",
+    "tree-sitter-rust",
+    "tree-sitter-swift"
+  ]
 }
