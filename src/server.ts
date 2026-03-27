@@ -10,16 +10,20 @@ import { findPath } from "./map/pathfinder";
 import type { PathStep } from "./map/pathfinder";
 import { createParserState, feedText } from "./map/parser";
 import { createMapStore } from "./map/store";
-import type { FarmZoneSettings, SurvivalSettings, TriggerSettings, GameItem, AutoSpellsSettings } from "./map/store";
+import type { FarmZoneSettings, SurvivalSettings, TriggerSettings, GameItem, AutoSpellsSettings, SneakSettings } from "./map/store";
 import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker";
 import type { Direction, MapAlias, MapSnapshot } from "./map/types";
 import { createTriggers } from "./triggers";
 import type { TriggerState } from "./triggers";
 import { runGearScan } from "./gear-scan";
 import type { GearScanRow, SellItem } from "./gear-scan";
+import { runBazaarScan } from "./bazaar-scan";
+import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache } from "./wiki";
 import { createRepairController } from "./repair-script";
 import { createSpellController } from "./spell-script";
 import type { SpellControllerConfig } from "./spell-script";
+import { createSneakController } from "./sneak-script";
+import type { SneakControllerConfig } from "./sneak-script";
 
 type MudSocket = Awaited<ReturnType<typeof Bun.connect>>;
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
@@ -117,6 +121,7 @@ type ClientEvent =
   | { type: "room_auto_command_delete"; payload?: { vnum?: number } }
   | { type: "room_auto_commands_get" }
   | { type: "gear_scan_start" }
+  | { type: "bazaar_scan_start" }
   | { type: "gear_sell"; payload: { sellCommand: string } }
   | { type: "gear_drop"; payload: { dropCommand: string } }
   | { type: "gear_apply"; payload: { commands: string[] } }
@@ -125,7 +130,14 @@ type ClientEvent =
   | {
       type: "auto_spells_settings_save";
       payload?: Partial<AutoSpellsSettings>;
-    };
+    }
+  | { type: "sneak_settings_get" }
+  | {
+      type: "sneak_settings_save";
+      payload?: Partial<SneakSettings>;
+    }
+  | { type: "map_recording_toggle"; payload?: { enabled?: boolean } }
+  | { type: "wiki_item_search"; payload?: { query?: string } };
 
 type ServerEvent =
   | {
@@ -248,10 +260,36 @@ type ServerEvent =
         sellItems: Array<SellItem>;
       };
     }
+  | { type: "bazaar_scan_progress"; payload: { message: string } }
+  | {
+      type: "bazaar_scan_result";
+      payload: {
+        coins: number;
+        rows: Array<GearScanRow>;
+        sellItems: Array<SellItem>;
+      };
+    }
   | { type: "repair_state"; payload: { running: boolean; message: string } }
   | {
       type: "auto_spells_settings_data";
       payload: AutoSpellsSettings | null;
+    }
+  | {
+      type: "sneak_settings_data";
+      payload: SneakSettings | null;
+    }
+  | { type: "map_recording_state"; payload: { enabled: boolean } }
+  | {
+      type: "wiki_item_search_result";
+      payload: {
+        query: string;
+        found: boolean;
+        name?: string;
+        itemType?: string;
+        text?: string;
+        loadLocation?: string;
+        error?: string;
+      };
     };
 
 interface Session {
@@ -284,6 +322,7 @@ let activeProfileId: string = readLastProfileId();
 const recentOutputChunks: string[] = [];
 const parserState = createParserState();
 const trackerState = createTrackerState();
+let mapRecordingEnabled = true;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
 const farmController = createFarmController({
@@ -407,6 +446,21 @@ const spellController = createSpellController({
   },
 });
 
+const sneakController = createSneakController({
+  sendCommand: (command) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "sneak-script");
+  },
+  onLog: (message) => {
+    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+    broadcastServerEvent({
+      type: "status",
+      payload: { state: sharedSession.state, message },
+    });
+  },
+  isInCombat: () => combatState.getInCombat(),
+});
+
 mkdirSync(LOG_DIR, { recursive: true });
 appendFileSync(LOG_FILE, "");
 
@@ -421,6 +475,7 @@ const triggers = createTriggers({
   onLog: (message) => {
     logEvent(null, "session", message);
   },
+  isInCombat: () => combatState.getInCombat(),
 });
 
 interface NavigationState {
@@ -521,75 +576,6 @@ const ITEM_IDENTIFY_START = /Вы узнали следующее:/;
 const ITEM_BUFFER_MAX = 4096;
 let itemBuffer = "";
 
-function parseItemIdentifyBlock(block: string): { name: string; itemType: string; data: Record<string, unknown> } | null {
-  const stripped = block.replace(/\u001b\[[0-9;]*m/g, "").replace(/\r/g, "");
-  const nameMatch = /Предмет\s+"([^"]+)",\s+тип\s*:\s*(\S+)/.exec(stripped);
-  if (!nameMatch) return null;
-
-  const name = nameMatch[1].trim();
-  const itemType = nameMatch[2].trim();
-  const data: Record<string, unknown> = {};
-
-  // Класс
-  const classMatch = /Принадлежит к классу\s+"([^"]+)"/.exec(stripped);
-  if (classMatch) data["class"] = classMatch[1].trim();
-
-  // Вес, цена, рента: «Вес: 5, Цена: 50, Рента: 50(5)»
-  const weightMatch = /Вес:\s*(\d+)/.exec(stripped);
-  if (weightMatch) data["weight"] = Number(weightMatch[1]);
-  const priceMatch = /Цена:\s*(\d+)/.exec(stripped);
-  if (priceMatch) data["price"] = Number(priceMatch[1]);
-  const rentMatch = /Рента:\s*(\d+)(?:\((\d+)\))?/.exec(stripped);
-  if (rentMatch) {
-    data["rent"] = Number(rentMatch[1]);
-    if (rentMatch[2]) data["rent_day"] = Number(rentMatch[2]);
-  }
-
-  // Материал, прочность: «Материал : КОСТЬ, макс.прочность : 50, тек.прочность : 49»
-  const matMatch = /Материал\s*:\s*(\S+)/.exec(stripped);
-  if (matMatch) data["material"] = matMatch[1].replace(/,.*/, "").trim();
-  const maxDurMatch = /макс\.прочность\s*:\s*(\d+)/.exec(stripped);
-  if (maxDurMatch) data["durability_max"] = Number(maxDurMatch[1]);
-  const curDurMatch = /тек\.прочность\s*:\s*(\d+)/.exec(stripped);
-  if (curDurMatch) data["durability_cur"] = Number(curDurMatch[1]);
-
-  // Экстрафлаги
-  const extraFlagsMatch = /Имеет экстрафлаги:\s*(.+)/.exec(stripped);
-  if (extraFlagsMatch) data["extra_flags"] = extraFlagsMatch[1].trim();
-
-  // Повреждения: «Наносимые повреждения '2D4' среднее 5.0»
-  const damMatch = /Наносимые повреждения\s+'([^']+)'\s+среднее\s+([\d]+(?:\.[\d]+)?)/.exec(stripped);
-  if (damMatch) {
-    data["damage_dice"] = damMatch[1].trim();
-    data["damage_avg"] = Number(damMatch[2]);
-  }
-
-  // Требования к силе (правая/левая/обе руки)
-  const hands: Array<{ hand: string; str: number }> = [];
-  for (const m of stripped.matchAll(/Можно взять в ([^\(]+)\(требуется (\d+) силы\)/g)) {
-    hands.push({ hand: m[1].trim(), str: Number(m[2]) });
-  }
-  if (hands.length > 0) data["wield_requirements"] = hands;
-
-  // Место одевания (броня)
-  const wearMatches = [...stripped.matchAll(/Можно одеть:\s*(.+)/g)];
-  if (wearMatches.length > 0) data["wear_locations"] = wearMatches.map((m) => m[1].trim());
-
-  // Аффекты
-  const affectMatch = /Накладывает на вас аффекты:\s*(.+)/.exec(stripped);
-  if (affectMatch) data["affects"] = affectMatch[1].trim();
-
-  // Дополнительные свойства (попадание/повреждение улучшает на N)
-  const extraPropsIdx = stripped.indexOf("Дополнительные свойства");
-  if (extraPropsIdx !== -1) {
-    const extraSection = stripped.slice(extraPropsIdx);
-    const extraLines = extraSection.split("\n").slice(1).map(l => l.trim()).filter(l => l.length > 0);
-    if (extraLines.length > 0) data["extra_props"] = extraLines.join("; ");
-  }
-
-  return { name, itemType, data };
-}
-
 async function handleItemIdentifyBuffer(chunk: string): Promise<void> {
   itemBuffer += chunk;
   if (itemBuffer.length > ITEM_BUFFER_MAX) {
@@ -598,28 +584,45 @@ async function handleItemIdentifyBuffer(chunk: string): Promise<void> {
 
   if (!ITEM_IDENTIFY_START.test(itemBuffer)) return;
 
-  // Detect end of block: next prompt line (Вых:...) or a blank line after content
   const startIdx = itemBuffer.search(ITEM_IDENTIFY_START);
   const afterStart = itemBuffer.slice(startIdx);
 
-  // Look for a prompt line that signals end of the block
   const endMatch = /\n(?=\S*\d+H\s|\S*Вых:|\s*$)/.exec(afterStart.slice(afterStart.indexOf("\n") + 1));
-  if (!endMatch && itemBuffer.length < ITEM_BUFFER_MAX) return; // wait for more
+  if (!endMatch && itemBuffer.length < ITEM_BUFFER_MAX) return;
 
   const block = endMatch
     ? afterStart.slice(0, afterStart.indexOf("\n") + 1 + endMatch.index + 1)
     : afterStart;
 
-  // Reset buffer past this block
   itemBuffer = itemBuffer.slice(startIdx + block.length);
 
-  const parsed = parseItemIdentifyBlock(block);
-  if (!parsed) return;
+  const mudParsed = parseMudIdentifyBlock(block);
+  if (!mudParsed) return;
 
-  const existing = await mapStore.getItemByName(parsed.name.toLowerCase());
-  if (existing && typeof (existing.data as Record<string, unknown>)["id"] === "number") return;
+  const nameLower = mudParsed.name.toLowerCase();
 
-  await mapStore.upsertItem(parsed.name.toLowerCase(), parsed.itemType, parsed.data);
+  const existing = await mapStore.getItemByName(nameLower);
+  const baseCard = existing
+    ? gearItemCardFromCache(existing.name, existing.itemType, existing.data as Record<string, unknown>)
+    : null;
+
+  let wikiCard = null;
+  try {
+    const proxy = runtimeConfig.wikiProxies[0];
+    const searchHtml = await fetchWiki({ q: mudParsed.name }, proxy);
+    const results = parseSearchResults(searchHtml);
+    const hit = results.find(r => r.name.toLowerCase() === nameLower) ?? results[0] ?? null;
+    if (hit) {
+      const cardHtml = await fetchWiki({ id: String(hit.id) }, proxy);
+      wikiCard = parseGearItemCard(cardHtml, hit.id);
+    }
+  } catch {
+  }
+
+  const merged = mergeItemSources(baseCard, wikiCard, mudParsed.partial);
+  if (!merged) return;
+
+  await mapStore.upsertItem(nameLower, mudParsed.itemType, gearItemCardToData(merged));
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -718,6 +721,11 @@ async function sendAutoSpellsSettings(ws: BunServerWebSocket): Promise<void> {
   sendServerEvent(ws, { type: "auto_spells_settings_data", payload: settings });
 }
 
+async function sendSneakSettings(ws: BunServerWebSocket): Promise<void> {
+  const settings = await mapStore.getSneakSettings(activeProfileId);
+  sendServerEvent(ws, { type: "sneak_settings_data", payload: settings });
+}
+
 function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "defaults",
@@ -749,6 +757,11 @@ function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "repair_state",
     payload: { running: repairController.isRunning(), message: "" },
+  });
+
+  sendServerEvent(ws, {
+    type: "map_recording_state",
+    payload: { enabled: mapRecordingEnabled },
   });
 
   if (statsHpMax > 0 || statsEnergyMax > 0) {
@@ -1010,6 +1023,7 @@ function teardownSession(
   mudTextHandlers.clear();
   survivalController.reset();
   spellController.reset();
+  sneakController.reset();
 
   logEvent(ws, options.state === "error" ? "error" : "session", reason, {
     state: options.state ?? "disconnected",
@@ -1441,17 +1455,25 @@ function clearSurvivalTickTimer(): void {
 
 async function persistParsedMapData(text: string, ws: BunServerWebSocket | null): Promise<void> {
   parseAndBroadcastStats(text);
-  triggers.handleMudText(text);
 
   const wasInCombat = survivalPreviousInCombat;
   combatState.handleMudText(text);
+  triggers.handleMudText(text);
   survivalController.handleMudText(text);
   spellController.handleMudText(text);
+  sneakController.handleMudText(text);
   const nowInCombat = combatState.getInCombat();
   survivalPreviousInCombat = nowInCombat;
 
+  if (!wasInCombat && nowInCombat) {
+    triggers.onCombatStart();
+  } else if (wasInCombat && !nowInCombat) {
+    triggers.onCombatEnd();
+  }
+
   if (wasInCombat && !nowInCombat) {
     scheduleSurvivalTick(50);
+    sneakController.onCombatEnd();
   } else if (!nowInCombat) {
     scheduleSurvivalTick(150);
   }
@@ -1473,12 +1495,14 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
 
   const result = processParsedEvents(trackerState, events);
 
-  for (const room of result.rooms) {
-    await mapStore.upsertRoom(room.vnum, room.name, room.exits, room.closedExits);
-  }
+  if (mapRecordingEnabled) {
+    for (const room of result.rooms) {
+      await mapStore.upsertRoom(room.vnum, room.name, room.exits, room.closedExits);
+    }
 
-  for (const edge of result.edges) {
-    await mapStore.upsertEdge(edge);
+    for (const edge of result.edges) {
+      await mapStore.upsertEdge(edge);
+    }
   }
 
   await broadcastMapSnapshot("map_update");
@@ -1531,6 +1555,11 @@ if (savedTriggers) {
 const savedAutoSpells = await mapStore.getAutoSpellsSettings(activeProfileId);
 if (savedAutoSpells) {
   spellController.updateConfig(normalizeAutoSpellsSettings(savedAutoSpells));
+}
+
+const savedSneak = await mapStore.getSneakSettings(activeProfileId);
+if (savedSneak) {
+  sneakController.updateConfig(normalizeSneakSettings(savedSneak));
 }
 
 roomChangedListeners.add((vnum: number) => {
@@ -1630,6 +1659,7 @@ const server = Bun.serve({
       void sendMapSnapshot(ws);
       void sendSurvivalSettings(ws);
       void sendAutoSpellsSettings(ws);
+      void sendSneakSettings(ws);
     },
     async message(ws, message) {
       let event: ClientEvent;
@@ -1663,6 +1693,11 @@ const server = Bun.serve({
           }).catch((error: unknown) => {
             logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading auto spells settings");
           });
+          void mapStore.getSneakSettings(activeProfileId).then((saved) => {
+            if (saved) sneakController.updateConfig(normalizeSneakSettings(saved));
+          }).catch((error: unknown) => {
+            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading sneak settings");
+          });
           break;
         case "send":
           logEvent(ws, "browser-in", sanitizeLogText(event.payload?.command?.trim() || ""), {
@@ -1689,6 +1724,12 @@ const server = Bun.serve({
             trackerState.currentRoomId = null;
             await broadcastMapSnapshot("map_snapshot");
           }
+          break;
+        }
+        case "map_recording_toggle": {
+          mapRecordingEnabled = event.payload?.enabled ?? !mapRecordingEnabled;
+          logEvent(ws, "browser-in", "map_recording_toggle", { enabled: mapRecordingEnabled });
+          broadcastServerEvent({ type: "map_recording_state", payload: { enabled: mapRecordingEnabled } });
           break;
         }
         case "farm_toggle": {
@@ -1877,10 +1918,68 @@ const server = Bun.serve({
           }
           break;
         }
+        case "sneak_settings_get": {
+          logEvent(ws, "browser-in", "sneak_settings_get");
+          await sendSneakSettings(ws);
+          break;
+        }
+        case "sneak_settings_save": {
+          const raw = event.payload;
+          if (raw) {
+            const settings: SneakSettings = {
+              spells: Array.isArray(raw.spells) ? raw.spells : [],
+              checkIntervalMs: typeof raw.checkIntervalMs === "number" ? raw.checkIntervalMs : 20_000,
+            };
+            logEvent(ws, "browser-in", "sneak_settings_save");
+            await mapStore.setSneakSettings(activeProfileId, settings);
+            sneakController.updateConfig(normalizeSneakSettings(settings));
+          }
+          break;
+        }
         case "item_db_get": {
           logEvent(ws, "browser-in", "item_db_get");
           const items = await mapStore.getItems();
           sendServerEvent(ws, { type: "items_data", payload: { items } });
+          break;
+        }
+        case "wiki_item_search": {
+          const query = event.payload?.query?.trim() ?? "";
+          logEvent(ws, "browser-in", `wiki_item_search: ${query}`);
+          if (!query) break;
+          try {
+            const proxy = runtimeConfig.wikiProxies[0] as string | undefined;
+            const searchHtml = await fetchWiki({ q: query }, proxy);
+            const results = parseSearchResults(searchHtml);
+            if (results.length === 0) {
+              sendServerEvent(ws, { type: "wiki_item_search_result", payload: { query, found: false } });
+              break;
+            }
+            const first = results[0];
+            const html = await fetchWiki({ id: String(first.id) }, runtimeConfig.wikiProxies[0]);
+            const gear = parseGearItemCard(html, first.id);
+            const wiki = parseWikiItemCard(html, first.id);
+            if (gear) {
+              await mapStore.upsertItem(gear.name, gear.itemType, gearItemCardToData(gear));
+            } else if (wiki) {
+              await mapStore.upsertItem(wiki.name, wiki.itemType, { id: wiki.id, name: wiki.name });
+            }
+            sendServerEvent(ws, {
+              type: "wiki_item_search_result",
+              payload: {
+                query,
+                found: true,
+                name: wiki?.name ?? gear?.name ?? first.name,
+                itemType: wiki?.itemType ?? gear?.itemType,
+                text: wiki?.text,
+                loadLocation: wiki?.loadLocation,
+              },
+            });
+          } catch (err: unknown) {
+            sendServerEvent(ws, {
+              type: "wiki_item_search_result",
+              payload: { query, found: false, error: err instanceof Error ? err.message : "Ошибка поиска" },
+            });
+          }
           break;
         }
         case "room_auto_command_set": {
@@ -1977,6 +2076,29 @@ const server = Bun.serve({
           });
           break;
         }
+        case "bazaar_scan_start": {
+          logEvent(ws, "browser-in", "bazaar_scan_start");
+          if (!sharedSession.tcpSocket || !sharedSession.connected) {
+            sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
+            break;
+          }
+          void runBazaarScan({
+            sendCommand: (cmd) => writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket!, cmd, "bazaar-scan"),
+            registerTextHandler: (h) => mudTextHandlers.add(h),
+            unregisterTextHandler: (h) => mudTextHandlers.delete(h),
+            onProgress: (msg) => { logEvent(ws, "browser-out", `[bazaar-scan] ${msg}`); broadcastServerEvent({ type: "bazaar_scan_progress", payload: { message: msg } }); },
+            waitForOutput: (_ms) => Promise.resolve(""),
+            cancelWait: () => {},
+            getItemByName: (name) => mapStore.getItemByName(name),
+            upsertItem: (name, itemType, data) => mapStore.upsertItem(name, itemType, data),
+            wikiProxies: runtimeConfig.wikiProxies,
+          }).then((result) => {
+            broadcastServerEvent({ type: "bazaar_scan_result", payload: result });
+          }).catch((err: unknown) => {
+            broadcastServerEvent({ type: "error", payload: { message: err instanceof Error ? err.message : "Ошибка советника по базару." } });
+          });
+          break;
+        }
         case "repair_start": {
           logEvent(ws, "browser-in", "repair_start");
           void repairController.run();
@@ -2051,5 +2173,29 @@ function normalizeAutoSpellsSettings(raw: Partial<AutoSpellsSettings>): SpellCon
     checkIntervalMs: typeof raw.checkIntervalMs === "number" && Number.isFinite(raw.checkIntervalMs) && raw.checkIntervalMs >= 10_000
       ? raw.checkIntervalMs
       : 60_000,
+  };
+}
+
+function normalizeSneakSettings(raw: Partial<SneakSettings>): SneakControllerConfig {
+  const spells = Array.isArray(raw.spells)
+    ? raw.spells
+        .filter((s): s is { name: string; command: string; enabled: boolean } =>
+          typeof s === "object" && s !== null &&
+          typeof s.name === "string" && s.name.trim().length > 0 &&
+          typeof s.command === "string" && s.command.trim().length > 0,
+        )
+        .map((s) => ({
+          name: s.name.trim(),
+          command: s.command.trim(),
+          enabled: s.enabled === true,
+        }))
+    : [];
+  const hasEnabledSpell = spells.some((s) => s.enabled);
+  return {
+    enabled: hasEnabledSpell,
+    spells,
+    checkIntervalMs: typeof raw.checkIntervalMs === "number" && Number.isFinite(raw.checkIntervalMs) && raw.checkIntervalMs >= 5_000
+      ? raw.checkIntervalMs
+      : 20_000,
   };
 }
