@@ -49,7 +49,7 @@ export interface GearScanRow {
   price?: number;
   shopNumber?: number;
   canAfford?: boolean;
-  source?: "shop" | "inventory";
+  source?: "shop" | "inventory" | "bazaar";
   damageDice?: string;
   damageAvg?: number;
   itemAc?: number;
@@ -173,15 +173,17 @@ function armorScore(item: GearItemCard, profile: GearProfile): number {
   return score;
 }
 
-function weaponScore(item: GearItemCard, hand: "right" | "left", profile: GearProfile): number {
+function weaponScore(item: GearItemCard, hand: "right" | "left" | "both", profile: GearProfile): number {
   if (!item.weaponClass) return -1000;
   if (profile.rejectShiny && item.isShiny) return -500;
-  const wantClass = hand === "right" ? profile.rightWeaponClass : profile.leftWeaponClass;
-  if (item.weaponClass !== wantClass) return -1000;
+  if (hand === "both") {
+    if (!profile.twoHandedWeaponClasses.includes(item.weaponClass)) return -1000;
+  } else {
+    const wantClass = hand === "right" ? profile.rightWeaponClass : profile.leftWeaponClass;
+    if (item.weaponClass !== wantClass) return -1000;
+  }
 
   let score = item.damageAvg * profile.damageAvgWeight;
-  if (profile.rejectMetal && item.isMetal) return -1000;
-  if (!profile.rejectMetal && item.isMetal) score -= profile.metalPenalty;
 
   for (const aw of profile.weaponAffects) {
     if (item.affects.includes(aw.affect)) score += aw.affectScore;
@@ -423,6 +425,7 @@ export async function runGearScan(
     const shopBySlot = new Map<string, Candidate[]>();
     const shopRightWeapons: Candidate[] = [];
     const shopLeftWeapons: Candidate[] = [];
+    const shopTwoHandedWeapons: Candidate[] = [];
     const shopRings: Candidate[] = [];
     const shopWristbands: Candidate[] = [];
 
@@ -431,6 +434,7 @@ export async function runGearScan(
       if (entry.card.itemType === "ОРУЖИЕ") {
         if (entry.card.canWearRight && meetsReqs(entry.card.rightHandReqs, charStats)) shopRightWeapons.push(entry);
         if (entry.card.canWearLeft && meetsReqs(entry.card.leftHandReqs, charStats)) shopLeftWeapons.push(entry);
+        if (entry.card.canWearBoth && meetsReqs(entry.card.bothHandReqs, charStats)) shopTwoHandedWeapons.push(entry);
       } else {
         if (!meetsReqs(entry.card.wearReqs, charStats)) continue;
         for (const slot of entry.card.wearSlots) {
@@ -451,6 +455,7 @@ export async function runGearScan(
     const MUD_SLOT_TO_WIKI: Record<string, string> = {
       "в правой руке": "правая рука",
       "в левой руке": "левая рука",
+      "в обеих руках": "обе руки",
       "на теле": "туловище",
       "на голове": "голову",
       "на ногах": "ноги",
@@ -479,6 +484,7 @@ export async function runGearScan(
 
     const currentRightWeapon: GearItemCard | undefined = currentBySlot.get("правая рука");
     const currentLeftWeapon: GearItemCard | undefined = currentBySlot.get("левая рука");
+    const currentTwoHandedWeapon: GearItemCard | undefined = currentBySlot.get("обе руки");
     const currentRings: GearItemCard[] = [];
     for (const [mudSlot, names] of equipped.entries()) {
       if (MUD_SLOT_TO_WIKI[mudSlot.toLowerCase()] === "палец" || mudSlot.toLowerCase() === "палец") {
@@ -514,11 +520,40 @@ export async function runGearScan(
           best = c;
         }
       }
-      return best && bestScore > -999 ? best : null;
+      return best && bestScore > 0 ? best : null;
     }
 
-    const rightBest = bestCandidate(shopRightWeapons, (c) => weaponScore(c, "right", profile));
-    if (rightBest) {
+    const twoHandedBest = bestCandidate(shopTwoHandedWeapons, (c) => weaponScore(c, "both", profile));
+    const twoHandedScore = twoHandedBest ? weaponScore(twoHandedBest.card, "both", profile) : -Infinity;
+    const currentTwoHandedScore = currentTwoHandedWeapon ? weaponScore(currentTwoHandedWeapon, "both", profile) : -Infinity;
+    const currentOneHandCombinedScore =
+      (currentRightWeapon ? weaponScore(currentRightWeapon, "right", profile) : 0) +
+      (currentLeftWeapon ? weaponScore(currentLeftWeapon, "left", profile) : 0);
+    const useTwoHanded =
+      twoHandedBest !== null &&
+      twoHandedScore > 0 &&
+      twoHandedScore > currentTwoHandedScore &&
+      twoHandedScore > currentOneHandCombinedScore;
+
+    if (useTwoHanded && twoHandedBest) {
+      if (twoHandedBest.source === "inventory") chosenInvCardIds.add(twoHandedBest.card.id);
+      rows.push({
+        slot: "обе руки",
+        action: twoHandedBest.source === "inventory" ? "equip" : "buy",
+        itemName: twoHandedBest.card.name,
+        price: twoHandedBest.source === "shop" ? twoHandedBest.price : undefined,
+        shopNumber: twoHandedBest.source === "shop" ? twoHandedBest.shopNumber : undefined,
+        canAfford: twoHandedBest.source === "shop" ? coins >= twoHandedBest.price : undefined,
+        source: twoHandedBest.source,
+        damageDice: twoHandedBest.card.damageDice ?? undefined,
+        damageAvg: twoHandedBest.card.damageAvg || undefined,
+        currentItemName: currentTwoHandedWeapon?.name ?? currentRightWeapon?.name,
+        currentDamageDice: currentTwoHandedWeapon?.damageDice ?? currentRightWeapon?.damageDice ?? undefined,
+        currentDamageAvg: currentTwoHandedWeapon?.damageAvg || currentRightWeapon?.damageAvg || undefined,
+      });
+    } else {
+
+    const rightBest = bestCandidate(shopRightWeapons, (c) => weaponScore(c, "right", profile));    if (rightBest) {
       const currentScore = currentRightWeapon ? weaponScore(currentRightWeapon, "right", profile) : -Infinity;
       const shopScore = weaponScore(rightBest.card, "right", profile);
       if (shopScore > currentScore) {
@@ -577,6 +612,8 @@ export async function runGearScan(
           currentDamageAvg: currentLeftWeapon?.damageAvg || undefined,
         });
       }
+    }
+
     }
 
     const chosenRingCardIds = new Set<number>();
@@ -734,8 +771,7 @@ export async function runGearScan(
       if (chosenInvCardIds.has(inv.card.id)) continue;
       const rawName = inv.invName;
       const count = invCounts.get(rawName) ?? 1;
-      const escapedName = rawName.replace(/ /g, ".");
-      const sellCommand = count > 1 ? `продать все.${escapedName}` : `продать ${escapedName}`;
+      const sellCommand = count > 1 ? `продать все.!${rawName}!` : `продать !${rawName}!`;
       sellItems.push({ name: rawName, count, sellCommand });
     }
 

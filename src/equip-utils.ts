@@ -24,9 +24,9 @@ export function parseEquipLine(line: string): EquipLine | null {
 
 // Правая рука → воор, левая рука → держ, остальные → надеть
 export function getEquipCommand(slot: string, keyword: string): string {
-  if (slot === "в правой руке") return `воор ${keyword}`;
-  if (slot === "в левой руке") return `держ ${keyword}`;
-  return `надеть ${keyword}`;
+  if (slot === "в правой руке") return `воор !${keyword}!`;
+  if (slot === "в левой руке") return `держ !${keyword}!`;
+  return `надеть !${keyword}!`;
 }
 
 export function extractKeyword(itemName: string): string {

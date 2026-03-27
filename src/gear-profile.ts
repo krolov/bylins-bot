@@ -15,6 +15,7 @@ export interface GearProfile {
   rejectShiny: boolean;
   rightWeaponClass: string;
   leftWeaponClass: string;
+  twoHandedWeaponClasses: string[];
   damageAvgWeight: number;
   weaponAffects: AffectWeight[];
 }
@@ -36,6 +37,7 @@ export const TATY_PROFILE: GearProfile = {
 
   rightWeaponClass: "проникающее оружие",
   leftWeaponClass: "иное оружие",
+  twoHandedWeaponClasses: [],
   damageAvgWeight: 10,
 
   weaponAffects: [
@@ -63,6 +65,7 @@ export const MERCHANT_PROFILE: GearProfile = {
 
   rightWeaponClass: "иное оружие",
   leftWeaponClass: "иное оружие",
+  twoHandedWeaponClasses: ["палицы и дубины", "иное оружие"],
   damageAvgWeight: 8,
 
   weaponAffects: [
