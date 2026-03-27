@@ -39,9 +39,14 @@ No linter or formatter is configured. Do not add ESLint or Prettier without bein
 
 Когда пользователь говорит "перегрузи", "перезапусти", "рестарт" — он имеет в виду **бота/клиент игры**, а не opencode.
 
+**Бот управляется через PM2, не через systemd.** `systemctl bylins-bot-web` отключён — не использовать.
+
 ```bash
-# Перезапуск бота (production, systemd)
-systemctl restart bylins-bot-web
+# Перезапуск бота (production, PM2)
+pm2 restart bylins-bot
+
+# Статус бота
+pm2 show bylins-bot
 
 # Пересборка браузерного клиента (после изменений в src/client.ts)
 bun run build:client

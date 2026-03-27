@@ -26,6 +26,13 @@ export const profiles: CharacterProfile[] = [
     commandDelayMs: 150,
     gearProfile: false,
   },
+  {
+    id: "rinli",
+    name: "Ринли",
+    startupCommands: ["5", "ринли", "respect1"],
+    commandDelayMs: 150,
+    gearProfile: false,
+  },
 ];
 
 /** Профиль, используемый по умолчанию при старте сервера */

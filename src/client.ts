@@ -61,6 +61,7 @@ interface MapNodePayload {
   exits: string[];
   closedExits: string[];
   visited: boolean;
+  color?: string;
 }
 
 interface MapEdgePayload {
@@ -1619,6 +1620,10 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
     tile.style.width = `${TILE}px`;
     tile.style.height = `${TILE}px`;
     tile.setAttribute("data-vnum", String(cell.vnum));
+
+    if (!isCurrent && node.color) {
+      tile.style.background = node.color;
+    }
 
     const nameEl = document.createElement("span");
     nameEl.className = "map-room__name";

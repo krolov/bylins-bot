@@ -100,6 +100,7 @@ interface RoomRow {
   exits: string[];
   closed_exits: string[];
   visited: boolean;
+  color: string | null;
 }
 
 interface EdgeRow {
@@ -167,6 +168,12 @@ export function createMapStore(database: DatabaseClient): MapStore {
             WHERE table_name = 'map_rooms' AND column_name = 'closed_exits'
           ) THEN
             ALTER TABLE map_rooms ADD COLUMN closed_exits TEXT[] NOT NULL DEFAULT '{}';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'map_rooms' AND column_name = 'color'
+          ) THEN
+            ALTER TABLE map_rooms ADD COLUMN color TEXT;
           END IF;
         END$$
       `;
@@ -251,6 +258,13 @@ export function createMapStore(database: DatabaseClient): MapStore {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS room_colors (
+          vnum INTEGER PRIMARY KEY,
+          color TEXT NOT NULL
+        )
+      `;
     },
 
     async upsertRoom(vnum: number, name: string, exits: MapNode["exits"], closedExits: MapNode["closedExits"]): Promise<void> {
@@ -310,9 +324,11 @@ export function createMapStore(database: DatabaseClient): MapStore {
 
     async getSnapshot(currentVnum: number | null): Promise<MapSnapshot> {
       const nodes = await database<RoomRow[]>`
-        SELECT vnum, name, exits, closed_exits, visited
-        FROM map_rooms
-        ORDER BY vnum ASC
+        SELECT r.vnum, r.name, r.exits, r.closed_exits, r.visited,
+               COALESCE(c.color, r.color) AS color
+        FROM map_rooms r
+        LEFT JOIN room_colors c ON c.vnum = r.vnum
+        ORDER BY r.vnum ASC
       `;
 
       const edges = await database<EdgeRow[]>`
@@ -329,6 +345,7 @@ export function createMapStore(database: DatabaseClient): MapStore {
           exits: (node.exits ?? []) as MapNode["exits"],
           closedExits: (node.closed_exits ?? []) as MapNode["closedExits"],
           visited: node.visited ?? true,
+          color: node.color ?? undefined,
         })),
         edges: edges.map((edge: EdgeRow): MapEdge => ({
           fromVnum: edge.from_vnum,

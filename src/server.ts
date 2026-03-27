@@ -1,38 +1,28 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { runtimeConfig } from "./config";
-import { profiles } from "./profiles";
-import { sql } from "./db";
-import { createCombatState } from "./combat-state";
-import { createFarmController } from "./farm-script";
-import { createSurvivalController, normalizeSurvivalConfig, parseInspectItems } from "./survival-script";
-import { findPath } from "./map/pathfinder";
-import type { PathStep } from "./map/pathfinder";
-import { createParserState, feedText } from "./map/parser";
-import { createMapStore } from "./map/store";
-import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker";
-import type { Direction } from "./map/types";
-import { createTriggers } from "./triggers";
-import { runGearScan } from "./gear-scan";
-import { runBazaarScan } from "./bazaar-scan";
-import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache } from "./wiki";
-import { createRepairController } from "./repair-script";
-import { createSpellController } from "./spell-script";
-import { createSneakController } from "./sneak-script";
+import { runtimeConfig } from "./config.ts";
+import { sql } from "./db.ts";
+import { createCombatState } from "./combat-state.ts";
+import { createFarmController } from "./farm-script.ts";
+import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands } from "./survival-script.ts";
+import { findPath } from "./map/pathfinder.ts";
+import type { PathStep } from "./map/pathfinder.ts";
+import { createParserState, feedText } from "./map/parser.ts";
+import { createMapStore } from "./map/store.ts";
+import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker.ts";
+import type { Direction } from "./map/types.ts";
+import { createTriggers } from "./triggers.ts";
+import { runGearScan } from "./gear-scan.ts";
+import { runBazaarScan } from "./bazaar-scan.ts";
+import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache, searchAndCacheWikiItem } from "./wiki.ts";
+import { createRepairController } from "./repair-script.ts";
+import { createSpellController } from "./spell-script.ts";
+import { createSneakController } from "./sneak-script.ts";
 import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, TriggerState, MapAlias, MapSnapshot, PeriodicActionConfig, GearScanRow, SellItem, GameItem } from "./events.type.ts";
 import { normalizeFarmZoneSettings, normalizeSurvivalSettings, normalizeAutoSpellsSettings, normalizeSneakSettings } from "./settings-normalizers.ts";
+import { createMudConnection } from "./mud-connection.ts";
+import type { Session } from "./mud-connection.ts";
 
-type MudSocket = Awaited<ReturnType<typeof Bun.connect>>;
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
-
-const IAC = 255;
-
-const DONT = 254;
-const DO = 253;
-const WONT = 252;
-const WILL = 251;
-const SB = 250;
-const SE = 240;
-const STARTUP_COMMAND_FALLBACK_MS = 1200;
 const LOG_DIR = "/var/log/bylins-bot";
 const LOG_FILE = `${LOG_DIR}/mud-traffic.log`;
 const LAST_PROFILE_FILE = `${LOG_DIR}/last-profile.txt`;
@@ -54,32 +44,42 @@ function saveLastProfileId(profileId: string): void {
   }
 }
 
-interface Session {
-  decoder: TextDecoder;
-  tcpSocket?: MudSocket;
-  connected: boolean;
-  state: "idle" | "connecting" | "connected" | "disconnected" | "error";
-  statusMessage: string;
-  connectAttemptId: number;
-  startupPlan?: StartupPlan;
-  telnetState: TelnetState;
-  mudTarget?: string;
-}
-
-interface StartupPlan {
-  commands: string[];
-  delayMs: number;
-  sent: boolean;
-  fallbackTimer?: ReturnType<typeof setTimeout>;
-}
-
-interface TelnetState {
-  mode: "data" | "iac" | "iac_option" | "subnegotiation" | "subnegotiation_iac";
-  negotiationCommand?: number;
-}
 
 const browserClients = new Set<BunServerWebSocket>();
-const sharedSession = createSession();
+const mudConnection = createMudConnection({
+  logEvent: (ws, direction, message, details) => logEvent(ws, direction, message, details),
+  sanitizeLogText: (text) => sanitizeLogText(text),
+  updateSessionStatus: (state, message) => updateSessionStatus(state, message),
+  onMudText: (text, ws) => {
+    if (/(Заполнен|Пуст)/i.test(text)) {
+      resolvePendingContainerInspect(text);
+    } else if (pendingContainerInspectResolve !== null) {
+      resolvePendingContainerInspect(text);
+    }
+    for (const handler of mudTextHandlers) handler(text);
+    rememberOutput(text);
+    broadcastServerEvent({ type: "output", payload: { text } });
+    void persistParsedMapData(text, ws).catch((error: unknown) => {
+      logEvent(ws, "error", error instanceof Error ? `Automapper error: ${error.message}` : "Automapper error.");
+    });
+  },
+  onTcpError: (ws, message) => {
+    broadcastServerEvent({ type: "error", payload: { message } });
+  },
+  onSessionTeardown: () => {
+    combatState.reset();
+    clearSurvivalTickTimer();
+    survivalTickRunning = false;
+    clearPendingContainerInspect();
+    mudTextHandlers.clear();
+    survivalController.reset();
+    spellController.reset();
+    sneakController.reset();
+  },
+  trackOutgoingCommand: (command) => trackOutgoingCommand(trackerState, command),
+  lineEnding: runtimeConfig.lineEnding,
+});
+const sharedSession = mudConnection.session;
 let activeProfileId: string = readLastProfileId();
 const recentOutputChunks: string[] = [];
 const parserState = createParserState();
@@ -97,14 +97,14 @@ const farmController = createFarmController({
       return;
     }
 
-    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "farm-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "farm-script");
   },
   requestRoomScan: () => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) {
       return;
     }
 
-    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, "см", "farm-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "farm-script");
   },
   resolveAlias: async (alias) => {
     const aliases = await mapStore.getAliases();
@@ -134,7 +134,7 @@ const survivalController = createSurvivalController({
   getCurrentRoomId: () => trackerState.currentRoomId,
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "survival-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "survival-script");
   },
   resolveNearest: async (alias) => {
     const vnums = await mapStore.resolveAliasAll(alias);
@@ -161,7 +161,7 @@ const repairController = createRepairController({
   getCurrentRoomId: () => trackerState.currentRoomId,
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "repair-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "repair-script");
   },
   resolveNearest: async (alias) => {
     const vnums = await mapStore.resolveAliasAll(alias);
@@ -196,7 +196,7 @@ const repairController = createRepairController({
 const spellController = createSpellController({
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "spell-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "spell-script");
   },
   isInCombat: () => combatState.getInCombat(),
   onLog: (message) => {
@@ -211,7 +211,7 @@ const spellController = createSpellController({
 const sneakController = createSneakController({
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "sneak-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "sneak-script");
   },
   onLog: (message) => {
     appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
@@ -229,7 +229,7 @@ appendFileSync(LOG_FILE, "");
 const triggers = createTriggers({
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, command, "triggers");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "triggers");
   },
   onStateChange: (state) => {
     broadcastServerEvent({ type: "triggers_state", payload: state });
@@ -297,7 +297,7 @@ let pendingContainerInspectTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingContainerInspectBuffer = "";
 
 let survivalTickTimer: ReturnType<typeof setTimeout> | null = null;
-let survivalPreviousInCombat = false;
+
 let survivalTickRunning = false;
 
 function clearPendingContainerInspect(): void {
@@ -432,23 +432,6 @@ function parseAndBroadcastStats(text: string): void {
       energyMax: statsEnergyMax,
     });
   }
-}
-
-function createSession(): Session {
-  return {
-    decoder: new TextDecoder(),
-    connected: false,
-    state: "idle",
-    statusMessage: runtimeConfig.autoConnect ? "Auto-connect is enabled. Waiting for MUD connection." : "Ready to connect.",
-    connectAttemptId: 0,
-    telnetState: createTelnetState(),
-  };
-}
-
-function createTelnetState(): TelnetState {
-  return {
-    mode: "data",
-  };
 }
 
 function sendServerEvent(ws: BunServerWebSocket, event: ServerEvent): void {
@@ -588,352 +571,6 @@ function normalizeTextMessage(message: string | ArrayBuffer | Uint8Array): strin
   return new TextDecoder().decode(message);
 }
 
-function normalizeConnectPayload(payload: ConnectPayload | undefined) {
-  const profile = payload?.profileId
-    ? (profiles.find((p) => p.id === payload.profileId) ?? null)
-    : null;
-
-  const defaultStartupCommands = profile?.startupCommands ?? runtimeConfig.startupCommands;
-  const defaultCommandDelayMs = profile?.commandDelayMs ?? runtimeConfig.commandDelayMs;
-
-  return {
-    host: payload?.host?.trim() || runtimeConfig.mudHost,
-    port: Number.isFinite(payload?.port) ? Number(payload?.port) : runtimeConfig.mudPort,
-    tls: payload?.tls ?? runtimeConfig.mudTls,
-    startupCommands:
-      payload?.startupCommands
-        ?.map((command) => command.trim())
-        .filter((command) => command.length > 0) ?? defaultStartupCommands,
-    commandDelayMs:
-      typeof payload?.commandDelayMs === "number" && payload.commandDelayMs >= 0
-        ? payload.commandDelayMs
-        : defaultCommandDelayMs,
-  };
-}
-
-function writeMudCommand(socket: MudSocket, command: string): void {
-  socket.write(`${command}${runtimeConfig.lineEnding}`);
-}
-
-function writeAndLogMudCommand(ws: BunServerWebSocket | null, session: Session, socket: MudSocket, command: string, source: string): void {
-  trackOutgoingCommand(trackerState, command);
-  writeMudCommand(socket, command);
-  logEvent(ws, "mud-out", sanitizeLogText(command), {
-    source,
-    target: session.mudTarget ?? null,
-  });
-}
-
-function clearStartupFallback(session: Session): void {
-  if (session.startupPlan?.fallbackTimer) {
-    clearTimeout(session.startupPlan.fallbackTimer);
-    session.startupPlan.fallbackTimer = undefined;
-  }
-}
-
-function isCurrentAttempt(session: Session, attemptId: number): boolean {
-  return session.connectAttemptId === attemptId;
-}
-
-function respondToTelnetNegotiation(socket: MudSocket, command: number, option: number): void {
-  const responseCommand = command === DO || command === DONT ? WONT : DONT;
-  socket.write(Uint8Array.of(IAC, responseCommand, option));
-}
-
-function decodeMudData(session: Session, socket: MudSocket, data: string | ArrayBuffer | Uint8Array): string {
-  const source = typeof data === "string" ? new TextEncoder().encode(data) : data instanceof Uint8Array ? data : new Uint8Array(data);
-  const decodedBytes: number[] = [];
-
-  for (const byte of source) {
-    switch (session.telnetState.mode) {
-      case "data": {
-        if (byte === IAC) {
-          session.telnetState.mode = "iac";
-        } else {
-          decodedBytes.push(byte);
-        }
-        break;
-      }
-      case "iac": {
-        if (byte === IAC) {
-          decodedBytes.push(byte);
-          session.telnetState.mode = "data";
-        } else if (byte === DO || byte === DONT || byte === WILL || byte === WONT) {
-          session.telnetState.negotiationCommand = byte;
-          session.telnetState.mode = "iac_option";
-        } else if (byte === SB) {
-          session.telnetState.mode = "subnegotiation";
-        } else {
-          session.telnetState.mode = "data";
-        }
-        break;
-      }
-      case "iac_option": {
-        if (session.telnetState.negotiationCommand !== undefined) {
-          respondToTelnetNegotiation(socket, session.telnetState.negotiationCommand, byte);
-        }
-
-        session.telnetState.negotiationCommand = undefined;
-        session.telnetState.mode = "data";
-        break;
-      }
-      case "subnegotiation": {
-        if (byte === IAC) {
-          session.telnetState.mode = "subnegotiation_iac";
-        }
-        break;
-      }
-      case "subnegotiation_iac": {
-        session.telnetState.mode = byte === SE ? "data" : "subnegotiation";
-        break;
-      }
-    }
-  }
-
-  if (decodedBytes.length === 0) {
-    return "";
-  }
-
-  return session.decoder.decode(Uint8Array.from(decodedBytes), { stream: true });
-}
-
-function beginAttempt(session: Session, commands: string[], delayMs: number): number {
-  session.connectAttemptId += 1;
-  session.connected = false;
-  session.state = "connecting";
-  session.statusMessage = session.mudTarget ? `Connecting to ${session.mudTarget}...` : "Connecting to MUD...";
-  session.decoder = new TextDecoder();
-  session.telnetState = createTelnetState();
-  clearStartupFallback(session);
-  session.startupPlan = {
-    commands,
-    delayMs,
-    sent: false,
-  };
-  return session.connectAttemptId;
-}
-
-async function flushStartupCommands(
-  ws: BunServerWebSocket | null,
-  session: Session,
-  attemptId: number,
-  reason?: string,
-): Promise<void> {
-  if (!isCurrentAttempt(session, attemptId) || !session.connected || !session.tcpSocket || !session.startupPlan || session.startupPlan.sent) {
-    return;
-  }
-
-  clearStartupFallback(session);
-  session.startupPlan.sent = true;
-
-  if (reason) {
-    updateSessionStatus("connected", reason);
-  }
-
-  for (const command of session.startupPlan.commands) {
-    if (!isCurrentAttempt(session, attemptId) || !session.connected || !session.tcpSocket) {
-      return;
-    }
-
-    writeAndLogMudCommand(ws, session, session.tcpSocket, command, "startup");
-    updateSessionStatus("connected", `Startup command sent: ${command}`);
-
-    if (session.startupPlan.delayMs > 0) {
-      await Bun.sleep(session.startupPlan.delayMs);
-    }
-  }
-}
-
-function scheduleStartupFallback(ws: BunServerWebSocket | null, session: Session, attemptId: number): void {
-  if (!session.startupPlan || session.startupPlan.commands.length === 0) {
-    return;
-  }
-
-  clearStartupFallback(session);
-  session.startupPlan.fallbackTimer = setTimeout(() => {
-    void flushStartupCommands(ws, session, attemptId, "No banner received yet; sending startup commands.");
-  }, STARTUP_COMMAND_FALLBACK_MS);
-}
-
-function teardownSession(
-  ws: BunServerWebSocket | null,
-  reason: string,
-  options: { closeSocket?: boolean; state?: "disconnected" | "error" } = {},
-): void {
-  const session = sharedSession;
-
-  const tcpSocket = session.tcpSocket;
-  session.connectAttemptId += 1;
-  session.tcpSocket = undefined;
-  session.connected = false;
-  session.state = options.state ?? "disconnected";
-  session.statusMessage = reason;
-  session.decoder = new TextDecoder();
-  session.telnetState = createTelnetState();
-  clearStartupFallback(session);
-  session.startupPlan = undefined;
-  session.mudTarget = undefined;
-
-  if (options.closeSocket !== false && tcpSocket) {
-    tcpSocket.close();
-  }
-
-  combatState.reset();
-  clearSurvivalTickTimer();
-  survivalTickRunning = false;
-  clearPendingContainerInspect();
-  mudTextHandlers.clear();
-  survivalController.reset();
-  spellController.reset();
-  sneakController.reset();
-
-  logEvent(ws, options.state === "error" ? "error" : "session", reason, {
-    state: options.state ?? "disconnected",
-  });
-
-  updateSessionStatus(options.state ?? "disconnected", reason);
-}
-
-async function connectToMud(ws: BunServerWebSocket | null, payload: ConnectPayload | undefined): Promise<void> {
-  const session = sharedSession;
-  const config = normalizeConnectPayload(payload);
-  session.mudTarget = `${config.host}:${config.port}${config.tls ? " (tls)" : ""}`;
-  const existingSocket = session.tcpSocket;
-  const attemptId = beginAttempt(session, config.startupCommands, config.commandDelayMs);
-
-  if (existingSocket) {
-    existingSocket.close();
-  }
-
-  logEvent(ws, "session", "Connect requested.", {
-    target: session.mudTarget,
-    startupCommands: config.startupCommands.length,
-    commandDelayMs: config.commandDelayMs,
-  });
-
-  updateSessionStatus("connecting", `Connecting to ${config.host}:${config.port}${config.tls ? " with TLS" : ""}...`);
-
-  try {
-    const tcpSocket = await Bun.connect({
-      hostname: config.host,
-      port: config.port,
-      tls: config.tls,
-      socket: {
-        open(socket) {
-          if (!isCurrentAttempt(session, attemptId)) {
-            socket.close();
-            return;
-          }
-
-          session.tcpSocket = socket;
-          session.connected = true;
-          scheduleStartupFallback(ws, session, attemptId);
-          session.state = "connected";
-          session.statusMessage = `Connected to ${config.host}:${config.port}.`;
-          logEvent(ws, "session", "Connected to MUD.", {
-            target: session.mudTarget,
-          });
-          updateSessionStatus("connected", `Connected to ${config.host}:${config.port}.`);
-        },
-        data(socket, data) {
-          if (!isCurrentAttempt(session, attemptId)) {
-            return;
-          }
-
-          const text = decodeMudData(session, socket, data);
-          const byteLength = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data.byteLength;
-
-          logEvent(ws, "mud-in", sanitizeLogText(text.length > 0 ? text : `[control-bytes:${byteLength}]`), {
-            bytes: byteLength,
-            target: session.mudTarget ?? null,
-          });
-
-          if (text.length > 0) {
-            if (/(Заполнен|Пуст)/i.test(text)) {
-              resolvePendingContainerInspect(text);
-            } else if (pendingContainerInspectResolve !== null) {
-              resolvePendingContainerInspect(text);
-            }
-            for (const handler of mudTextHandlers) handler(text);
-            rememberOutput(text);
-            broadcastServerEvent({
-              type: "output",
-              payload: { text },
-            });
-
-            void persistParsedMapData(text, ws).catch((error: unknown) => {
-              logEvent(ws, "error", error instanceof Error ? `Automapper error: ${error.message}` : "Automapper error.");
-            });
-            void flushStartupCommands(ws, session, attemptId);
-          }
-        },
-        end() {
-          if (!isCurrentAttempt(session, attemptId)) {
-            return;
-          }
-
-          teardownSession(ws, "MUD server closed the connection.", { closeSocket: false });
-        },
-        close(_socket, error) {
-          if (!isCurrentAttempt(session, attemptId)) {
-            return;
-          }
-
-          teardownSession(ws, error ? "MUD connection closed with an error." : "MUD connection closed.", {
-            closeSocket: false,
-            state: error ? "error" : "disconnected",
-          });
-        },
-        error(_socket, error) {
-          if (!isCurrentAttempt(session, attemptId)) {
-            return;
-          }
-
-          logEvent(ws, "error", `TCP error: ${error.message}`, {
-            target: session.mudTarget ?? null,
-          });
-
-          broadcastServerEvent({
-            type: "error",
-            payload: { message: `TCP error: ${error.message}` },
-          });
-        },
-        connectError(_socket, error) {
-          if (!isCurrentAttempt(session, attemptId)) {
-            return;
-          }
-
-          teardownSession(ws, `Connect error: ${error.message}`, { state: "error", closeSocket: false });
-        },
-        timeout() {
-          if (!isCurrentAttempt(session, attemptId)) {
-            return;
-          }
-
-          teardownSession(ws, "Connection to the MUD timed out.", { state: "error" });
-        },
-      },
-    });
-
-    if (!isCurrentAttempt(session, attemptId)) {
-      tcpSocket.close();
-      return;
-    }
-
-    session.tcpSocket = tcpSocket;
-  } catch (error) {
-    if (!isCurrentAttempt(session, attemptId)) {
-      return;
-    }
-
-    teardownSession(
-      ws,
-      error instanceof Error ? `Unable to connect: ${error.message}` : "Unable to connect to the MUD.",
-      { state: "error" },
-    );
-  }
-}
-
 function handleSendCommand(ws: BunServerWebSocket, command: string | undefined): void {
   const session = sharedSession;
 
@@ -951,7 +588,7 @@ function handleSendCommand(ws: BunServerWebSocket, command: string | undefined):
     return;
   }
 
-  writeAndLogMudCommand(ws, session, session.tcpSocket, trimmedCommand, "browser");
+  mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, trimmedCommand, "browser");
 }
 
 function jsonResponse(data: unknown): Response {
@@ -1108,7 +745,7 @@ async function startNavigation(ws: BunServerWebSocket | null, targetVnum: number
         return;
       }
 
-      writeAndLogMudCommand(ws, sharedSession, sharedSession.tcpSocket, DIRECTION_TO_COMMAND[step.direction], "navigation");
+      mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, DIRECTION_TO_COMMAND[step.direction], "navigation");
 
       const arrived = await onceRoomChanged(NAVIGATION_STEP_TIMEOUT_MS);
 
@@ -1180,20 +817,8 @@ async function inspectContainer(ws: BunServerWebSocket | null, container: string
   if (!sharedSession.tcpSocket || !sharedSession.connected) {
     return "";
   }
-  writeAndLogMudCommand(ws, sharedSession, sharedSession.tcpSocket, `осм ${container}`, "inspect-container");
+  mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, `осм ${container}`, "inspect-container");
   return waitForContainerInspectResult(2000);
-}
-
-function countItemsByKeyword(inspectText: string, keyword: string): number {
-  const normalizedKeyword = keyword.trim().toLowerCase();
-  if (!normalizedKeyword) return 0;
-  let total = 0;
-  for (const item of parseInspectItems(inspectText)) {
-    if (item.name.toLowerCase().includes(normalizedKeyword)) {
-      total += item.count;
-    }
-  }
-  return total;
 }
 
 function scheduleSurvivalTick(delayMs: number): void {
@@ -1218,25 +843,23 @@ function clearSurvivalTickTimer(): void {
 async function persistParsedMapData(text: string, ws: BunServerWebSocket | null): Promise<void> {
   parseAndBroadcastStats(text);
 
-  const wasInCombat = survivalPreviousInCombat;
   combatState.handleMudText(text);
   triggers.handleMudText(text);
   survivalController.handleMudText(text);
   spellController.handleMudText(text);
   sneakController.handleMudText(text);
-  const nowInCombat = combatState.getInCombat();
-  survivalPreviousInCombat = nowInCombat;
+  const { enteredCombat, exitedCombat } = combatState.getTransition();
 
-  if (!wasInCombat && nowInCombat) {
+  if (enteredCombat) {
     triggers.onCombatStart();
-  } else if (wasInCombat && !nowInCombat) {
+  } else if (exitedCombat) {
     triggers.onCombatEnd();
   }
 
-  if (wasInCombat && !nowInCombat) {
+  if (exitedCombat) {
     scheduleSurvivalTick(50);
     sneakController.onCombatEnd();
-  } else if (!nowInCombat) {
+  } else if (!combatState.getInCombat()) {
     scheduleSurvivalTick(150);
   }
 
@@ -1329,7 +952,7 @@ roomChangedListeners.add((vnum: number) => {
     if (command && sharedSession.tcpSocket && sharedSession.connected) {
       const lines = command.split("\n").map((l) => l.trim()).filter(Boolean);
       for (const line of lines) {
-        writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, line, "room-auto-cmd");
+        mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, line, "room-auto-cmd");
       }
     }
   });
@@ -1444,7 +1067,7 @@ const server = Bun.serve({
             activeProfileId = event.payload.profileId;
             saveLastProfileId(event.payload.profileId);
           }
-          await connectToMud(ws, event.payload);
+          await mudConnection.connectToMud(ws, event.payload);
           void mapStore.getTriggerSettings(activeProfileId).then((saved) => {
             if (saved) triggers.setEnabled(saved);
           }).catch((error: unknown) => {
@@ -1469,7 +1092,7 @@ const server = Bun.serve({
           break;
         case "disconnect":
           logEvent(ws, "browser-in", "disconnect");
-          teardownSession(ws, "Disconnected by user.");
+          mudConnection.teardownSession(ws, "Disconnected by user.");
           break;
         case "map_reset":
           logEvent(ws, "browser-in", "map_reset");
@@ -1551,52 +1174,40 @@ const server = Bun.serve({
           if (Array.isArray(vnums) && vnums.length > 0) {
             logEvent(ws, "browser-in", "goto_and_run", { vnums: vnums.join(","), commands: (commands ?? []).join(";") });
             let resolvedCommands: string[] = Array.isArray(commands) ? commands : [];
-            if (event.payload?.action === "buy_food") {
+            const action = event.payload?.action;
+            if (action === "buy_food" || action === "fill_flask") {
               const survival = await mapStore.getSurvivalSettings();
-              const normalized = normalizeSurvivalSettings(survival ?? {});
-              const buyFoodItem = normalized.buyFoodItem.trim();
-              const buyFoodMax = normalized.buyFoodMax;
-              const container = normalized.container.trim();
-
-              if (buyFoodItem.length > 0 && container.length > 0 && buyFoodMax > 0) {
-                const inspectText = await inspectContainer(ws, container);
-                const count = countItemsByKeyword(inspectText, buyFoodItem);
-                if (count >= buyFoodMax) {
-                  broadcastServerEvent({
-                    type: "status",
-                    payload: {
-                      state: sharedSession.state,
-                      message: `[survival] уже достаточно еды (${count}/${buyFoodMax})`,
-                    },
-                  });
-                  break;
-                }
-                const needed = buyFoodMax - count;
-                resolvedCommands = [
-                  `купи ${needed} ${buyFoodItem}`,
-                  `положи ${needed} ${buyFoodItem} ${container}`,
-                ];
+              const ss = normalizeSurvivalSettings(survival ?? {});
+              const survivalConfig = normalizeSurvivalConfig({
+                enabled: true,
+                container: ss.container,
+                foodItems: ss.foodItems.split("\n").map((s) => s.trim()).filter(Boolean),
+                flaskItems: ss.flaskItems.split("\n").map((s) => s.trim()).filter(Boolean),
+                buyFoodItem: ss.buyFoodItem,
+                buyFoodMax: ss.buyFoodMax,
+                buyFoodAlias: ss.buyFoodAlias,
+                fillFlaskAlias: ss.fillFlaskAlias,
+                fillFlaskSource: ss.fillFlaskSource,
+              });
+              const result = await resolveSurvivalCommands(
+                action,
+                survivalConfig,
+                (container) => inspectContainer(ws, container),
+              );
+              if (result === null) {
+                const currentCount = "достаточно";
+                broadcastServerEvent({
+                  type: "status",
+                  payload: { state: sharedSession.state, message: `[survival] уже ${currentCount} еды` },
+                });
+                break;
               }
-            }
-            if (event.payload?.action === "fill_flask") {
-              const survival = await mapStore.getSurvivalSettings();
-              const normalized = normalizeSurvivalSettings(survival ?? {});
-              const container = normalized.container.trim();
-              const flaskKeyword = normalized.flaskItems.split("\n").map(s => s.trim()).filter(Boolean)[0] ?? "";
-
-              if (flaskKeyword.length > 0 && container.length > 0) {
-                const source = normalized.fillFlaskSource.trim();
-                resolvedCommands = [
-                  `взять ${flaskKeyword} ${container}`,
-                  ...(source.length > 0 ? [`налить ${flaskKeyword} ${source}`] : []),
-                  `положить ${flaskKeyword} ${container}`,
-                ];
-              }
+              resolvedCommands = result;
             }
             await startNavigationToNearest(ws, vnums);
             for (const cmd of resolvedCommands) {
               if (sharedSession.tcpSocket && sharedSession.connected) {
-                writeAndLogMudCommand(ws, sharedSession, sharedSession.tcpSocket, cmd, "goto_and_run");
+                mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, cmd, "goto_and_run");
                 await new Promise<void>((resolve) => setTimeout(resolve, runtimeConfig.commandDelayMs));
               }
             }
@@ -1709,33 +1320,8 @@ const server = Bun.serve({
           logEvent(ws, "browser-in", `wiki_item_search: ${query}`);
           if (!query) break;
           try {
-            const proxy = runtimeConfig.wikiProxies[0] as string | undefined;
-            const searchHtml = await fetchWiki({ q: query }, proxy);
-            const results = parseSearchResults(searchHtml);
-            if (results.length === 0) {
-              sendServerEvent(ws, { type: "wiki_item_search_result", payload: { query, found: false } });
-              break;
-            }
-            const first = results[0];
-            const html = await fetchWiki({ id: String(first.id) }, runtimeConfig.wikiProxies[0]);
-            const gear = parseGearItemCard(html, first.id);
-            const wiki = parseWikiItemCard(html, first.id);
-            if (gear) {
-              await mapStore.upsertItem(gear.name, gear.itemType, gearItemCardToData(gear));
-            } else if (wiki) {
-              await mapStore.upsertItem(wiki.name, wiki.itemType, { id: wiki.id, name: wiki.name });
-            }
-            sendServerEvent(ws, {
-              type: "wiki_item_search_result",
-              payload: {
-                query,
-                found: true,
-                name: wiki?.name ?? gear?.name ?? first.name,
-                itemType: wiki?.itemType ?? gear?.itemType,
-                text: wiki?.text,
-                loadLocation: wiki?.loadLocation,
-              },
-            });
+            const result = await searchAndCacheWikiItem(query, mapStore, runtimeConfig.wikiProxies);
+            sendServerEvent(ws, { type: "wiki_item_search_result", payload: { query, ...result } });
           } catch (err: unknown) {
             sendServerEvent(ws, {
               type: "wiki_item_search_result",
@@ -1775,7 +1361,7 @@ const server = Bun.serve({
             sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
             break;
           }
-          writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, event.payload.sellCommand, "gear-sell");
+          mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, event.payload.sellCommand, "gear-sell");
           break;
         }
         case "gear_drop": {
@@ -1784,7 +1370,7 @@ const server = Bun.serve({
             sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
             break;
           }
-          writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket, event.payload.dropCommand, "gear-drop");
+          mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, event.payload.dropCommand, "gear-drop");
           break;
         }
         case "gear_apply": {
@@ -1796,11 +1382,11 @@ const server = Bun.serve({
           const applySocket = sharedSession.tcpSocket;
           const applyCommands = event.payload.commands;
           for (const cmd of applyCommands) {
-            writeAndLogMudCommand(null, sharedSession, applySocket, cmd, "gear-apply");
+            mudConnection.writeAndLogMudCommand(null, applySocket, cmd, "gear-apply");
           }
           broadcastServerEvent({ type: "gear_scan_progress", payload: { message: "Применяю... перезапускаю анализ." } });
           void new Promise<void>((resolve) => setTimeout(resolve, 1500)).then(() => runGearScan({
-            sendCommand: (cmd) => writeAndLogMudCommand(null, sharedSession, applySocket, cmd, "gear-scan"),
+            sendCommand: (cmd) => mudConnection.writeAndLogMudCommand(null, applySocket, cmd, "gear-scan"),
             registerTextHandler: (h) => mudTextHandlers.add(h),
             unregisterTextHandler: (h) => mudTextHandlers.delete(h),
             onProgress: (msg) => { logEvent(ws, "browser-out", `[gear-scan] ${msg}`); broadcastServerEvent({ type: "gear_scan_progress", payload: { message: msg } }); },
@@ -1822,7 +1408,7 @@ const server = Bun.serve({
             break;
           }
           void runGearScan({
-            sendCommand: (cmd) => writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket!, cmd, "gear-scan"),
+            sendCommand: (cmd) => mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, cmd, "gear-scan"),
             registerTextHandler: (h) => mudTextHandlers.add(h),
             unregisterTextHandler: (h) => mudTextHandlers.delete(h),
             onProgress: (msg) => { logEvent(ws, "browser-out", `[gear-scan] ${msg}`); broadcastServerEvent({ type: "gear_scan_progress", payload: { message: msg } }); },
@@ -1845,7 +1431,7 @@ const server = Bun.serve({
             break;
           }
           void runBazaarScan({
-            sendCommand: (cmd) => writeAndLogMudCommand(null, sharedSession, sharedSession.tcpSocket!, cmd, "bazaar-scan"),
+            sendCommand: (cmd) => mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, cmd, "bazaar-scan"),
             registerTextHandler: (h) => mudTextHandlers.add(h),
             unregisterTextHandler: (h) => mudTextHandlers.delete(h),
             onProgress: (msg) => { logEvent(ws, "browser-out", `[bazaar-scan] ${msg}`); broadcastServerEvent({ type: "bazaar_scan_progress", payload: { message: msg } }); },
@@ -1879,5 +1465,5 @@ logEvent(null, "session", `MUD client server listening on http://${server.hostna
 console.log(`MUD client server listening on http://${server.hostname}:${server.port}`);
 
 if (runtimeConfig.autoConnect) {
-  void connectToMud(null, { profileId: readLastProfileId() });
+  void mudConnection.connectToMud(null, { profileId: readLastProfileId() });
 }

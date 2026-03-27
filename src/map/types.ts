@@ -48,6 +48,7 @@ export interface MapNode {
   exits: Direction[];
   closedExits: Direction[];
   visited: boolean;
+  color?: string;
 }
 
 export interface MapEdge {

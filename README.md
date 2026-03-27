@@ -102,7 +102,7 @@ Caddy автоматически поднимет HTTPS для `sc.kerat.ru` и 
 **Перезапуск сервера** (после изменений в `src/server.ts`):
 
 ```bash
-systemctl restart bylins-bot-web
+pm2 restart bylins-bot
 ```
 
 Изменения в `public/styles.css` и `public/index.html` применяются без перезапуска — достаточно перезагрузить страницу в браузере.

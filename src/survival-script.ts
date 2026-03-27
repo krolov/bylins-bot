@@ -465,3 +465,58 @@ function stripAnsi(text: string): string {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+export async function resolveSurvivalCommands(
+  action: "buy_food" | "fill_flask",
+  config: SurvivalConfig,
+  inspectFn: (container: string) => Promise<string>,
+): Promise<string[] | null> {
+  const normalized = normalizeSurvivalConfig(config);
+
+  if (action === "buy_food") {
+    const buyFoodItem = normalized.buyFoodItem.trim();
+    const buyFoodMax = normalized.buyFoodMax;
+    const container = normalized.container.trim();
+
+    if (buyFoodItem.length === 0 || container.length === 0 || buyFoodMax <= 0) {
+      return [];
+    }
+
+    const inspectText = await inspectFn(container);
+    const keyword = buyFoodItem.toLowerCase();
+    let count = 0;
+    for (const item of parseInspectItems(inspectText)) {
+      if (item.name.toLowerCase().includes(keyword)) {
+        count += item.count;
+      }
+    }
+
+    if (count >= buyFoodMax) {
+      return null;
+    }
+
+    const needed = buyFoodMax - count;
+    return [
+      `купи ${needed} ${buyFoodItem}`,
+      `положи ${needed} ${buyFoodItem} ${container}`,
+    ];
+  }
+
+  if (action === "fill_flask") {
+    const container = normalized.container.trim();
+    const flaskKeyword = normalized.flaskItems[0] ?? "";
+
+    if (flaskKeyword.length === 0 || container.length === 0) {
+      return [];
+    }
+
+    const source = normalized.fillFlaskSource.trim();
+    return [
+      `взять ${flaskKeyword} ${container}`,
+      ...(source.length > 0 ? [`налить ${flaskKeyword} ${source}`] : []),
+      `положить ${flaskKeyword} ${container}`,
+    ];
+  }
+
+  return [];
+}

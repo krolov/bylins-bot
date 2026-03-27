@@ -852,13 +852,50 @@ export function mergeItemSources(
     if (mud.leftHandReqs !== undefined) merged.leftHandReqs = mud.leftHandReqs;
     if (mud.bothHandReqs !== undefined) merged.bothHandReqs = mud.bothHandReqs;
     if (mud.wearReqs !== undefined) merged.wearReqs = mud.wearReqs;
-    if (mud.material !== undefined) merged.material = mud.material;
-    if (mud.isMetal !== undefined) merged.isMetal = mud.isMetal;
-    if (mud.affects !== undefined) merged.affects = mud.affects;
-    if (mud.properties !== undefined) merged.properties = mud.properties;
-    if (mud.forbidden !== undefined) merged.forbidden = mud.forbidden;
-    if (mud.remorts !== undefined) merged.remorts = mud.remorts;
+  if (mud.material !== undefined) merged.material = mud.material;
+  if (mud.isMetal !== undefined) merged.isMetal = mud.isMetal;
+  if (mud.affects !== undefined) merged.affects = mud.affects;
+  if (mud.properties !== undefined) merged.properties = mud.properties;
+  if (mud.forbidden !== undefined) merged.forbidden = mud.forbidden;
+  if (mud.remorts !== undefined) merged.remorts = mud.remorts;
   }
 
   return merged;
+}
+
+type WikiSearchStore = {
+  upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void>;
+};
+
+type WikiSearchResult =
+  | { found: false; error?: string }
+  | { found: true; name: string; itemType?: string; text?: string; loadLocation?: string };
+
+export async function searchAndCacheWikiItem(
+  query: string,
+  store: WikiSearchStore,
+  proxies: string[],
+): Promise<WikiSearchResult> {
+  const proxy = proxies[0] as string | undefined;
+  const searchHtml = await fetchWiki({ q: query }, proxy);
+  const results = parseSearchResults(searchHtml);
+  if (results.length === 0) {
+    return { found: false };
+  }
+  const first = results[0];
+  const html = await fetchWiki({ id: String(first.id) }, proxies[0]);
+  const gear = parseGearItemCard(html, first.id);
+  const wiki = parseWikiItemCard(html, first.id);
+  if (gear) {
+    await store.upsertItem(gear.name, gear.itemType, gearItemCardToData(gear));
+  } else if (wiki) {
+    await store.upsertItem(wiki.name, wiki.itemType, { id: wiki.id, name: wiki.name });
+  }
+  return {
+    found: true,
+    name: wiki?.name ?? gear?.name ?? first.name,
+    itemType: wiki?.itemType ?? gear?.itemType,
+    text: wiki?.text,
+    loadLocation: wiki?.loadLocation,
+  };
 }
