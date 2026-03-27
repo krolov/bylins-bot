@@ -19,13 +19,6 @@
         <button id="connect-button" type="submit" class="button-small">Connect</button>
         <button id="disconnect-button" type="button" class="button-secondary button-small">Disconnect</button>
       </form>
-      <input
-        id="farm-targets-input"
-        type="text"
-        class="topbar__input topbar__input--farm-targets"
-        placeholder="цели фарма: букашка, комар"
-        autocomplete="off"
-      />
       <button id="farm-toggle-button" type="button" class="button-secondary button-small">Фарм: выкл</button>
 
 
@@ -52,12 +45,16 @@
         <button id="fill-flask-btn" type="button" class="action-btn" title="Наполнить флягу">💧<span id="fill-flask-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
         <button id="repair-btn" type="button" class="action-btn" title="Починить снаряжение">🔨</button>
         <button id="gear-advisor-button" type="button" class="action-btn" title="Советник по снаряжению">🗡️</button>
+        <button id="bazaar-advisor-button" type="button" class="action-btn" title="Советник по базару">🏪</button>
         <div class="panel--actions__divider"></div>
         <button id="survival-settings-button" type="button" class="action-btn" title="Питание">🍖</button>
         <button id="triggers-button" type="button" class="action-btn" title="Триггеры">⚡</button>
         <button id="auto-spells-button" type="button" class="action-btn" title="Авто-заклинания">✨</button>
+        <button id="sneak-button" type="button" class="action-btn" title="Авто-подкрадывание">🥷</button>
         <button id="hotkeys-button" type="button" class="action-btn" title="Хоткеи">⌨️</button>
         <button id="item-db-button" type="button" class="action-btn" title="База предметов">📦</button>
+        <div class="panel--actions__divider"></div>
+        <button id="map-recording-button" type="button" class="action-btn" title="Запись карты: вкл">🗺️</button>
       </aside>
 
       <section id="panel-output" class="panel panel--output">
@@ -118,7 +115,32 @@
             </div>
           </div>
         </div>
+
+        <div id="bazaar-advisor-panel" class="gear-advisor-panel gear-advisor-panel--hidden">
+          <div class="gear-advisor-panel__header">
+            <span class="gear-advisor-panel__title">Советник по базару</span>
+            <button id="bazaar-advisor-modal-close" type="button" class="button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+          <div class="gear-advisor-panel__body">
+            <p id="bazaar-advisor-status" class="gear-advisor__status"></p>
+            <p id="bazaar-advisor-coins" class="gear-advisor__coins"></p>
+            <div class="gear-advisor__table-wrap">
+              <table class="gear-advisor__table">
+                <thead><tr><th>Слот</th><th>Решение</th><th>Сейчас</th></tr></thead>
+                <tbody id="bazaar-advisor-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </section>
+
+      <div id="chat-panel" class="chat-panel panel">
+        <div class="chat-panel__header">
+          <span class="chat-panel__title">💬 Чаты</span>
+          <button id="chat-clear-btn" type="button" class="button-secondary button-small">Clear</button>
+        </div>
+        <div id="chat-output" class="chat-panel__output"></div>
+      </div>
 
       <div id="map-context-menu" class="map-context-menu map-context-menu--hidden" role="menu">
         <button id="map-context-go" type="button" class="map-context-menu__item" role="menuitem">Идти</button>
@@ -493,6 +515,10 @@
                <label for="trigger-curse" class="farm-modal__label">Проклятие в бою (авто)</label>
                <input id="trigger-curse" type="checkbox" />
              </div>
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="trigger-light" class="farm-modal__label">Колдовать свет (авто)</label>
+               <input id="trigger-light" type="checkbox" />
+             </div>
           </div>
 
           <div class="farm-modal__footer">
@@ -516,6 +542,12 @@
             <input id="item-db-search" type="search" class="items-modal__search topbar__input" placeholder="Поиск по названию..." autocomplete="off" />
           </div>
 
+          <div class="items-modal__wiki-search">
+            <input id="item-db-wiki-input" type="search" class="topbar__input items-modal__wiki-input" placeholder="Найти на вики (название предмета)..." autocomplete="off" />
+            <button id="item-db-wiki-btn" type="button" class="button-secondary button-small">Найти</button>
+          </div>
+          <div id="item-db-wiki-result" class="items-modal__wiki-result items-modal__wiki-result--hidden"></div>
+
           <div class="farm-modal__body items-modal__body">
             <p id="item-db-empty" class="items-modal__empty">Предметов пока нет. Используйте команду <code>опознать</code> в игре.</p>
             <div class="items-modal__table-wrap">
@@ -529,6 +561,20 @@
           <div class="farm-modal__footer">
             <span id="item-db-count" class="items-modal__count"></span>
             <button id="item-db-modal-close-footer" type="button" class="button-secondary button-small" onclick="document.getElementById('item-db-modal-close').click()">Закрыть</button>
+          </div>
+        </div>
+      </div>
+      <div id="item-detail-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="item-detail-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content item-detail-modal__content">
+          <div class="farm-modal__header">
+            <span id="item-detail-modal-title" class="farm-modal__title item-detail-modal__title">Предмет</span>
+            <button id="item-detail-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+          <div id="item-detail-modal-body" class="farm-modal__body item-detail-modal__body">
+          </div>
+          <div class="farm-modal__footer">
+            <button id="item-detail-modal-close-footer" type="button" class="button-secondary button-small">Закрыть</button>
           </div>
         </div>
       </div>
@@ -606,6 +652,50 @@
           <div class="farm-modal__footer">
             <button id="auto-spells-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
             <button id="auto-spells-modal-save" type="button" class="button-small">Сохранить</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="sneak-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="sneak-modal-title">
+        <div class="farm-modal__backdrop"></div>
+        <div class="farm-modal__content">
+          <div class="farm-modal__header">
+            <span id="sneak-modal-title" class="farm-modal__title">Авто-подкрадывание</span>
+            <button id="sneak-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+          </div>
+
+          <div class="farm-modal__body">
+            <p class="farm-modal__hint">Бот проверяет аффект подкрадывания командой <code>афф</code> и перечитывает его вне боя. Сразу после каждого боя — принудительная проверка.</p>
+
+            <table class="hotkeys-modal__table" id="sneak-table">
+              <thead>
+                <tr>
+                  <th class="hotkeys-modal__th">Аффект</th>
+                  <th class="hotkeys-modal__th">Команда</th>
+                  <th class="hotkeys-modal__th">Вкл</th>
+                  <th class="hotkeys-modal__th"></th>
+                </tr>
+              </thead>
+              <tbody id="sneak-table-body"></tbody>
+            </table>
+            <button id="sneak-add-row" type="button" class="button-secondary button-small hotkeys-modal__add">+ Добавить</button>
+
+            <div class="farm-modal__field farm-modal__field--inline" style="margin-top:12px">
+              <label for="sneak-interval" class="farm-modal__label">Интервал проверки (сек)</label>
+              <input
+                id="sneak-interval"
+                type="number"
+                min="5"
+                max="3600"
+                class="farm-modal__number-input topbar__input"
+                value="20"
+              />
+            </div>
+          </div>
+
+          <div class="farm-modal__footer">
+            <button id="sneak-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
+            <button id="sneak-modal-save" type="button" class="button-small">Сохранить</button>
           </div>
         </div>
       </div>

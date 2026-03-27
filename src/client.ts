@@ -182,7 +182,7 @@ type ServerEvent =
     }
   | {
        type: "triggers_state";
-        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean };
+        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean };
     }
   | {
       type: "items_data";
@@ -225,10 +225,56 @@ type ServerEvent =
         }>;
       };
     }
+  | { type: "bazaar_scan_progress"; payload: { message: string } }
+  | { type: "bazaar_scan_result";
+      payload: {
+        coins: number;
+        rows: Array<{
+          slot: string;
+          action: "keep" | "buy" | "equip" | "no_upgrade";
+          itemName?: string;
+          price?: number;
+          shopNumber?: number;
+          canAfford?: boolean;
+          source?: "shop" | "inventory" | "bazaar";
+          damageDice?: string;
+          damageAvg?: number;
+          itemAc?: number;
+          itemArmor?: number;
+          currentItemName?: string;
+          currentDamageDice?: string;
+          currentDamageAvg?: number;
+          currentAc?: number;
+          currentArmor?: number;
+        }>;
+        sellItems: Array<{
+          name: string;
+          count: number;
+          sellCommand: string;
+        }>;
+      };
+    }
   | { type: "repair_state"; payload: { running: boolean; message: string } }
   | {
       type: "auto_spells_settings_data";
       payload: import("./auto-spells-ui.ts").AutoSpellsSettings | null;
+    }
+  | {
+      type: "sneak_settings_data";
+      payload: import("./auto-spells-ui.ts").AutoSpellsSettings | null;
+    }
+  | { type: "map_recording_state"; payload: { enabled: boolean } }
+  | {
+      type: "wiki_item_search_result";
+      payload: {
+        query: string;
+        found: boolean;
+        name?: string;
+        itemType?: string;
+        text?: string;
+        loadLocation?: string;
+        error?: string;
+      };
     };
 
 type ClientEvent =
@@ -240,6 +286,7 @@ type ClientEvent =
   | { type: "disconnect" }
   | { type: "map_reset" }
   | { type: "map_reset_area" }
+  | { type: "map_recording_toggle"; payload?: { enabled?: boolean } }
    | {
        type: "farm_toggle";
        payload: {
@@ -269,7 +316,7 @@ type ClientEvent =
     }
   | {
       type: "triggers_toggle";
-      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean };
+      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean; light?: boolean };
     }
   | { type: "item_db_get" }
   | { type: "room_auto_command_set"; payload: { vnum: number; command: string } }
@@ -278,14 +325,19 @@ type ClientEvent =
   | { type: "survival_settings_get" }
   | { type: "survival_settings_save"; payload: SurvivalSettings }
   | { type: "gear_scan_start" }
+  | { type: "bazaar_scan_start" }
   | { type: "gear_sell"; payload: { sellCommand: string } }
   | { type: "gear_drop"; payload: { dropCommand: string } }
   | { type: "gear_apply"; payload: { commands: string[] } }
   | { type: "repair_start" }
   | { type: "auto_spells_settings_get" }
-  | { type: "auto_spells_settings_save"; payload: import("./auto-spells-ui.ts").AutoSpellsSettings };
+  | { type: "auto_spells_settings_save"; payload: import("./auto-spells-ui.ts").AutoSpellsSettings }
+  | { type: "sneak_settings_get" }
+  | { type: "sneak_settings_save"; payload: import("./auto-spells-ui.ts").AutoSpellsSettings }
+  | { type: "wiki_item_search"; payload: { query: string } };
 
 import { initAutoSpellsUi } from "./auto-spells-ui.ts";
+import { initSneakUi } from "./sneak-ui.ts";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -308,6 +360,8 @@ const commandDelayInput = requireElement<HTMLInputElement>("#command-delay-ms");
 const commandInput = requireElement<HTMLInputElement>("#command-input");
 const statusElement = requireElement<HTMLElement>("#status");
 const outputElement = requireElement<HTMLElement>("#output");
+const chatOutputElement = requireElement<HTMLDivElement>("#chat-output");
+const chatClearButton = requireElement<HTMLButtonElement>("#chat-clear-btn");
 const disconnectButton = requireElement<HTMLButtonElement>("#disconnect-button");
 const clearOutputButton = requireElement<HTMLButtonElement>("#clear-output-button");
 const resetMapButton = requireElement<HTMLButtonElement>("#reset-map-button");
@@ -315,7 +369,6 @@ const zLevelDownButton = requireElement<HTMLButtonElement>("#z-level-down");
 const zLevelUpButton = requireElement<HTMLButtonElement>("#z-level-up");
 const zLevelLabel = requireElement<HTMLSpanElement>("#z-level-label");
 const farmToggleButton = requireElement<HTMLButtonElement>("#farm-toggle-button");
-const farmTargetsInput = requireElement<HTMLInputElement>("#farm-targets-input");
 const mapCanvasElement = requireElement<HTMLDivElement>("#map-canvas");
 const hpBarFill = requireElement<HTMLElement>("#hp-bar-fill");
 const hpBarLabel = requireElement<HTMLElement>("#hp-bar-label");
@@ -399,8 +452,11 @@ const triggerDodgeCheckbox = requireElement<HTMLInputElement>("#trigger-dodge");
 const triggerStandUpCheckbox = requireElement<HTMLInputElement>("#trigger-stand-up");
 const triggerRearmCheckbox = requireElement<HTMLInputElement>("#trigger-rearm");
 const triggerCurseCheckbox = requireElement<HTMLInputElement>("#trigger-curse");
+const triggerLightCheckbox = requireElement<HTMLInputElement>("#trigger-light");
 
 const itemDbButton = requireElement<HTMLButtonElement>("#item-db-button");
+
+const mapRecordingButton = requireElement<HTMLButtonElement>("#map-recording-button");
 const itemDbModal = requireElement<HTMLDivElement>("#item-db-modal");
 const itemDbModalBackdrop = requireElement<HTMLDivElement>("#item-db-modal .farm-modal__backdrop");
 const itemDbModalClose = requireElement<HTMLButtonElement>("#item-db-modal-close");
@@ -410,6 +466,16 @@ const itemDbEmpty = requireElement<HTMLParagraphElement>("#item-db-empty");
 const itemDbTabs = requireElement<HTMLDivElement>("#item-db-tabs");
 const itemDbSearch = requireElement<HTMLInputElement>("#item-db-search");
 const itemDbCount = requireElement<HTMLSpanElement>("#item-db-count");
+const itemDbWikiInput = requireElement<HTMLInputElement>("#item-db-wiki-input");
+const itemDbWikiBtn = requireElement<HTMLButtonElement>("#item-db-wiki-btn");
+const itemDbWikiResult = requireElement<HTMLDivElement>("#item-db-wiki-result");
+
+const itemDetailModal             = requireElement<HTMLDivElement>("#item-detail-modal");
+const itemDetailModalBackdrop     = requireElement<HTMLDivElement>("#item-detail-modal .farm-modal__backdrop");
+const itemDetailModalClose        = requireElement<HTMLButtonElement>("#item-detail-modal-close");
+const itemDetailModalCloseFooter  = requireElement<HTMLButtonElement>("#item-detail-modal-close-footer");
+const itemDetailModalTitle        = requireElement<HTMLSpanElement>("#item-detail-modal-title");
+const itemDetailModalBody         = requireElement<HTMLDivElement>("#item-detail-modal-body");
 
 const gearAdvisorButton = requireElement<HTMLButtonElement>("#gear-advisor-button");
 const gearAdvisorPanel = requireElement<HTMLDivElement>("#gear-advisor-panel");
@@ -418,6 +484,13 @@ const gearAdvisorStatus = requireElement<HTMLParagraphElement>("#gear-advisor-st
 const gearAdvisorTableBody = requireElement<HTMLTableSectionElement>("#gear-advisor-table-body");
 const gearAdvisorCoins = requireElement<HTMLSpanElement>("#gear-advisor-coins");
 const gearAdvisorSellList = requireElement<HTMLDivElement>("#gear-advisor-sell-list");
+
+const bazaarAdvisorButton = requireElement<HTMLButtonElement>("#bazaar-advisor-button");
+const bazaarAdvisorPanel = requireElement<HTMLDivElement>("#bazaar-advisor-panel");
+const bazaarAdvisorModalClose = requireElement<HTMLButtonElement>("#bazaar-advisor-modal-close");
+const bazaarAdvisorStatus = requireElement<HTMLParagraphElement>("#bazaar-advisor-status");
+const bazaarAdvisorTableBody = requireElement<HTMLTableSectionElement>("#bazaar-advisor-table-body");
+const bazaarAdvisorCoins = requireElement<HTMLSpanElement>("#bazaar-advisor-coins");
 
 let farmModalZoneId: number | null = null;
 let currentSurvivalSettings: SurvivalSettings = defaultSurvivalSettings();
@@ -557,13 +630,14 @@ function closeSurvivalSettingsModal(): void {
   survivalSettingsModal.classList.add("farm-modal--hidden");
 }
 
-let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean } = { dodge: true, standUp: true, rearm: true, curse: false };
+let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean } = { dodge: true, standUp: true, rearm: true, curse: false, light: false };
 
 function openTriggersModal(): void {
   triggerDodgeCheckbox.checked = currentTriggerState.dodge;
   triggerStandUpCheckbox.checked = currentTriggerState.standUp;
   triggerRearmCheckbox.checked = currentTriggerState.rearm;
   triggerCurseCheckbox.checked = currentTriggerState.curse;
+  triggerLightCheckbox.checked = currentTriggerState.light;
   triggersModal.classList.remove("farm-modal--hidden");
 }
 
@@ -573,27 +647,27 @@ function closeTriggersModal(): void {
 
 let itemDbAllItems: GameItemPayload[] = [];
 let itemDbActiveTab = "all";
+const itemDbRowMap = new WeakMap<HTMLTableRowElement, GameItemPayload>();
 
 type ColumnDef = { label: string; render: (data: Record<string, unknown>) => string; cls?: string };
 
 const WEAPON_COLUMNS: ColumnDef[] = [
-  { label: "Класс",     render: d => String(d.class ?? "—"),          cls: "items-modal__cell--muted" },
-  { label: "Кубики",    render: d => String(d.damage_dice ?? "—"),     cls: "items-modal__cell--mono" },
-  { label: "Avg",       render: d => d.damage_avg != null ? String(d.damage_avg) : "—", cls: "items-modal__cell--mono" },
-  { label: "Материал",  render: d => String(d.material ?? "—"),        cls: "items-modal__cell--muted" },
+  { label: "Класс",     render: d => String(d.weaponClass ?? d.class ?? "—"),      cls: "items-modal__cell--muted" },
+  { label: "Кубики",    render: d => String(d.damageDice ?? d.damage_dice ?? "—"), cls: "items-modal__cell--mono" },
+  { label: "Avg",       render: d => (d.damageAvg ?? d.damage_avg) != null ? String(d.damageAvg ?? d.damage_avg) : "—", cls: "items-modal__cell--mono" },
+  { label: "Материал",  render: d => String(d.material ?? "—"),                    cls: "items-modal__cell--muted" },
   { label: "Прочность", render: d => d.durability_cur != null ? `${d.durability_cur}/${d.durability_max}` : "—" },
-  { label: "Аффекты",   render: d => String(d.affects ?? "—"),         cls: "items-modal__cell--tag" },
-  { label: "Флаги",     render: d => String(d.extra_flags ?? "—"),     cls: "items-modal__cell--tag" },
-  { label: "Свойства",  render: d => String(d.extra_props ?? "—"),     cls: "items-modal__cell--tag" },
+  { label: "Аффекты",   render: d => Array.isArray(d.affects) ? (d.affects as string[]).join(", ") || "—" : String(d.affects ?? "—"), cls: "items-modal__cell--tag" },
+  { label: "Свойства",  render: d => Array.isArray(d.properties) ? (d.properties as string[]).join(", ") || "—" : String(d.extra_props ?? "—"), cls: "items-modal__cell--tag" },
 ];
 
 const ARMOR_COLUMNS: ColumnDef[] = [
-  { label: "Слот",      render: d => String(d.wear_slot ?? d.slot ?? "—"), cls: "items-modal__cell--muted" },
-  { label: "Материал",  render: d => String(d.material ?? "—"),            cls: "items-modal__cell--muted" },
+  { label: "Слот",      render: d => Array.isArray(d.wearSlots) ? (d.wearSlots as {slot:string}[]).map(s => typeof s === "string" ? s : s.slot).join(", ") || "—" : String(d.wear_slot ?? d.slot ?? "—"), cls: "items-modal__cell--muted" },
+  { label: "Материал",  render: d => String(d.material ?? "—"),  cls: "items-modal__cell--muted" },
   { label: "Прочность", render: d => d.durability_cur != null ? `${d.durability_cur}/${d.durability_max}` : "—" },
-  { label: "AC",        render: d => String(d.ac ?? d.armor ?? "—"),       cls: "items-modal__cell--mono" },
-  { label: "Аффекты",   render: d => String(d.affects ?? "—"),             cls: "items-modal__cell--tag" },
-  { label: "Флаги",     render: d => String(d.extra_flags ?? "—"),         cls: "items-modal__cell--tag" },
+  { label: "AC",        render: d => String(d.ac ?? d.armor ?? "—"), cls: "items-modal__cell--mono" },
+  { label: "Аффекты",   render: d => Array.isArray(d.affects) ? (d.affects as string[]).join(", ") || "—" : String(d.affects ?? "—"), cls: "items-modal__cell--tag" },
+  { label: "Свойства",  render: d => Array.isArray(d.properties) ? (d.properties as string[]).join(", ") || "—" : String(d.extra_props ?? "—"), cls: "items-modal__cell--tag" },
 ];
 
 function getColumnsForTab(tab: string): ColumnDef[] {
@@ -663,7 +737,8 @@ function applyItemDbFilter(): void {
 
   for (const item of filtered) {
     const tr = document.createElement("tr");
-    tr.className = "items-modal__row";
+    tr.className = "items-modal__row items-modal__row--clickable";
+    itemDbRowMap.set(tr, item);
 
     const tdName = document.createElement("td");
     tdName.className = "items-modal__cell items-modal__cell--name";
@@ -729,6 +804,115 @@ function closeItemDbModal(): void {
   itemDbModal.classList.add("farm-modal--hidden");
 }
 
+function openItemDetailModal(item: GameItemPayload): void {
+  itemDetailModalTitle.textContent = item.name;
+  renderItemDetail(item);
+  itemDetailModal.classList.remove("farm-modal--hidden");
+}
+
+function closeItemDetailModal(): void {
+  itemDetailModal.classList.add("farm-modal--hidden");
+}
+
+function renderItemDetail(item: GameItemPayload): void {
+  const d = item.data;
+  itemDetailModalBody.innerHTML = "";
+
+  function row(label: string, value: string | null | undefined): void {
+    if (value === null || value === undefined || value === "") return;
+    const p = document.createElement("p");
+    p.className = "item-detail-modal__row";
+    const labelEl = document.createElement("span");
+    labelEl.className = "item-detail-modal__label";
+    labelEl.textContent = label + ": ";
+    const valueEl = document.createElement("span");
+    valueEl.className = "item-detail-modal__value";
+    valueEl.textContent = value;
+    p.appendChild(labelEl);
+    p.appendChild(valueEl);
+    itemDetailModalBody.appendChild(p);
+  }
+
+  function listSection(label: string, arr: unknown): void {
+    if (!Array.isArray(arr) || arr.length === 0) return;
+    const section = document.createElement("div");
+    section.className = "item-detail-modal__section";
+    const h = document.createElement("p");
+    h.className = "item-detail-modal__section-title";
+    h.textContent = label + ":";
+    section.appendChild(h);
+    for (const entry of arr) {
+      const p = document.createElement("p");
+      p.className = "item-detail-modal__list-item";
+      if (typeof entry === "object" && entry !== null && "stat" in entry && "value" in entry) {
+        p.textContent = `${(entry as { stat: string; value: number }).stat}: ${(entry as { stat: string; value: number }).value}`;
+      } else {
+        p.textContent = String(entry);
+      }
+      section.appendChild(p);
+    }
+    itemDetailModalBody.appendChild(section);
+  }
+
+  row("Тип", item.itemType);
+  row("Материал", typeof d["material"] === "string" ? d["material"] : null);
+
+  if (d["weaponClass"] != null) {
+    row("Класс оружия", String(d["weaponClass"]));
+  }
+  if (d["damageDice"] != null) {
+    row("Урон (кости)", String(d["damageDice"]));
+  }
+  if (d["damageAvg"] != null && Number(d["damageAvg"]) > 0) {
+    row("Средний урон", String(d["damageAvg"]));
+  }
+  if (d["ac"] != null && Number(d["ac"]) !== 0) {
+    row("AC", String(d["ac"]));
+  }
+  if (d["armor"] != null && Number(d["armor"]) !== 0) {
+    row("Броня", String(d["armor"]));
+  }
+  if (d["remorts"] != null && Number(d["remorts"]) > 0) {
+    row("Перевоплощений", String(d["remorts"]));
+  }
+  if (d["isMetal"] === true) {
+    row("Металл", "да");
+  }
+  if (d["isShiny"] === true) {
+    row("Блестящий", "да");
+  }
+
+  const wearSlots = d["wearSlots"];
+  if (Array.isArray(wearSlots) && wearSlots.length > 0) {
+    row("Слоты", (wearSlots as string[]).join(", "));
+  }
+
+  listSection("Аффекты", d["affects"]);
+  listSection("Свойства", d["properties"]);
+  listSection("Запрет классам", d["forbidden"]);
+  listSection("Треб. правая рука", d["rightHandReqs"]);
+  listSection("Треб. левая рука", d["leftHandReqs"]);
+  listSection("Треб. обе руки", d["bothHandReqs"]);
+  listSection("Треб. надевание", d["wearReqs"]);
+
+  if (d["id"] != null) {
+    row("Wiki ID", String(d["id"]));
+  }
+
+  const firstSeen = item.firstSeen ? new Date(item.firstSeen).toLocaleDateString("ru-RU") : null;
+  const lastSeen = item.lastSeen ? new Date(item.lastSeen).toLocaleDateString("ru-RU") : null;
+  if (firstSeen) row("Первый раз", firstSeen);
+  if (lastSeen) row("Последний раз", lastSeen);
+
+  if (itemDetailModalBody.children.length === 0) {
+    const p = document.createElement("p");
+    p.className = "item-detail-modal__empty";
+    p.textContent = "Нет данных";
+    itemDetailModalBody.appendChild(p);
+  }
+}
+
+
 function commitSurvivalSettings(): void {
   currentSurvivalSettings = normalizeSurvivalSettings({
     container: survivalModalContainer.value.trim(),
@@ -785,7 +969,6 @@ function commitFarmSettings(): void {
   }
 
   const targetValues = parseFarmTargetValues(settings.targets);
-  farmTargetsInput.value = targetValues.join(", ");
 
   sendClientEvent({
       type: "farm_toggle",
@@ -946,6 +1129,7 @@ let latestMapSnapshot: MapSnapshotPayload = {
   edges: [],
 };
 let farmEnabled = false;
+let mapRecordingEnabled = true;
 let farmZoneId: number | null = null;
 let farmPendingActivation = false;
 let farmTargetValues: string[] = [];
@@ -998,6 +1182,13 @@ const DIR_DELTA: Record<string, [number, number]> = {
   west: [-1, 0],
 };
 
+const OPPOSITE_DIR: Record<string, string> = {
+  north: "south",
+  south: "north",
+  east: "west",
+  west: "east",
+};
+
 const DIRECTION_PRIORITY: Record<string, number> = {
   north: 0,
   east: 1,
@@ -1007,7 +1198,7 @@ const DIRECTION_PRIORITY: Record<string, number> = {
   down: 5,
 };
 
-const CELL = 48;
+const CELL = 56;
 const TILE = 40;
 const PAD = 2;
 
@@ -1199,25 +1390,60 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
   }
 
   const zLevelMap = new Map<number, number>();
-  const zRoots = Array.from(gridLayout.keys());
-  const zQueue: number[] = [];
 
-  const zSeed = snapshot.currentVnum != null && gridLayout.has(snapshot.currentVnum)
-    ? snapshot.currentVnum
-    : (zRoots[0] ?? null);
-  if (zSeed != null) {
-    zLevelMap.set(zSeed, 0);
-    zQueue.push(zSeed);
+  const horizontalAdj = new Map<number, number[]>();
+  for (const e of edges) {
+    if (!DIR_DELTA[e.direction] || e.isPortal || getZoneId(e.fromVnum) !== getZoneId(e.toVnum)) continue;
+    const fwd = horizontalAdj.get(e.fromVnum) ?? [];
+    fwd.push(e.toVnum);
+    horizontalAdj.set(e.fromVnum, fwd);
+    const rev = horizontalAdj.get(e.toVnum) ?? [];
+    rev.push(e.fromVnum);
+    horizontalAdj.set(e.toVnum, rev);
   }
-  while (zQueue.length > 0) {
-    const cur = zQueue.shift()!;
-    const curZ = zLevelMap.get(cur)!;
-    for (const { toVnum, delta } of zLevelAdj.get(cur) ?? []) {
-      if (!zLevelMap.has(toVnum) && gridLayout.has(toVnum)) {
-        zLevelMap.set(toVnum, curZ + delta);
-        zQueue.push(toVnum);
+
+  const componentOf = new Map<number, number>();
+  const componentSeeds: number[] = [];
+  const allVnums = Array.from(gridLayout.keys()).sort((a, b) => a - b);
+  for (const vnum of allVnums) {
+    if (componentOf.has(vnum)) continue;
+    const compId = vnum;
+    componentSeeds.push(compId);
+    const bfsQ = [vnum];
+    componentOf.set(vnum, compId);
+    while (bfsQ.length > 0) {
+      const cur = bfsQ.shift()!;
+      for (const nb of horizontalAdj.get(cur) ?? []) {
+        if (!componentOf.has(nb) && gridLayout.has(nb)) {
+          componentOf.set(nb, compId);
+          bfsQ.push(nb);
+        }
       }
     }
+  }
+
+  const compZLevel = new Map<number, number>();
+  for (const compId of componentSeeds.sort((a, b) => a - b)) {
+    if (compZLevel.has(compId)) continue;
+    const inferredZ = (() => {
+      for (const vnum of allVnums) {
+        if (componentOf.get(vnum) !== compId) continue;
+        for (const { toVnum, delta } of zLevelAdj.get(vnum) ?? []) {
+          const toComp = componentOf.get(toVnum);
+          if (toComp !== undefined && toComp !== compId && compZLevel.has(toComp)) {
+            return compZLevel.get(toComp)! - delta;
+          }
+        }
+      }
+      return 0;
+    })();
+    compZLevel.set(compId, inferredZ);
+  }
+
+  for (const [vnum, cell] of gridLayout) {
+    const compId = componentOf.get(vnum);
+    cell.zLevel = compId !== undefined ? (compZLevel.get(compId) ?? 0) : 0;
+    zLevelMap.set(vnum, cell.zLevel);
   }
 
   for (const [vnum, cell] of gridLayout) {
@@ -1255,8 +1481,12 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
   if (gridLayout.size === 0) return;
 
   const nodeByVnum = new Map(snapshot.nodes.map((n) => [n.vnum, n]));
+  const currentZoneId = snapshot.currentVnum != null ? getZoneId(snapshot.currentVnum) : null;
   const levelCells = new Map(
-    Array.from(gridLayout.entries()).filter(([, cell]) => cell.zLevel === currentZLevel)
+    Array.from(gridLayout.entries()).filter(([, cell]) =>
+      cell.zLevel === currentZLevel &&
+      (currentZoneId === null || cell.zoneId === currentZoneId)
+    )
   );
   const visibleVnums = new Set(
     Array.from(levelCells.keys()).filter((vnum) => nodeByVnum.has(vnum))
@@ -1319,18 +1549,52 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
   svg.style.inset = "0";
   svg.style.pointerEvents = "none";
 
-  const portalRooms = new Set<number>();
+  const confirmedEdgeKeys = new Set<string>();
+  for (const edge of snapshot.edges) {
+    confirmedEdgeKeys.add(`${edge.fromVnum}:${edge.direction}`);
+  }
+
+  const portalVnums = new Set<number>();
   const drawnEdges = new Set<string>();
   for (const edge of snapshot.edges) {
     const fromCell = levelCells.get(edge.fromVnum);
+    if (!fromCell) continue;
     const toCell = levelCells.get(edge.toVnum);
-    if (!fromCell || !toCell) continue;
-    if (!visibleVnums.has(edge.fromVnum) || !visibleVnums.has(edge.toVnum)) continue;
 
     if (edge.isPortal) {
-      portalRooms.add(edge.fromVnum);
+      portalVnums.add(edge.fromVnum);
+      if (!visibleVnums.has(edge.fromVnum)) continue;
+
+      const [cx, cy] = tileCenter(fromCell.gridX, fromCell.gridY);
+      const dirDelta = DIR_DELTA[edge.direction];
+      if (!dirDelta) continue;
+
+      const reach = TILE / 2 + (CELL - TILE) / 2 + 10;
+      const ex = cx + dirDelta[0] * reach;
+      const ey = cy - dirDelta[1] * reach;
+
+      const stem = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      stem.setAttribute("x1", String(cx));
+      stem.setAttribute("y1", String(cy));
+      stem.setAttribute("x2", String(ex));
+      stem.setAttribute("y2", String(ey));
+      stem.setAttribute("class", "map-edge map-edge--portal-stem");
+      svg.appendChild(stem);
+
+      const crossHalf = 6;
+      const [px, py] = dirDelta[0] !== 0 ? [0, crossHalf] : [crossHalf, 0];
+      const cross = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      cross.setAttribute("x1", String(ex - px));
+      cross.setAttribute("y1", String(ey - py));
+      cross.setAttribute("x2", String(ex + px));
+      cross.setAttribute("y2", String(ey + py));
+      cross.setAttribute("class", "map-edge--portal-cross");
+      svg.appendChild(cross);
       continue;
     }
+
+    if (!toCell) continue;
+    if (!visibleVnums.has(edge.fromVnum) || !visibleVnums.has(edge.toVnum)) continue;
 
     const edgeKey = [edge.fromVnum, edge.toVnum].sort().join("-");
     if (drawnEdges.has(edgeKey)) continue;
@@ -1379,14 +1643,6 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
       tile.appendChild(aliasBadge);
     }
 
-    if (portalRooms.has(cell.vnum)) {
-      const badge = document.createElement("div");
-      badge.className = "map-portal-badge";
-      badge.setAttribute("title", "Portal exit");
-      badge.textContent = "⬡";
-      tile.appendChild(badge);
-    }
-
     const upDownExits = (node.exits ?? []).filter((d) => d === "up" || d === "down");
     if (upDownExits.length > 0) {
       const edgeDirections = new Set(
@@ -1412,6 +1668,7 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
   }
 
   const STUB = 14;
+  const drawnUnconfirmed = new Set<string>();
 
   for (const cell of levelCells.values()) {
     const node = nodeByVnum.get(cell.vnum);
@@ -1423,7 +1680,7 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
 
       const nx = cell.gridX + delta[0];
       const ny = cell.gridY + delta[1];
-      const matchingNeighbor = Array.from(levelCells.values()).some(
+      const neighborCell = Array.from(levelCells.values()).find(
         (candidate) =>
           candidate.vnum !== cell.vnum &&
           candidate.gridX === nx &&
@@ -1431,7 +1688,41 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
           visibleVnums.has(candidate.vnum)
       );
 
-      if (matchingNeighbor) continue;
+      if (neighborCell) {
+        const edgeConfirmed =
+          confirmedEdgeKeys.has(`${cell.vnum}:${dir}`) ||
+          confirmedEdgeKeys.has(`${neighborCell.vnum}:${OPPOSITE_DIR[dir] ?? ""}`);
+        if (edgeConfirmed) continue;
+
+        const pairKey = [cell.vnum, neighborCell.vnum].sort().join("-") + ":" + dir;
+        if (drawnUnconfirmed.has(pairKey)) continue;
+        drawnUnconfirmed.add(pairKey);
+
+        const [x1, y1] = tileCenter(cell.gridX, cell.gridY);
+        const [x2, y2] = tileCenter(neighborCell.gridX, neighborCell.gridY);
+        const GAP_HALF = 3;
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2;
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const ux = dx / len;
+        const uy = dy / len;
+
+        for (const [ax, ay, bx, by] of [
+          [x1, y1, mx - ux * GAP_HALF, my - uy * GAP_HALF],
+          [mx + ux * GAP_HALF, my + uy * GAP_HALF, x2, y2],
+        ] as [number, number, number, number][]) {
+          const seg = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          seg.setAttribute("x1", String(ax));
+          seg.setAttribute("y1", String(ay));
+          seg.setAttribute("x2", String(bx));
+          seg.setAttribute("y2", String(by));
+          seg.setAttribute("class", "map-edge map-edge--unconfirmed");
+          svg.appendChild(seg);
+        }
+        continue;
+      }
 
       const stubX = (nx - minX + PAD) * CELL + (TILE - STUB) / 2;
       const stubY = (toRenderY(ny) + PAD) * CELL + (TILE - STUB) / 2;
@@ -1741,6 +2032,75 @@ function parseAnsiSegments(chunk: string): AnsiSegment[] {
   return segments;
 }
 
+const MAX_CHAT_LINES = 200;
+
+function isChatLine(text: string): boolean {
+  return (
+    /сказал[аи]?\s+вам\s*[:'"]/.test(text) ||
+    /сказал[аи]?\s*:\s*'/.test(text) ||
+    /Вы сказали\s*:\s*'/.test(text) ||
+    /Услышали вы голос/.test(text) ||
+    /шепнул[аи]?\s+вам/.test(text)
+  );
+}
+
+function appendChat(segments: AnsiSegment[]): void {
+  const isChatScrolledToBottom = chatOutputElement.scrollHeight - chatOutputElement.scrollTop - chatOutputElement.clientHeight <= 30;
+  let appended = false;
+
+  const lineSegments: AnsiSegment[] = [];
+
+  const flushLine = () => {
+    const lineText = lineSegments.map((s) => s.text).join("");
+    if (isChatLine(lineText)) {
+      const line = document.createElement("span");
+      line.className = "chat-line";
+
+      const timeSpan = document.createElement("span");
+      timeSpan.className = "chat-line__time";
+      const now = new Date();
+      timeSpan.textContent = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      line.appendChild(timeSpan);
+
+      for (const seg of lineSegments) {
+        if (seg.text.length === 0) continue;
+        const span = document.createElement("span");
+        span.className = classNamesForStyle(seg.style).join(" ");
+        span.textContent = seg.text;
+        line.appendChild(span);
+      }
+
+      chatOutputElement.appendChild(line);
+      appended = true;
+    }
+    lineSegments.length = 0;
+  };
+
+  for (const segment of segments) {
+    const parts = segment.text.split("\n");
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]!;
+      if (part.length > 0) {
+        lineSegments.push({ text: part, style: segment.style });
+      }
+      if (i < parts.length - 1) {
+        flushLine();
+      }
+    }
+  }
+  flushLine();
+
+  if (appended) {
+    const children = chatOutputElement.children;
+    while (children.length > MAX_CHAT_LINES) {
+      children[0]?.remove();
+    }
+    if (isChatScrolledToBottom) {
+      chatOutputElement.scrollTop = chatOutputElement.scrollHeight;
+    }
+  }
+}
+
 function appendOutput(text: string): void {
   const shouldAutoScroll = isScrolledToBottom();
   const segments = parseAnsiSegments(text);
@@ -1748,6 +2108,8 @@ function appendOutput(text: string): void {
   for (const segment of segments) {
     appendStyledText(segment.text, segment.style);
   }
+
+  appendChat(segments);
 
   const children = outputElement.children;
   if (children.length > MAX_OUTPUT_SEGMENTS) {
@@ -1791,6 +2153,12 @@ function renderFarmButton(): void {
       : `Фарм: вкл${farmZoneId !== null ? ` (${farmZoneId})` : ""}`
     : "Фарм: выкл";
   farmToggleButton.classList.toggle("button-toggle-active", farmEnabled);
+}
+
+function renderMapRecordingButton(): void {
+  mapRecordingButton.textContent = mapRecordingEnabled ? "🗺️" : "⏸️";
+  mapRecordingButton.title = mapRecordingEnabled ? "Запись карты: вкл" : "Запись карты: выкл";
+  mapRecordingButton.classList.toggle("button-toggle-active", !mapRecordingEnabled);
 }
 
 function parseFarmTargetValues(rawValue: string): string[] {
@@ -1844,6 +2212,18 @@ function openGearAdvisorModal(): void {
 
 function closeGearAdvisorModal(): void {
   gearAdvisorPanel.classList.add("gear-advisor-panel--hidden");
+}
+
+function openBazaarAdvisorModal(): void {
+  bazaarAdvisorTableBody.innerHTML = "";
+  bazaarAdvisorCoins.textContent = "";
+  bazaarAdvisorStatus.textContent = "Запускаю...";
+  bazaarAdvisorPanel.classList.remove("gear-advisor-panel--hidden");
+  sendClientEvent({ type: "bazaar_scan_start" });
+}
+
+function closeBazaarAdvisorModal(): void {
+  bazaarAdvisorPanel.classList.add("gear-advisor-panel--hidden");
 }
 
 function renderGearAdvisorRow(row: {
@@ -1937,12 +2317,121 @@ function renderGearAdvisorRow(row: {
         cmds.push(`купить ${row.shopNumber}`);
       }
       if (row.currentItemName) {
-        cmds.push(`снять ${row.currentItemName.replace(/ /g, ".")}`);
+        cmds.push(`снять !${row.currentItemName}!`);
       }
       if (row.itemName) {
-        const escapedName = row.itemName.replace(/ /g, ".");
         const wearCmd = row.slot === "правая рука" ? "вооруж" : row.slot === "левая рука" ? "держ" : "надеть";
-        cmds.push(`${wearCmd} ${escapedName}`);
+        cmds.push(`${wearCmd} !${row.itemName}!`);
+      }
+      if (cmds.length > 0) {
+        sendClientEvent({ type: "gear_apply", payload: { commands: cmds } });
+        applyBtn.disabled = true;
+        applyBtn.textContent = "...";
+      }
+    });
+    tdApply.appendChild(applyBtn);
+    tr.appendChild(tdApply);
+  }
+
+  return tr;
+}
+
+function renderBazaarAdvisorRow(row: {
+  slot: string;
+  action: string;
+  itemName?: string;
+  price?: number;
+  shopNumber?: number;
+  canAfford?: boolean;
+  source?: string;
+  damageDice?: string;
+  damageAvg?: number;
+  itemAc?: number;
+  itemArmor?: number;
+  currentItemName?: string;
+  currentDamageDice?: string;
+  currentDamageAvg?: number;
+  currentAc?: number;
+  currentArmor?: number;
+}): HTMLTableRowElement {
+  const tr = document.createElement("tr");
+  tr.className = "gear-advisor__row";
+
+  const tdSlot = document.createElement("td");
+  tdSlot.className = "gear-advisor__cell";
+  tdSlot.textContent = row.slot;
+  tr.appendChild(tdSlot);
+
+  const tdAction = document.createElement("td");
+  tdAction.className = "gear-advisor__cell";
+
+  function fmtDamage(dice?: string, avg?: number): string {
+    if (!dice) return "";
+    return avg ? `[${dice} (ср. ${avg.toFixed(1)})]` : `[${dice}]`;
+  }
+
+  function fmtArmor(ac?: number, armor?: number): string {
+    const parts: string[] = [];
+    if (ac) parts.push(`AC ${ac}`);
+    if (armor) parts.push(`броня ${armor}`);
+    return parts.length ? `[${parts.join(", ")}]` : "";
+  }
+
+  const itemStats = fmtDamage(row.damageDice, row.damageAvg) || fmtArmor(row.itemAc, row.itemArmor);
+  const itemLabel = itemStats ? `${row.itemName ?? ""} ${itemStats}` : (row.itemName ?? "");
+
+  if (row.action === "keep") {
+    tr.classList.add("gear-advisor__row--keep");
+    tdAction.textContent = "оставить";
+  } else if (row.action === "no_upgrade") {
+    tr.classList.add("gear-advisor__row--keep");
+    tdAction.textContent = "оставить (нет улучшений)";
+  } else if (row.action === "equip") {
+    tr.classList.add("gear-advisor__row--equip");
+    tdAction.textContent = `надеть: ${itemLabel}`;
+  } else if (row.action === "buy") {
+    const numStr = row.shopNumber != null ? `${row.shopNumber}` : "";
+    const priceStr = row.price != null ? ` [${row.price} кун]` : "";
+    if (row.canAfford) {
+      tr.classList.add("gear-advisor__row--buy");
+      tdAction.textContent = `базар купить ${numStr}${priceStr}: ${itemLabel}`.trim();
+    } else {
+      tr.classList.add("gear-advisor__row--buy-cant");
+      tdAction.textContent = `базар купить ${numStr}${priceStr} (не хватает): ${itemLabel}`.trim();
+    }
+  }
+  tr.appendChild(tdAction);
+
+  const tdCurrent = document.createElement("td");
+  tdCurrent.className = "gear-advisor__cell gear-advisor__cell--current";
+  if (row.currentItemName) {
+    const curStats = fmtDamage(row.currentDamageDice, row.currentDamageAvg)
+      || fmtArmor(row.currentAc, row.currentArmor);
+    tdCurrent.textContent = curStats
+      ? `${row.currentItemName} ${curStats}`
+      : row.currentItemName;
+  } else {
+    tdCurrent.textContent = "—";
+  }
+  tr.appendChild(tdCurrent);
+
+  if ((row.action === "buy" || row.action === "equip") && row.canAfford) {
+    const tdApply = document.createElement("td");
+    tdApply.className = "gear-advisor__cell gear-advisor__cell--apply";
+    const applyBtn = document.createElement("button");
+    applyBtn.className = "button-secondary button-small";
+    applyBtn.textContent = "Применить";
+    applyBtn.addEventListener("click", () => {
+      const cmds: string[] = [];
+      if (row.action === "buy" && row.shopNumber != null) {
+        cmds.push(`базар купить ${row.shopNumber}`);
+      }
+      if (row.currentItemName) {
+        cmds.push(`снять !${row.currentItemName}!`);
+      }
+      if (row.itemName) {
+        const wearCmd = row.slot === "правая рука" ? "вооруж" : row.slot === "левая рука" ? "держ" : "надеть";
+        cmds.push(`${wearCmd} !${row.itemName}!`);
       }
       if (cmds.length > 0) {
         sendClientEvent({ type: "gear_apply", payload: { commands: cmds } });
@@ -2009,8 +2498,8 @@ function createSocket(): WebSocket {
         farmFleeThresholdPercent = message.payload.fleeThresholdPercent;
         farmLootValues = message.payload.lootValues;
         farmPeriodicAction = message.payload.periodicAction;
-        farmTargetsInput.value = farmTargetValues.join(", ");
         renderFarmButton();
+renderMapRecordingButton();
         break;
       case "stats_update":
         currentStats = message.payload;
@@ -2059,6 +2548,11 @@ function createSocket(): WebSocket {
         triggerStandUpCheckbox.checked = message.payload.standUp;
         triggerRearmCheckbox.checked = message.payload.rearm;
         triggerCurseCheckbox.checked = message.payload.curse;
+        triggerLightCheckbox.checked = message.payload.light;
+        break;
+      case "map_recording_state":
+        mapRecordingEnabled = message.payload.enabled;
+        renderMapRecordingButton();
         break;
       case "items_data":
         renderItemDbTable(message.payload.items);
@@ -2115,6 +2609,18 @@ function createSocket(): WebSocket {
           gearAdvisorSellList.classList.add("gear-advisor__sell--hidden");
         }
         break;
+      case "bazaar_scan_progress":
+        bazaarAdvisorStatus.textContent = message.payload.message;
+        break;
+      case "bazaar_scan_result": {
+        bazaarAdvisorStatus.textContent = "";
+        bazaarAdvisorCoins.textContent = `Монеты: ${message.payload.coins}`;
+        bazaarAdvisorTableBody.innerHTML = "";
+        for (const row of message.payload.rows) {
+          bazaarAdvisorTableBody.appendChild(renderBazaarAdvisorRow(row));
+        }
+        break;
+      }
       case "repair_state":
         repairBtn.disabled = message.payload.running;
         repairBtn.title = message.payload.running
@@ -2124,6 +2630,28 @@ function createSocket(): WebSocket {
       case "auto_spells_settings_data": {
         const payload = message.payload;
         if (payload !== null) onAutoSpellsData(payload);
+        break;
+      }
+      case "sneak_settings_data": {
+        const payload = message.payload;
+        if (payload !== null) onSneakData(payload);
+        break;
+      }
+      case "wiki_item_search_result": {
+        const p = message.payload;
+        itemDbWikiBtn.disabled = false;
+        if (!p.found) {
+          itemDbWikiResult.classList.add("items-modal__wiki-result--error");
+          itemDbWikiResult.textContent = p.error ?? `«${p.query}» — не найдено на вики`;
+        } else {
+          itemDbWikiResult.classList.remove("items-modal__wiki-result--error");
+          const parts: string[] = [];
+          if (p.name) parts.push(`${p.name}${p.itemType ? ` (${p.itemType})` : ""}`);
+          if (p.text) parts.push(p.text);
+          if (p.loadLocation) parts.push(`Лоад: ${p.loadLocation}`);
+          itemDbWikiResult.textContent = parts.join("\n\n") || "Найдено, но карточка пуста";
+          sendClientEvent({ type: "item_db_get" });
+        }
         break;
       }
     }
@@ -2331,6 +2859,10 @@ clearOutputButton.addEventListener("click", () => {
   ansiState.style = createDefaultTerminalStyle();
 });
 
+chatClearButton.addEventListener("click", () => {
+  chatOutputElement.replaceChildren();
+});
+
 resetMapButton.addEventListener("click", () => {
   sendClientEvent({ type: "map_reset_area" });
 });
@@ -2361,7 +2893,7 @@ farmToggleButton.addEventListener("click", () => {
       type: "farm_toggle",
       payload: {
         enabled: false,
-        targetValues: parseFarmTargetValues(farmTargetsInput.value),
+        targetValues: farmTargetValues,
         healCommands: farmHealCommands,
         healThresholdPercent: farmHealThresholdPercent,
         fleeCommand: farmFleeCommand,
@@ -2442,8 +2974,29 @@ itemDbButton.addEventListener("click", openItemDbModal);
 itemDbModalClose.addEventListener("click", closeItemDbModal);
 itemDbModalBackdrop.addEventListener("click", closeItemDbModal);
 
+itemDbTableBody.addEventListener("click", (e) => {
+  const tr = (e.target as HTMLElement).closest<HTMLTableRowElement>("tr.items-modal__row");
+  if (!tr) return;
+  const item = itemDbRowMap.get(tr);
+  if (!item) return;
+  openItemDetailModal(item);
+});
+
+itemDetailModalClose.addEventListener("click", closeItemDetailModal);
+itemDetailModalCloseFooter.addEventListener("click", closeItemDetailModal);
+itemDetailModalBackdrop.addEventListener("click", closeItemDetailModal);
+
+mapRecordingButton.addEventListener("click", () => {
+  mapRecordingEnabled = !mapRecordingEnabled;
+  sendClientEvent({ type: "map_recording_toggle", payload: { enabled: mapRecordingEnabled } });
+  renderMapRecordingButton();
+});
+
 gearAdvisorButton.addEventListener("click", openGearAdvisorModal);
 gearAdvisorModalClose.addEventListener("click", closeGearAdvisorModal);
+
+bazaarAdvisorButton.addEventListener("click", openBazaarAdvisorModal);
+bazaarAdvisorModalClose.addEventListener("click", closeBazaarAdvisorModal);
 
 itemDbTabs.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
@@ -2455,6 +3008,20 @@ itemDbTabs.addEventListener("click", (e) => {
 });
 
 itemDbSearch.addEventListener("input", applyItemDbFilter);
+
+function doWikiSearch(): void {
+  const query = itemDbWikiInput.value.trim();
+  if (!query) return;
+  itemDbWikiResult.textContent = "Ищу...";
+  itemDbWikiResult.classList.remove("items-modal__wiki-result--hidden", "items-modal__wiki-result--error");
+  itemDbWikiBtn.disabled = true;
+  sendClientEvent({ type: "wiki_item_search", payload: { query } });
+}
+
+itemDbWikiBtn.addEventListener("click", doWikiSearch);
+itemDbWikiInput.addEventListener("keydown", (e: KeyboardEvent) => {
+  if (e.key === "Enter") doWikiSearch();
+});
 
 triggerDodgeCheckbox.addEventListener("change", () => {
   currentTriggerState = { ...currentTriggerState, dodge: triggerDodgeCheckbox.checked };
@@ -2476,6 +3043,11 @@ triggerCurseCheckbox.addEventListener("change", () => {
   sendClientEvent({ type: "triggers_toggle", payload: { curse: triggerCurseCheckbox.checked } });
 });
 
+triggerLightCheckbox.addEventListener("change", () => {
+  currentTriggerState = { ...currentTriggerState, light: triggerLightCheckbox.checked };
+  sendClientEvent({ type: "triggers_toggle", payload: { light: triggerLightCheckbox.checked } });
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !farmSettingsModal.classList.contains("farm-modal--hidden")) {
     closeFarmSettingsModal();
@@ -2489,8 +3061,14 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !itemDbModal.classList.contains("farm-modal--hidden")) {
     closeItemDbModal();
   }
+  if (e.key === "Escape" && !itemDetailModal.classList.contains("farm-modal--hidden")) {
+    closeItemDetailModal();
+  }
   if (e.key === "Escape" && !gearAdvisorPanel.classList.contains("gear-advisor-panel--hidden")) {
     closeGearAdvisorModal();
+  }
+  if (e.key === "Escape" && !bazaarAdvisorPanel.classList.contains("gear-advisor-panel--hidden")) {
+    closeBazaarAdvisorModal();
   }
   if (e.key === "Escape" && !mapContextMenu.classList.contains("map-context-menu--hidden")) {
     closeMapContextMenu();
@@ -2829,6 +3407,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 const onAutoSpellsData = initAutoSpellsUi({ sendClientEvent });
+const onSneakData = initSneakUi({ sendClientEvent });
 
 renderFarmButton();
 updateActionBadges();
