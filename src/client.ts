@@ -336,6 +336,7 @@ type ClientEvent =
   | { type: "sneak_settings_save"; payload: import("./auto-spells-ui.ts").AutoSpellsSettings }
   | { type: "wiki_item_search"; payload: { query: string } };
 
+import type { SurvivalSettings } from "./events.type.ts";
 import { initAutoSpellsUi } from "./auto-spells-ui.ts";
 import { initSneakUi } from "./sneak-ui.ts";
 
@@ -509,17 +510,6 @@ interface FarmSettings {
   periodicActionGotoAlias2: string;
   periodicActionIntervalMin: number;
   useStab: boolean;
-}
-
-interface SurvivalSettings {
-  container: string;
-  foodItems: string;
-  flaskItems: string;
-  buyFoodItem: string;
-  buyFoodMax: number;
-  buyFoodAlias: string;
-  fillFlaskAlias: string;
-  fillFlaskSource: string;
 }
 
 interface FarmRuntimeStats {

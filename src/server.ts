@@ -4,31 +4,28 @@ import { profiles } from "./profiles";
 import { sql } from "./db";
 import { createCombatState } from "./combat-state";
 import { createFarmController } from "./farm-script";
-import type { PeriodicActionConfig } from "./farm-script";
 import { createSurvivalController, normalizeSurvivalConfig, parseInspectItems } from "./survival-script";
 import { findPath } from "./map/pathfinder";
 import type { PathStep } from "./map/pathfinder";
 import { createParserState, feedText } from "./map/parser";
 import { createMapStore } from "./map/store";
-import type { FarmZoneSettings, SurvivalSettings, TriggerSettings, GameItem, AutoSpellsSettings, SneakSettings } from "./map/store";
 import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker";
-import type { Direction, MapAlias, MapSnapshot } from "./map/types";
+import type { Direction } from "./map/types";
 import { createTriggers } from "./triggers";
-import type { TriggerState } from "./triggers";
 import { runGearScan } from "./gear-scan";
-import type { GearScanRow, SellItem } from "./gear-scan";
 import { runBazaarScan } from "./bazaar-scan";
 import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache } from "./wiki";
 import { createRepairController } from "./repair-script";
 import { createSpellController } from "./spell-script";
-import type { SpellControllerConfig } from "./spell-script";
 import { createSneakController } from "./sneak-script";
-import type { SneakControllerConfig } from "./sneak-script";
+import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, TriggerState, MapAlias, MapSnapshot, PeriodicActionConfig, GearScanRow, SellItem, GameItem } from "./events.type.ts";
+import { normalizeFarmZoneSettings, normalizeSurvivalSettings, normalizeAutoSpellsSettings, normalizeSneakSettings } from "./settings-normalizers.ts";
 
 type MudSocket = Awaited<ReturnType<typeof Bun.connect>>;
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
 
 const IAC = 255;
+
 const DONT = 254;
 const DO = 253;
 const WONT = 252;
@@ -56,241 +53,6 @@ function saveLastProfileId(profileId: string): void {
   } catch {
   }
 }
-
-interface WsData {
-  sessionId: string;
-}
-
-interface ConnectPayload {
-  host?: string;
-  port?: number;
-  tls?: boolean;
-  startupCommands?: string[];
-  commandDelayMs?: number;
-  profileId?: string;
-}
-
-type ClientEvent =
-  | { type: "connect"; payload?: ConnectPayload }
-  | { type: "send"; payload?: { command?: string } }
-  | { type: "disconnect" }
-  | { type: "map_reset" }
-  | { type: "map_reset_area" }
-   | {
-      type: "farm_toggle";
-      payload?: {
-        enabled?: boolean;
-        targetValues?: string[];
-        healCommands?: string[];
-        healThresholdPercent?: number;
-        fleeCommand?: string;
-        fleeThresholdPercent?: number;
-        lootValues?: string[];
-        periodicAction?: {
-          enabled?: boolean;
-          gotoAlias1?: string;
-          commands?: string[];
-          commandDelayMs?: number;
-          gotoAlias2?: string;
-          intervalMs?: number;
-        };
-        useStab?: boolean;
-      };
-    }
-  | { type: "alias_set"; payload?: { vnum?: number; alias?: string } }
-  | { type: "alias_delete"; payload?: { vnum?: number } }
-  | { type: "navigate_to"; payload?: { vnums?: number[] } }
-  | { type: "goto_and_run"; payload?: { vnums?: number[]; commands?: string[]; action?: "buy_food" | "fill_flask" } }
-  | { type: "navigate_stop" }
-  | { type: "farm_settings_get"; payload?: { zoneId?: number } }
-  | {
-      type: "farm_settings_save";
-      payload?: {
-        zoneId?: number;
-        settings?: Partial<FarmZoneSettings>;
-      };
-    }
-  | { type: "survival_settings_get" }
-  | {
-      type: "survival_settings_save";
-      payload?: Partial<SurvivalSettings>;
-    }
-  | { type: "triggers_toggle"; payload?: Partial<TriggerState> }
-  | { type: "item_db_get" }
-  | { type: "room_auto_command_set"; payload?: { vnum?: number; command?: string } }
-  | { type: "room_auto_command_delete"; payload?: { vnum?: number } }
-  | { type: "room_auto_commands_get" }
-  | { type: "gear_scan_start" }
-  | { type: "bazaar_scan_start" }
-  | { type: "gear_sell"; payload: { sellCommand: string } }
-  | { type: "gear_drop"; payload: { dropCommand: string } }
-  | { type: "gear_apply"; payload: { commands: string[] } }
-  | { type: "repair_start" }
-  | { type: "auto_spells_settings_get" }
-  | {
-      type: "auto_spells_settings_save";
-      payload?: Partial<AutoSpellsSettings>;
-    }
-  | { type: "sneak_settings_get" }
-  | {
-      type: "sneak_settings_save";
-      payload?: Partial<SneakSettings>;
-    }
-  | { type: "map_recording_toggle"; payload?: { enabled?: boolean } }
-  | { type: "wiki_item_search"; payload?: { query?: string } };
-
-type ServerEvent =
-  | {
-      type: "status";
-      payload: {
-        state: "idle" | "connecting" | "connected" | "disconnected" | "error";
-        message: string;
-      };
-    }
-  | {
-    type: "defaults";
-    payload: {
-      autoConnect: boolean;
-      host: string;
-      port: number;
-      tls: boolean;
-        startupCommands: string[];
-        commandDelayMs: number;
-      };
-    }
-  | {
-      type: "output";
-      payload: {
-        text: string;
-      };
-    }
-  | {
-      type: "error";
-      payload: {
-        message: string;
-      };
-    }
-  | {
-      type: "map_snapshot";
-      payload: MapSnapshot;
-    }
-  | {
-      type: "map_update";
-      payload: MapSnapshot;
-    }
-  | {
-      type: "farm_state";
-      payload: {
-        enabled: boolean;
-        zoneId: number | null;
-        pendingActivation: boolean;
-        targetValues: string[];
-        healCommands: string[];
-        healThresholdPercent: number;
-        fleeCommand: string;
-        fleeThresholdPercent: number;
-        lootValues: string[];
-        periodicAction: PeriodicActionConfig;
-      };
-    }
-  | {
-      type: "stats_update";
-      payload: {
-        hp: number;
-        hpMax: number;
-        energy: number;
-        energyMax: number;
-      };
-    }
-  | {
-      type: "aliases_snapshot";
-      payload: {
-        aliases: MapAlias[];
-      };
-    }
-  | {
-      type: "navigation_state";
-      payload: {
-        active: boolean;
-        targetVnum: number | null;
-        totalSteps: number;
-        currentStep: number;
-      };
-    }
-  | {
-      type: "farm_settings_data";
-      payload: {
-        zoneId: number;
-        settings: FarmZoneSettings | null;
-      };
-    }
-  | {
-      type: "survival_settings_data";
-      payload: SurvivalSettings | null;
-    }
-  | {
-      type: "survival_status";
-      payload: {
-        foodEmpty: boolean;
-        flaskEmpty: boolean;
-      };
-    }
-  | {
-      type: "triggers_state";
-      payload: TriggerState;
-    }
-  | {
-      type: "items_data";
-      payload: {
-        items: GameItem[];
-      };
-    }
-  | {
-      type: "room_auto_commands_snapshot";
-      payload: {
-        entries: Array<{ vnum: number; command: string }>;
-      };
-    }
-  | { type: "gear_scan_progress"; payload: { message: string } }
-  | {
-      type: "gear_scan_result";
-      payload: {
-        coins: number;
-        rows: Array<GearScanRow>;
-        sellItems: Array<SellItem>;
-      };
-    }
-  | { type: "bazaar_scan_progress"; payload: { message: string } }
-  | {
-      type: "bazaar_scan_result";
-      payload: {
-        coins: number;
-        rows: Array<GearScanRow>;
-        sellItems: Array<SellItem>;
-      };
-    }
-  | { type: "repair_state"; payload: { running: boolean; message: string } }
-  | {
-      type: "auto_spells_settings_data";
-      payload: AutoSpellsSettings | null;
-    }
-  | {
-      type: "sneak_settings_data";
-      payload: SneakSettings | null;
-    }
-  | { type: "map_recording_state"; payload: { enabled: boolean } }
-  | {
-      type: "wiki_item_search_result";
-      payload: {
-        query: string;
-        found: boolean;
-        name?: string;
-        itemType?: string;
-        text?: string;
-        loadLocation?: string;
-        error?: string;
-      };
-    };
 
 interface Session {
   decoder: TextDecoder;
@@ -2118,84 +1880,4 @@ console.log(`MUD client server listening on http://${server.hostname}:${server.p
 
 if (runtimeConfig.autoConnect) {
   void connectToMud(null, { profileId: readLastProfileId() });
-}
-
-function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZoneSettings {
-  return {
-    targets: typeof raw.targets === "string" ? raw.targets : "",
-    healCommands: typeof raw.healCommands === "string" ? raw.healCommands : "",
-    healThreshold: typeof raw.healThreshold === "number" && Number.isFinite(raw.healThreshold) ? raw.healThreshold : 50,
-    fleeCommand: typeof raw.fleeCommand === "string" ? raw.fleeCommand : "",
-    fleeThreshold: typeof raw.fleeThreshold === "number" && Number.isFinite(raw.fleeThreshold) ? raw.fleeThreshold : 0,
-    loot: typeof raw.loot === "string" ? raw.loot : "",
-    periodicActionEnabled: raw.periodicActionEnabled === true,
-    periodicActionGotoAlias1: typeof raw.periodicActionGotoAlias1 === "string" ? raw.periodicActionGotoAlias1 : "",
-    periodicActionCommand: typeof raw.periodicActionCommand === "string" ? raw.periodicActionCommand : "",
-    periodicActionCommandDelayMs: typeof raw.periodicActionCommandDelayMs === "number" && Number.isFinite(raw.periodicActionCommandDelayMs) ? raw.periodicActionCommandDelayMs : 0,
-    periodicActionGotoAlias2: typeof raw.periodicActionGotoAlias2 === "string" ? raw.periodicActionGotoAlias2 : "",
-    periodicActionIntervalMin: typeof raw.periodicActionIntervalMin === "number" && Number.isFinite(raw.periodicActionIntervalMin) ? raw.periodicActionIntervalMin : 30,
-    survivalEnabled: raw.survivalEnabled === true,
-    useStab: raw.useStab !== false,
-  };
-}
-
-function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSettings {
-  return {
-    container: typeof raw.container === "string" ? raw.container : "",
-    foodItems: typeof raw.foodItems === "string" ? raw.foodItems : "",
-    flaskItems: typeof raw.flaskItems === "string" ? raw.flaskItems : "",
-    buyFoodItem: typeof raw.buyFoodItem === "string" ? raw.buyFoodItem : "",
-    buyFoodMax: typeof raw.buyFoodMax === "number" && Number.isFinite(raw.buyFoodMax) && raw.buyFoodMax > 0 ? Math.floor(raw.buyFoodMax) : 20,
-    buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : "",
-    fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : "",
-    fillFlaskSource: typeof raw.fillFlaskSource === "string" ? raw.fillFlaskSource : "",
-  };
-}
-
-function normalizeAutoSpellsSettings(raw: Partial<AutoSpellsSettings>): SpellControllerConfig {
-  const spells = Array.isArray(raw.spells)
-    ? raw.spells
-        .filter((s): s is { name: string; command: string; enabled: boolean } =>
-          typeof s === "object" && s !== null &&
-          typeof s.name === "string" && s.name.trim().length > 0 &&
-          typeof s.command === "string" && s.command.trim().length > 0,
-        )
-        .map((s) => ({
-          name: s.name.trim(),
-          command: s.command.trim(),
-          enabled: s.enabled === true,
-        }))
-    : [];
-  const hasEnabledSpell = spells.some((s) => s.enabled);
-  return {
-    enabled: hasEnabledSpell,
-    spells,
-    checkIntervalMs: typeof raw.checkIntervalMs === "number" && Number.isFinite(raw.checkIntervalMs) && raw.checkIntervalMs >= 10_000
-      ? raw.checkIntervalMs
-      : 60_000,
-  };
-}
-
-function normalizeSneakSettings(raw: Partial<SneakSettings>): SneakControllerConfig {
-  const spells = Array.isArray(raw.spells)
-    ? raw.spells
-        .filter((s): s is { name: string; command: string; enabled: boolean } =>
-          typeof s === "object" && s !== null &&
-          typeof s.name === "string" && s.name.trim().length > 0 &&
-          typeof s.command === "string" && s.command.trim().length > 0,
-        )
-        .map((s) => ({
-          name: s.name.trim(),
-          command: s.command.trim(),
-          enabled: s.enabled === true,
-        }))
-    : [];
-  const hasEnabledSpell = spells.some((s) => s.enabled);
-  return {
-    enabled: hasEnabledSpell,
-    spells,
-    checkIntervalMs: typeof raw.checkIntervalMs === "number" && Number.isFinite(raw.checkIntervalMs) && raw.checkIntervalMs >= 5_000
-      ? raw.checkIntervalMs
-      : 20_000,
-  };
 }
