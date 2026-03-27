@@ -119,8 +119,10 @@ export interface GearItemCard {
   damageDice: string | null;
   canWearRight: boolean;
   canWearLeft: boolean;
+  canWearBoth: boolean;
   rightHandReqs: StatRequirement[];
   leftHandReqs: StatRequirement[];
+  bothHandReqs: StatRequirement[];
   wearReqs: StatRequirement[];
   material: string;
   isMetal: boolean;
@@ -303,6 +305,8 @@ export function parseGearItemCard(html: string, id: number): GearItemCard | null
   const leftHandReqs: StatRequirement[] = [];
   const wearReqs: StatRequirement[] = [];
 
+  const bothHandReqsDirect: StatRequirement[] = [];
+
   for (const line of rawText.split("\n")) {
     const lineReqs = parseStatReqs(line);
     if (!lineReqs.length) continue;
@@ -310,6 +314,8 @@ export function parseGearItemCard(html: string, id: number): GearItemCard | null
       rightHandReqs.push(...lineReqs);
     } else if (/левую руку/i.test(line)) {
       leftHandReqs.push(...lineReqs);
+    } else if (/обе руки/i.test(line)) {
+      bothHandReqsDirect.push(...lineReqs);
     } else {
       wearReqs.push(...lineReqs);
     }
@@ -327,8 +333,10 @@ export function parseGearItemCard(html: string, id: number): GearItemCard | null
     damageDice,
     canWearRight: /правую руку/i.test(rawText),
     canWearLeft: /левую руку/i.test(rawText),
+    canWearBoth: /обе руки/i.test(rawText),
     rightHandReqs,
     leftHandReqs,
+    bothHandReqs: bothHandReqsDirect,
     wearReqs,
     material,
     isMetal,
@@ -449,8 +457,10 @@ export function gearItemCardToData(card: GearItemCard): Record<string, unknown> 
     damageDice: card.damageDice,
     canWearRight: card.canWearRight,
     canWearLeft: card.canWearLeft,
+    canWearBoth: card.canWearBoth,
     rightHandReqs: card.rightHandReqs,
     leftHandReqs: card.leftHandReqs,
+    bothHandReqs: card.bothHandReqs,
     wearReqs: card.wearReqs,
     material: card.material,
     isMetal: card.isMetal,
@@ -474,6 +484,7 @@ export function gearItemCardFromCache(
   data: Record<string, unknown>,
 ): GearItemCard | null {
   if (typeof data.id !== "number") return null;
+  if (itemType === "ОРУЖИЕ" && !("canWearBoth" in data)) return null;
   return {
     id: data.id,
     name,
@@ -486,8 +497,15 @@ export function gearItemCardFromCache(
     damageDice: typeof data.damageDice === "string" ? data.damageDice : null,
     canWearRight: data.canWearRight === true,
     canWearLeft: data.canWearLeft === true,
+    canWearBoth: data.canWearBoth === true,
     rightHandReqs: isStatReqArray(data.rightHandReqs) ? data.rightHandReqs : [],
     leftHandReqs: isStatReqArray(data.leftHandReqs) ? data.leftHandReqs : [],
+    bothHandReqs: (() => {
+      const stored = isStatReqArray(data.bothHandReqs) ? data.bothHandReqs : [];
+      if (stored.length > 0) return stored;
+      if (data.canWearBoth === true) return isStatReqArray(data.wearReqs) ? data.wearReqs : [];
+      return [];
+    })(),
     wearReqs: isStatReqArray(data.wearReqs) ? data.wearReqs : [],
     material: typeof data.material === "string" ? data.material : "НЕИЗВЕСТНО",
     isMetal: data.isMetal === true,
@@ -702,4 +720,145 @@ export async function analyzeGear(itemNames: string[]): Promise<AnalyzeResult> {
     .join("; ");
 
   return { recommendations, skipped, notFound, buyCommands, wearCommands };
+}
+
+export type PartialGearItemCard = Partial<Omit<GearItemCard, "id" | "name" | "itemType">>;
+
+export function parseMudIdentifyBlock(block: string): { name: string; itemType: string; partial: PartialGearItemCard } | null {
+  const stripped = block.replace(/\u001b\[[0-9;]*m/g, "").replace(/\r/g, "");
+  const nameMatch = /Предмет\s+"([^"]+)",\s+тип\s*:\s*(\S+)/.exec(stripped);
+  if (!nameMatch) return null;
+
+  const name = nameMatch[1].trim();
+  const itemType = nameMatch[2].trim();
+  const partial: PartialGearItemCard = {};
+
+  const classMatch = /Принадлежит к классу\s+"([^"]+)"/i.exec(stripped);
+  if (classMatch) partial.weaponClass = classMatch[1].toLowerCase();
+
+  const damM = /среднее\s+([\d.]+)/i.exec(stripped);
+  const damM2 = /'(\d+)D(\d+)'/i.exec(stripped);
+  if (damM) partial.damageAvg = parseFloat(damM[1]);
+  if (damM2) {
+    partial.damageDice = `${damM2[1]}D${damM2[2]} (ср. ${((parseInt(damM2[1]) * (parseInt(damM2[2]) + 1)) / 2).toFixed(1)})`;
+    if (!partial.damageAvg) partial.damageAvg = (parseInt(damM2[1]) * (parseInt(damM2[2]) + 1)) / 2;
+  }
+
+  const matMatch = /Материал\s*:\s*([A-ZА-ЯЁa-zа-яё]+)/i.exec(stripped);
+  if (matMatch) {
+    partial.material = matMatch[1];
+    partial.isMetal = /сталь|железо|булат|бронза|серебро|золото|медь|олово|латунь|мифрил/i.test(matMatch[1]);
+  }
+
+  const remortsM = /Требует\s+перевоплощений\s*:\s*(\d+)/i.exec(stripped);
+  if (remortsM) partial.remorts = parseInt(remortsM[1]);
+
+  const rightHandReqs: StatRequirement[] = [];
+  const leftHandReqs: StatRequirement[] = [];
+  const bothHandReqs: StatRequirement[] = [];
+  const wearReqs: StatRequirement[] = [];
+
+  for (const line of stripped.split("\n")) {
+    const lineReqs = parseStatReqs(line);
+    if (!lineReqs.length) continue;
+    if (/правую руку/i.test(line)) {
+      rightHandReqs.push(...lineReqs);
+    } else if (/левую руку/i.test(line)) {
+      leftHandReqs.push(...lineReqs);
+    } else if (/обе руки/i.test(line)) {
+      bothHandReqs.push(...lineReqs);
+    } else {
+      wearReqs.push(...lineReqs);
+    }
+  }
+  partial.rightHandReqs = rightHandReqs;
+  partial.leftHandReqs = leftHandReqs;
+  partial.bothHandReqs = bothHandReqs;
+  partial.wearReqs = wearReqs;
+
+  partial.canWearRight = /правую руку/i.test(stripped);
+  partial.canWearLeft = /левую руку/i.test(stripped);
+  partial.canWearBoth = /обе руки/i.test(stripped);
+
+  const affectMatch = /Накладывает на вас аффекты:\s*(.+)/i.exec(stripped);
+  if (affectMatch) partial.affects = affectMatch[1].trim().split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+
+  const props: string[] = [];
+  const propRe = /(\S+)\s+(улучшает|ухудшает)\s+на\s+(\d+)/gi;
+  let pm: RegExpExecArray | null;
+  while ((pm = propRe.exec(stripped)) !== null) {
+    props.push(`${pm[1]} ${pm[2]} на ${pm[3]}`);
+  }
+  if (props.length > 0) partial.properties = props;
+
+  const forbM = /Неудобен\s*:\s*([^\n]+)/i.exec(stripped);
+  if (forbM && !/ничего/i.test(forbM[1])) {
+    partial.forbidden = forbM[1].split(/[,;!\s]+/).map(s => s.replace(/^!/, "").trim()).filter(Boolean);
+  }
+
+  return { name, itemType, partial };
+}
+
+export function mergeItemSources(
+  base: GearItemCard | null,
+  wiki: GearItemCard | null,
+  mud: PartialGearItemCard | null,
+): GearItemCard | null {
+  const foundation = wiki ?? base;
+  if (!foundation) return null;
+
+  const merged: GearItemCard = { ...foundation };
+
+  if (base && !wiki) {
+    merged.ac = base.ac;
+    merged.armor = base.armor;
+    merged.wearSlots = base.wearSlots;
+    merged.affects = base.affects;
+    merged.properties = base.properties;
+    merged.forbidden = base.forbidden;
+  }
+
+  if (wiki) {
+    merged.ac = wiki.ac;
+    merged.armor = wiki.armor;
+    merged.wearSlots = wiki.wearSlots;
+    merged.weaponClass = wiki.weaponClass;
+    merged.damageAvg = wiki.damageAvg;
+    merged.damageDice = wiki.damageDice;
+    merged.canWearRight = wiki.canWearRight;
+    merged.canWearLeft = wiki.canWearLeft;
+    merged.canWearBoth = wiki.canWearBoth;
+    merged.rightHandReqs = wiki.rightHandReqs;
+    merged.leftHandReqs = wiki.leftHandReqs;
+    merged.bothHandReqs = wiki.bothHandReqs;
+    merged.wearReqs = wiki.wearReqs;
+    merged.material = wiki.material;
+    merged.isMetal = wiki.isMetal;
+    merged.isShiny = wiki.isShiny;
+    merged.affects = wiki.affects;
+    merged.properties = wiki.properties;
+    merged.forbidden = wiki.forbidden;
+    merged.remorts = wiki.remorts;
+  }
+
+  if (mud) {
+    if (mud.weaponClass !== undefined) merged.weaponClass = mud.weaponClass;
+    if (mud.damageAvg !== undefined) merged.damageAvg = mud.damageAvg;
+    if (mud.damageDice !== undefined) merged.damageDice = mud.damageDice;
+    if (mud.canWearRight !== undefined) merged.canWearRight = mud.canWearRight;
+    if (mud.canWearLeft !== undefined) merged.canWearLeft = mud.canWearLeft;
+    if (mud.canWearBoth !== undefined) merged.canWearBoth = mud.canWearBoth;
+    if (mud.rightHandReqs !== undefined) merged.rightHandReqs = mud.rightHandReqs;
+    if (mud.leftHandReqs !== undefined) merged.leftHandReqs = mud.leftHandReqs;
+    if (mud.bothHandReqs !== undefined) merged.bothHandReqs = mud.bothHandReqs;
+    if (mud.wearReqs !== undefined) merged.wearReqs = mud.wearReqs;
+    if (mud.material !== undefined) merged.material = mud.material;
+    if (mud.isMetal !== undefined) merged.isMetal = mud.isMetal;
+    if (mud.affects !== undefined) merged.affects = mud.affects;
+    if (mud.properties !== undefined) merged.properties = mud.properties;
+    if (mud.forbidden !== undefined) merged.forbidden = mud.forbidden;
+    if (mud.remorts !== undefined) merged.remorts = mud.remorts;
+  }
+
+  return merged;
 }
