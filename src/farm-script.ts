@@ -899,8 +899,7 @@ function chooseNextDirection(
     }
   }
 
-  const choices = (adjacency.get(currentRoomId) ?? [])
-    .filter((c) => c.direction !== "up" && c.direction !== "down");
+  const choices = (adjacency.get(currentRoomId) ?? []);
 
   if (choices.length === 0) {
     return null;

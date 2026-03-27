@@ -11,8 +11,6 @@ const DRANK_REGEXP = /Вы выпили .+ из /i;
 const FLASK_FILLED_REGEXP = /Вы наполнили /i;
 const FLASK_EMPTY_REGEXP = /^Пусто\.$/im;
 const NOT_FOUND_REGEXP = /Вы не смогли это найти|Вы не видите .+ в |У вас нет '/i;
-const DARK_ROOM_REGEXP = /Слишком темно/i;
-const CANDLE_COOLDOWN_MS = 10_000;
 const CONSUME_COMMAND_DELAY_MS = 800;
 const INSPECT_TIMEOUT_MS = 2000;
 const ITEM_LINE_REGEXP = /^\s*(.+?)\s*(?:\[(\d+)\])?\s*$/;
@@ -63,7 +61,6 @@ interface SurvivalState {
   eatIterations: number;
   drinkIterations: number;
   eatNextTimer: ReturnType<typeof setTimeout> | null;
-  lastCandleAt: number;
 }
 
 export function normalizeSurvivalConfig(config: SurvivalConfig): SurvivalConfig {
@@ -102,7 +99,6 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     eatIterations: 0,
     drinkIterations: 0,
     eatNextTimer: null,
-    lastCandleAt: 0,
     config: {
       enabled: false,
       container: "",
@@ -129,7 +125,6 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
     state.drinkingKeyword = null;
     state.eatIterations = 0;
     state.drinkIterations = 0;
-    state.lastCandleAt = 0;
     cancelEatNextTimer();
     deps.onStatusChange({ foodEmpty: state.foodEmpty, flaskEmpty: state.flaskEmpty });
   }
@@ -156,18 +151,6 @@ export function createSurvivalController(deps: SurvivalControllerDependencies) {
 
     if (HUNGER_REGEXP.test(normalized)) state.hungry = true;
     if (THIRST_REGEXP.test(normalized)) state.thirsty = true;
-
-    if (DARK_ROOM_REGEXP.test(normalized)) {
-      const now = Date.now();
-      if (now - state.lastCandleAt >= CANDLE_COOLDOWN_MS) {
-        state.lastCandleAt = now;
-        deps.onLog("[survival] темно: создаём шар света");
-        deps.sendCommand("колд !созд.све");
-        setTimeout(() => {
-          deps.sendCommand("держ шар");
-        }, CONSUME_COMMAND_DELAY_MS);
-      }
-    }
 
     if (SATIATED_REGEXP.test(normalized) || TOO_FULL_REGEXP.test(normalized)) {
       cancelEatNextTimer();
