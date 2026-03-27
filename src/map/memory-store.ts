@@ -140,6 +140,12 @@ export function createMemoryMapStore(): MapStore {
     },
 
     async setAutoSpellsSettings(_profileId: string, _settings: unknown): Promise<void> {},
+
+    async getSneakSettings(_profileId: string) {
+      return null;
+    },
+
+    async setSneakSettings(_profileId: string, _settings: unknown): Promise<void> {},
   };
 }
 

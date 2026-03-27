@@ -46,6 +46,11 @@ export interface AutoSpellsSettings {
   checkIntervalMs: number;
 }
 
+export interface SneakSettings {
+  spells: AutoSpell[];
+  checkIntervalMs: number;
+}
+
 export interface GameItem {
   name: string;
   itemType: string;
@@ -78,6 +83,8 @@ export interface MapStore {
   setTriggerSettings(profileId: string, settings: TriggerSettings): Promise<void>;
   getAutoSpellsSettings(profileId: string): Promise<AutoSpellsSettings | null>;
   setAutoSpellsSettings(profileId: string, settings: AutoSpellsSettings): Promise<void>;
+  getSneakSettings(profileId: string): Promise<SneakSettings | null>;
+  setSneakSettings(profileId: string, settings: SneakSettings): Promise<void>;
   upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void>;
   getItemByName(name: string): Promise<GameItem | null>;
   getItems(): Promise<GameItem[]>;
@@ -117,6 +124,12 @@ interface ItemRow {
   data: Record<string, unknown>;
   first_seen: Date;
   last_seen: Date;
+}
+
+function parseItemData(raw: unknown): Record<string, unknown> {
+  const step1 = typeof raw === "string" ? JSON.parse(raw) : raw;
+  const step2 = typeof step1 === "string" ? JSON.parse(step1) : step1;
+  return step2 as Record<string, unknown>;
 }
 
 export function createMapStore(database: DatabaseClient): MapStore {
@@ -225,6 +238,14 @@ export function createMapStore(database: DatabaseClient): MapStore {
 
       await database`
         CREATE TABLE IF NOT EXISTS auto_spells_settings (
+          profile_id TEXT PRIMARY KEY,
+          settings JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS sneak_settings (
           profile_id TEXT PRIMARY KEY,
           settings JSONB NOT NULL,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -447,7 +468,7 @@ export function createMapStore(database: DatabaseClient): MapStore {
       return {
         name: row.name,
         itemType: row.item_type,
-        data: typeof row.data === "string" ? (JSON.parse(row.data) as Record<string, unknown>) : row.data,
+        data: parseItemData(row.data),
         firstSeen: row.first_seen,
         lastSeen: row.last_seen,
       };
@@ -462,7 +483,7 @@ export function createMapStore(database: DatabaseClient): MapStore {
       return rows.map((row: ItemRow): GameItem => ({
         name: row.name,
         itemType: row.item_type,
-        data: typeof row.data === "string" ? (JSON.parse(row.data) as Record<string, unknown>) : row.data,
+        data: parseItemData(row.data),
         firstSeen: row.first_seen,
         lastSeen: row.last_seen,
       }));
@@ -509,6 +530,28 @@ export function createMapStore(database: DatabaseClient): MapStore {
       const settingsJson = JSON.stringify(settings);
       await database`
         INSERT INTO auto_spells_settings (profile_id, settings, updated_at)
+        VALUES (${profileId}, ${settingsJson}::jsonb, NOW())
+        ON CONFLICT (profile_id)
+        DO UPDATE SET
+          settings = EXCLUDED.settings,
+          updated_at = NOW()
+      `;
+    },
+
+    async getSneakSettings(profileId: string): Promise<SneakSettings | null> {
+      const rows = await database<{ settings: SneakSettings }[]>`
+        SELECT settings FROM sneak_settings WHERE profile_id = ${profileId}
+      `;
+      const raw = rows[0]?.settings ?? null;
+      if (raw === null) return null;
+      if (typeof raw === "string") return JSON.parse(raw) as SneakSettings;
+      return raw;
+    },
+
+    async setSneakSettings(profileId: string, settings: SneakSettings): Promise<void> {
+      const settingsJson = JSON.stringify(settings);
+      await database`
+        INSERT INTO sneak_settings (profile_id, settings, updated_at)
         VALUES (${profileId}, ${settingsJson}::jsonb, NOW())
         ON CONFLICT (profile_id)
         DO UPDATE SET
