@@ -18,6 +18,7 @@
     "gear": "bun run scripts/gear-advisor.ts"
   },
   "devDependencies": {
+    "@ladybugdb/core": "^0.15.2",
     "bun-types": "latest",
     "gitnexus": "^1.4.9",
     "typescript": "^5.9.2"

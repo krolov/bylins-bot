@@ -56,6 +56,17 @@ describe("feedText", () => {
     ]);
   });
 
+  test("parses movement following an NPC", () => {
+    const state = createParserState();
+
+    expect(feedText(state, "Вы поплелись следом за Арнольдом на восток.\n")).toEqual([
+      {
+        kind: "movement",
+        direction: "east",
+      },
+    ]);
+  });
+
   test("parses blocked movement", () => {
     const state = createParserState();
 

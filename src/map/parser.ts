@@ -5,7 +5,7 @@ const ROOM_HEADER_REGEXP = /^(.+?)\s+\[(\d{3,})\]\s*$/;
 const EXITS_LINE_REGEXP = /^\[\s*(?:exits?|выходы?)\s*:\s*(.*?)\s*\]\s*$/i;
 const MOVEMENT_BLOCKED_REGEXP = /Вы не сможете туда пройти|Вам сюда нельзя|Нет такого выхода|Вы не можете идти/i;
 const DARK_ROOM_REGEXP = /^Слишком темно\b/i;
-const MOVEMENT_REGEXP = /Вы\s+(?:поплелись|пошли|побежали|полетели|поехали|поскакали|побрели|поплыли)\s+(?:на\s+)?(север|юг|восток|запад|вверх|вниз)\.?/i;
+const MOVEMENT_REGEXP = /Вы\s+(?:поплелись|пошли|побежали|полетели|поехали|поскакали|побрели|поплыли)(?:\s+следом\s+за\s+\S+)?\s+(?:на\s+)?(север|юг|восток|запад|вверх|вниз)\.?/i;
 
 const EXIT_TOKEN_TO_DIRECTION: Record<string, Direction> = {
   n: "north",

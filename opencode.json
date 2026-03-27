@@ -10,6 +10,11 @@
       "type": "local",
       "command": ["bash", ".opencode/bin/run-client-mcp.sh"],
       "enabled": true
+    },
+    "gitnexus": {
+      "type": "local",
+      "command": ["/root/.local/share/gitnexus-mcp/node_modules/.bin/gitnexus", "mcp"],
+      "enabled": true
     }
   }
 }
