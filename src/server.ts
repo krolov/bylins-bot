@@ -3,15 +3,18 @@ import { runtimeConfig } from "./config.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
 import { createFarmController } from "./farm-script.ts";
+import { createFarm2Controller } from "./farm2/index.ts";
 import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
 import type { PathStep } from "./map/pathfinder.ts";
 import { createParserState, feedText } from "./map/parser.ts";
 import { createMapStore } from "./map/store.ts";
 import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker.ts";
+import { createMover } from "./map/mover.ts";
 import type { Direction } from "./map/types.ts";
 import { createTriggers } from "./triggers.ts";
 import { runGearScan } from "./gear-scan.ts";
+import type { GearScoreEntry } from "./gear-scan.ts";
 import { runBazaarScan } from "./bazaar-scan.ts";
 import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache, searchAndCacheWikiItem } from "./wiki.ts";
 import { createRepairController } from "./repair-script.ts";
@@ -25,6 +28,7 @@ import type { Session } from "./mud-connection.ts";
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
 const LOG_DIR = "/var/log/bylins-bot";
 const LOG_FILE = `${LOG_DIR}/mud-traffic.log`;
+const GEAR_ADVISOR_LOG_FILE = `${LOG_DIR}/gear-advisor.log`;
 const LAST_PROFILE_FILE = `${LOG_DIR}/last-profile.txt`;
 const MAX_OUTPUT_CHUNKS = 200;
 const NAVIGATION_STEP_TIMEOUT_MS = 3000;
@@ -84,6 +88,16 @@ let activeProfileId: string = readLastProfileId();
 const recentOutputChunks: string[] = [];
 const parserState = createParserState();
 const trackerState = createTrackerState();
+const mover = createMover({
+  sendCommand: (command) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "mover");
+  },
+  onLog: (message) => {
+    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+    broadcastServerEvent({ type: "status", payload: { state: sharedSession.state, message } });
+  },
+});
 let mapRecordingEnabled = true;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
@@ -127,6 +141,35 @@ const farmController = createFarmController({
         state: sharedSession.state,
         message,
       },
+    });
+  },
+});
+const farm2Controller = createFarm2Controller({
+  getCurrentRoomId: () => trackerState.currentRoomId,
+  isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
+  getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
+  combatState,
+  sendCommand: (command) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "farm2-script");
+  },
+  move: (direction) => mover.move(direction, trackerState.currentRoomId),
+  reinitRoom: () => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "farm2-script");
+  },
+  getZoneSettings: (zoneId) => mapStore.getFarmSettings(zoneId),
+  getMobCombatNamesByZone: (zoneId) => mapStore.getMobCombatNamesByZone(zoneId),
+  getCombatNameByRoomName: (roomName) => mapStore.getCombatNameByRoomName(roomName),
+  linkMobRoomAndCombatName: (roomName, combatName, vnum) => mapStore.saveMobRoomName(roomName, vnum, combatName),
+  onStateChange: (farm2State) => {
+    broadcastServerEvent({ type: "farm2_state", payload: farm2State });
+  },
+  onLog: (message) => {
+    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+    broadcastServerEvent({
+      type: "status",
+      payload: { state: sharedSession.state, message },
     });
   },
 });
@@ -286,6 +329,7 @@ const MAX_STATS_REGEXP = /Вы можете выдержать \d+\((\d+)\) ед
 // Строка промпта после strip ANSI: «50H 86M 1421o Зауч:0 ОЗ:0 2L 5G Вых:СВЮЗ>»
 const PROMPT_STATS_REGEXP = /(\d+)H\s+(\d+)M\s+\d+o\s+Зауч:\d+/;
 const ANSI_ESCAPE_REGEXP = /\u001b\[[0-9;]*m/g;
+const COMBAT_PROMPT_MOB_REGEXP = /\[([^\]:]+):[^\]]+\]/g;
 
 let statsHp = 0;
 let statsHpMax = 0;
@@ -381,7 +425,7 @@ async function handleItemIdentifyBuffer(chunk: string): Promise<void> {
   } catch {
   }
 
-  const merged = mergeItemSources(baseCard, wikiCard, mudParsed.partial);
+  const merged = mergeItemSources(baseCard, wikiCard, mudParsed.partial, mudParsed.name, mudParsed.itemType);
   if (!merged) return;
 
   await mapStore.upsertItem(nameLower, mudParsed.itemType, gearItemCardToData(merged));
@@ -426,6 +470,13 @@ function parseAndBroadcastStats(text: string): void {
     });
 
     farmController.updateStats({
+      hp: statsHp,
+      hpMax: statsHpMax,
+      energy: statsEnergy,
+      energyMax: statsEnergyMax,
+    });
+
+    farm2Controller.updateStats({
       hp: statsHp,
       hpMax: statsHpMax,
       energy: statsEnergy,
@@ -490,6 +541,11 @@ function sendDefaults(ws: BunServerWebSocket): void {
   });
 
   sendServerEvent(ws, {
+    type: "farm2_state",
+    payload: farm2Controller.getState(),
+  });
+
+  sendServerEvent(ws, {
     type: "triggers_state",
     payload: triggers.getState(),
   });
@@ -543,6 +599,10 @@ function sanitizeLogText(text: string): string {
 
 function appendLogLine(line: string): void {
   appendFileSync(LOG_FILE, `${line}\n`, "utf8");
+}
+
+function appendGearAdvisorLog(line: string): void {
+  appendFileSync(GEAR_ADVISOR_LOG_FILE, `${line}\n`, "utf8");
 }
 
 function logEvent(
@@ -611,6 +671,7 @@ function resetMapState(): void {
   trackerState.currentRoomId = null;
   trackerState.pendingMove = null;
   farmController.setEnabled(false);
+  farm2Controller.setEnabled(false);
 }
 
 async function getCurrentMapSnapshot(): Promise<MapSnapshot> {
@@ -869,11 +930,44 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
   const events = feedText(parserState, text);
   const previousRoomId = trackerState.currentRoomId;
 
+  const mobsInRoom: string[] = [];
+  for (const event of events) {
+    if (event.kind === "mobs_in_room") {
+      for (const name of event.mobs) {
+        if (!mobsInRoom.includes(name)) mobsInRoom.push(name);
+      }
+    }
+  }
+
+  const strippedText = text.replace(ANSI_ESCAPE_REGEXP, "");
+  const vnumAtCombatSave = trackerState.currentRoomId;
+  const combatMobNames: string[] = [];
+  for (const line of strippedText.split("\n")) {
+    const blocks = [...line.matchAll(COMBAT_PROMPT_MOB_REGEXP)];
+    if (blocks.length < 2) continue;
+    for (const match of blocks.slice(1)) {
+      const mobName = match[1].trim();
+      if (mobName && !combatMobNames.includes(mobName)) {
+        combatMobNames.push(mobName);
+        void mapStore.saveMobCombatName(mobName, vnumAtCombatSave).catch((error: unknown) => {
+          logEvent(ws, "error", error instanceof Error ? `Mob combat name save error: ${error.message}` : "Mob combat name save error.");
+        });
+      }
+    }
+  }
+
   if (events.length === 0) {
     farmController.handleMudText(text, {
       roomChanged: false,
       roomDescriptionReceived: false,
       currentRoomId: trackerState.currentRoomId,
+    });
+    farm2Controller.handleMudText(text, {
+      roomChanged: false,
+      roomDescriptionReceived: false,
+      currentRoomId: trackerState.currentRoomId,
+      mobsInRoom: [],
+      combatMobNames,
     });
     return;
   }
@@ -900,10 +994,24 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     });
   }
 
+  mover.onTrackerResult({
+    currentVnum: trackerState.currentRoomId,
+    previousVnum: previousRoomId,
+    movementBlocked: result.movementBlocked,
+  });
+
   farmController.handleMudText(text, {
     roomChanged: previousRoomId !== trackerState.currentRoomId,
     roomDescriptionReceived: result.rooms.length > 0,
     currentRoomId: trackerState.currentRoomId,
+  });
+
+  farm2Controller.handleMudText(text, {
+    roomChanged: previousRoomId !== trackerState.currentRoomId,
+    roomDescriptionReceived: result.rooms.length > 0,
+    currentRoomId: trackerState.currentRoomId,
+    mobsInRoom,
+    combatMobNames,
   });
 
   if (trackerState.currentRoomId !== null && trackerState.currentRoomId !== previousRoomId) {
@@ -1139,6 +1247,12 @@ const server = Bun.serve({
           });
           logEvent(ws, "browser-in", "farm_toggle", { enabled });
           farmController.setEnabled(enabled);
+          break;
+        }
+        case "farm2_toggle": {
+          const enabled = event.payload?.enabled === true;
+          logEvent(ws, "browser-in", "farm2_toggle", { enabled });
+          farm2Controller.setEnabled(enabled);
           break;
         }
         case "alias_set": {
@@ -1390,6 +1504,7 @@ const server = Bun.serve({
             registerTextHandler: (h) => mudTextHandlers.add(h),
             unregisterTextHandler: (h) => mudTextHandlers.delete(h),
             onProgress: (msg) => { logEvent(ws, "browser-out", `[gear-scan] ${msg}`); broadcastServerEvent({ type: "gear_scan_progress", payload: { message: msg } }); },
+            onScore: (entry: GearScoreEntry) => { appendGearAdvisorLog(`[${new Date().toISOString()}] slot=${JSON.stringify(entry.slot)} item=${JSON.stringify(entry.itemName)} type=${entry.itemType}${entry.hand ? ` hand=${entry.hand}` : ""} score=${entry.score}`); },
             waitForOutput: (_ms) => Promise.resolve(""),
             cancelWait: () => {},
             getItemByName: (name) => mapStore.getItemByName(name),
@@ -1412,6 +1527,7 @@ const server = Bun.serve({
             registerTextHandler: (h) => mudTextHandlers.add(h),
             unregisterTextHandler: (h) => mudTextHandlers.delete(h),
             onProgress: (msg) => { logEvent(ws, "browser-out", `[gear-scan] ${msg}`); broadcastServerEvent({ type: "gear_scan_progress", payload: { message: msg } }); },
+            onScore: (entry: GearScoreEntry) => { appendGearAdvisorLog(`[${new Date().toISOString()}] slot=${JSON.stringify(entry.slot)} item=${JSON.stringify(entry.itemName)} type=${entry.itemType}${entry.hand ? ` hand=${entry.hand}` : ""} score=${entry.score}`); },
             waitForOutput: (_ms) => Promise.resolve(""),
             cancelWait: () => {},
             getItemByName: (name) => mapStore.getItemByName(name),

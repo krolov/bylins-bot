@@ -1,6 +1,5 @@
 import type { DatabaseClient } from "../db";
 import type { MapAlias, MapEdge, MapNode, MapSnapshot } from "./types";
-
 export interface FarmZoneSettings {
   targets: string;
   healCommands: string;
@@ -59,6 +58,15 @@ export interface GameItem {
   lastSeen: Date;
 }
 
+export interface MobName {
+  id: number;
+  roomName: string | null;
+  combatName: string | null;
+  lastSeenVnum: number | null;
+  firstSeen: Date;
+  lastSeen: Date;
+}
+
 export interface RoomAutoCommand {
   vnum: number;
   command: string;
@@ -92,6 +100,11 @@ export interface MapStore {
   deleteRoomAutoCommand(vnum: number): Promise<void>;
   getRoomAutoCommands(): Promise<RoomAutoCommand[]>;
   getRoomAutoCommand(vnum: number): Promise<string | null>;
+  saveMobRoomName(name: string, vnum: number | null, combatName?: string): Promise<void>;
+  saveMobCombatName(name: string, vnum: number | null): Promise<void>;
+  getMobNames(): Promise<MobName[]>;
+  getMobCombatNamesByZone(zoneId: number): Promise<string[]>;
+  getCombatNameByRoomName(roomName: string): Promise<string | null>;
 }
 
 interface RoomRow {
@@ -123,6 +136,15 @@ interface ItemRow {
   name: string;
   item_type: string;
   data: Record<string, unknown>;
+  first_seen: Date;
+  last_seen: Date;
+}
+
+interface MobNameRow {
+  id: number;
+  room_name: string | null;
+  combat_name: string | null;
+  last_seen_vnum: number | null;
   first_seen: Date;
   last_seen: Date;
 }
@@ -264,6 +286,29 @@ export function createMapStore(database: DatabaseClient): MapStore {
           vnum INTEGER PRIMARY KEY,
           color TEXT NOT NULL
         )
+      `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS mob_names (
+          id SERIAL PRIMARY KEY,
+          room_name TEXT UNIQUE,
+          combat_name TEXT UNIQUE,
+          last_seen_vnum INTEGER,
+          first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      await database`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'mob_names' AND column_name = 'last_seen_vnum'
+          ) THEN
+            ALTER TABLE mob_names ADD COLUMN last_seen_vnum INTEGER;
+          END IF;
+        END$$
       `;
     },
 
@@ -575,6 +620,76 @@ export function createMapStore(database: DatabaseClient): MapStore {
           settings = EXCLUDED.settings,
           updated_at = NOW()
       `;
+    },
+
+    async saveMobRoomName(name: string, vnum: number | null, combatName?: string): Promise<void> {
+      if (combatName !== undefined) {
+        await database`
+          INSERT INTO mob_names (room_name, combat_name, last_seen_vnum, first_seen, last_seen)
+          VALUES (${name}, ${combatName}, ${vnum}, NOW(), NOW())
+          ON CONFLICT (combat_name)
+          DO UPDATE SET
+            room_name = EXCLUDED.room_name,
+            last_seen_vnum = EXCLUDED.last_seen_vnum,
+            last_seen = NOW()
+        `;
+      } else {
+        await database`
+          INSERT INTO mob_names (room_name, last_seen_vnum, first_seen, last_seen)
+          VALUES (${name}, ${vnum}, NOW(), NOW())
+          ON CONFLICT (room_name)
+          DO UPDATE SET
+            last_seen_vnum = EXCLUDED.last_seen_vnum,
+            last_seen = NOW()
+        `;
+      }
+    },
+
+    async saveMobCombatName(name: string, vnum: number | null): Promise<void> {
+      await database`
+        INSERT INTO mob_names (combat_name, last_seen_vnum, first_seen, last_seen)
+        VALUES (${name}, ${vnum}, NOW(), NOW())
+        ON CONFLICT (combat_name)
+        DO UPDATE SET last_seen = NOW(), last_seen_vnum = EXCLUDED.last_seen_vnum
+      `;
+    },
+
+    async getMobNames(): Promise<MobName[]> {
+      const rows = await database<MobNameRow[]>`
+        SELECT id, room_name, combat_name, last_seen_vnum, first_seen, last_seen
+        FROM mob_names
+        ORDER BY id ASC
+      `;
+      return rows.map((row: MobNameRow): MobName => ({
+        id: row.id,
+        roomName: row.room_name,
+        combatName: row.combat_name,
+        lastSeenVnum: row.last_seen_vnum,
+        firstSeen: row.first_seen,
+        lastSeen: row.last_seen,
+      }));
+    },
+
+    async getMobCombatNamesByZone(zoneId: number): Promise<string[]> {
+      const rows = await database<{ combat_name: string }[]>`
+        SELECT combat_name
+        FROM mob_names
+        WHERE combat_name IS NOT NULL
+          AND last_seen_vnum IS NOT NULL
+          AND FLOOR(last_seen_vnum::float / 100) = ${zoneId}
+      `;
+      return rows.map((row) => row.combat_name);
+    },
+
+    async getCombatNameByRoomName(roomName: string): Promise<string | null> {
+      const rows = await database<{ combat_name: string | null }[]>`
+        SELECT combat_name
+        FROM mob_names
+        WHERE room_name = ${roomName}
+          AND combat_name IS NOT NULL
+        LIMIT 1
+      `;
+      return rows[0]?.combat_name ?? null;
     },
   };
 }

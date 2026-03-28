@@ -1,6 +1,7 @@
 import type { MapAlias, MapSnapshot } from "./map/types.ts";
 import type { FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, GameItem } from "./map/store.ts";
 import type { PeriodicActionConfig, FarmStateSnapshot } from "./farm-script.ts";
+import type { Farm2StateSnapshot } from "./farm2/index.ts";
 import type { TriggerState } from "./triggers.ts";
 import type { GearScanRow, SellItem } from "./gear-scan.ts";
 
@@ -44,6 +45,7 @@ export type ClientEvent =
         useStab?: boolean;
       };
     }
+  | { type: "farm2_toggle"; payload?: { enabled?: boolean } }
   | { type: "alias_set"; payload?: { vnum?: number; alias?: string } }
   | { type: "alias_delete"; payload?: { vnum?: number } }
   | { type: "navigate_to"; payload?: { vnums?: number[] } }
@@ -119,6 +121,10 @@ export type ServerEvent =
   | {
       type: "farm_state";
       payload: FarmStateSnapshot;
+    }
+  | {
+      type: "farm2_state";
+      payload: Farm2StateSnapshot;
     }
   | {
       type: "stats_update";
@@ -227,6 +233,7 @@ export type {
   GameItem,
 } from "./map/store.ts";
 export type { PeriodicActionConfig, FarmStateSnapshot } from "./farm-script.ts";
+export type { Farm2StateSnapshot } from "./farm2/index.ts";
 export type { TriggerState } from "./triggers.ts";
 export type { MapAlias, MapSnapshot } from "./map/types.ts";
 export type { GearScanRow, SellItem } from "./gear-scan.ts";

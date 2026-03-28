@@ -84,20 +84,6 @@ interface ItemCard {
 
 const METAL_MATERIALS = new Set(["ЖЕЛЕЗО", "БРОНЗА", "СТАЛЬ", "БУЛАТ", "СЕРЕБРО", "ЗОЛОТО", "МЕДЬ", "ОЛОВО"]);
 
-// Аффекты полезные для татя (чем больше — тем лучше)
-const TATY_GOOD_AFFECTS = new Set([
-  "ловкость",
-  "ускорение",
-  "доблесть",
-  "инициатива",
-  "восст.энергии",
-  "восст.жизни",
-  "стойкость",
-  "макс.жизнь",
-  "защита.от.тяжелых.ран",
-]);
-
-// Аффекты нежелательные для татя
 const TATY_BAD_AFFECTS = new Set(["попадание", "воля"]);
 
 // ─── парсер wiki ──────────────────────────────────────────────────────────────
@@ -330,6 +316,36 @@ function parseInputList(input: string): string[] {
 
 // ─── scoring ─────────────────────────────────────────────────────────────────
 
+// Веса аффектов для брони татя.
+// Ловкость получает двойной вес по сравнению с остальными хорошими аффектами:
+// по исходникам bylins/mud ловкость влияет на 6+ систем одновременно —
+// AC (dex_ac_bonus×10), бэкстаб (dex_bonus×2, уникальный двойной вес),
+// скрытность/уклонение/кража/отмычка/подножка/удар-без-парирования (все dex_bonus×1),
+// а также урон через feat WeaponFinesse (DEX заменяет STR при DEX>STR>17).
+const AFFECT_SCORE: Record<string, number> = {
+  "ловкость": 30,      // двойной вес: 6+ игровых систем масштабируются по DEX
+  "ускорение": 15,     // доп. раунд атаки
+  "доблесть": 15,      // бонус к урону/попаданию
+  "инициатива": 15,
+  "восст.энергии": 12,
+  "восст.жизни": 12,
+  "стойкость": 12,
+  "макс.жизнь": 12,
+  "защита.от.тяжелых.ран": 12,
+};
+
+const PROPERTY_SCORE: Record<string, number> = {
+  "ловкость": 20,      // двойной вес (см. выше)
+  "ускорение": 10,
+  "доблесть": 10,
+  "инициатива": 10,
+  "восст.энергии": 8,
+  "восст.жизни": 8,
+  "стойкость": 8,
+  "макс.жизнь": 8,
+  "защита.от.тяжелых.ран": 8,
+};
+
 /** Очки полезности брони для татя */
 function armorScore(item: ItemCard): number {
   if (item.isMetal) return -1000; // металл — запрет
@@ -337,15 +353,17 @@ function armorScore(item: ItemCard): number {
 
   let score = item.ac * 2 + item.armor * 3;
 
-  // бонусы за полезные аффекты и свойства
+  // бонусы за полезные аффекты
   for (const a of item.affects) {
-    if (TATY_GOOD_AFFECTS.has(a)) score += 15;
+    const bonus = AFFECT_SCORE[a];
+    if (bonus !== undefined) score += bonus;
     if (TATY_BAD_AFFECTS.has(a)) score -= 10;
   }
+  // бонусы за свойства вида "ловкость улучшает на N"
   for (const p of item.properties) {
-    for (const good of TATY_GOOD_AFFECTS) {
-      if (p.includes(good) && p.includes("улучшает")) score += 10;
-      if (p.includes(good) && p.includes("ухудшает")) score -= 10;
+    for (const [affect, bonus] of Object.entries(PROPERTY_SCORE)) {
+      if (p.includes(affect) && p.includes("улучшает")) score += bonus;
+      if (p.includes(affect) && p.includes("ухудшает")) score -= bonus;
     }
     for (const bad of TATY_BAD_AFFECTS) {
       if (p.includes(bad) && p.includes("улучшает")) score -= 5;
@@ -549,7 +567,7 @@ async function analyze(itemNames: string[]): Promise<void> {
     reasons.push(`AC ${best.item.ac}, броня ${best.item.armor}`);
     if (best.item.affects.length) reasons.push(`аффекты: ${best.item.affects.join(", ")}`);
     for (const p of best.item.properties) {
-      if ([...TATY_GOOD_AFFECTS].some((a) => p.includes(a))) reasons.push(p);
+      if (Object.keys(AFFECT_SCORE).some((a) => p.includes(a))) reasons.push(p);
     }
 
     recommendations.push({

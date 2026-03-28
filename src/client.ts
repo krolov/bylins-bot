@@ -145,6 +145,20 @@ type ServerEvent =
       };
     }
   | {
+       type: "farm2_state";
+       payload: {
+         enabled: boolean;
+         zoneId: number | null;
+         pendingActivation: boolean;
+         attackCommand: string;
+         targetValues: string[];
+         healCommands: string[];
+         healThresholdPercent: number;
+         fleeCommand: string;
+         fleeThresholdPercent: number;
+       };
+    }
+  | {
       type: "stats_update";
       payload: {
         hp: number;
@@ -203,7 +217,7 @@ type ServerEvent =
         coins: number;
         rows: Array<{
           slot: string;
-          action: "keep" | "buy" | "equip" | "no_upgrade";
+          action: "keep" | "buy" | "equip" | "no_upgrade" | "needs_identify";
           itemName?: string;
           price?: number;
           shopNumber?: number;
@@ -302,6 +316,7 @@ type ClientEvent =
           useStab?: boolean;
        };
      }
+  | { type: "farm2_toggle"; payload?: { enabled?: boolean } }
   | { type: "alias_set"; payload: { vnum: number; alias: string } }
   | { type: "alias_delete"; payload: { vnum: number } }
   | { type: "navigate_to"; payload: { vnums: number[] } }
@@ -1123,6 +1138,9 @@ let farmEnabled = false;
 let mapRecordingEnabled = true;
 let farmZoneId: number | null = null;
 let farmPendingActivation = false;
+let farm2Enabled = false;
+let farm2ZoneId: number | null = null;
+let farm2PendingActivation = false;
 let farmTargetValues: string[] = [];
 let farmHealCommands: string[] = [];
 let farmHealThresholdPercent = 50;
@@ -2142,12 +2160,12 @@ function updateConnectButton(state: "idle" | "connecting" | "connected" | "disco
 }
 
 function renderFarmButton(): void {
-  farmToggleButton.textContent = farmEnabled
-    ? farmPendingActivation
+  farmToggleButton.textContent = farm2Enabled
+    ? farm2PendingActivation
       ? "Фарм: запуск..."
-      : `Фарм: вкл${farmZoneId !== null ? ` (${farmZoneId})` : ""}`
+      : `Фарм: вкл${farm2ZoneId !== null ? ` (${farm2ZoneId})` : ""}`
     : "Фарм: выкл";
-  farmToggleButton.classList.toggle("button-toggle-active", farmEnabled);
+  farmToggleButton.classList.toggle("button-toggle-active", farm2Enabled);
 }
 
 function renderMapRecordingButton(): void {
@@ -2250,9 +2268,10 @@ function renderGearAdvisorRow(row: {
   const tdAction = document.createElement("td");
   tdAction.className = "gear-advisor__cell";
 
-  function fmtDamage(dice?: string, avg?: number): string {
+   function fmtDamage(dice?: string, avg?: number): string {
     if (!dice) return "";
-    return avg ? `[${dice} (ср. ${avg.toFixed(1)})]` : `[${dice}]`;
+    const cleanDice = dice.replace(/\s*\(ср\..*?\)/g, "").trim();
+    return avg ? `[${cleanDice} (ср. ${avg.toFixed(1)})]` : `[${cleanDice}]`;
   }
 
   function fmtArmor(ac?: number, armor?: number): string {
@@ -2271,6 +2290,9 @@ function renderGearAdvisorRow(row: {
   } else if (row.action === "no_upgrade") {
     tr.classList.add("gear-advisor__row--keep");
     tdAction.textContent = "оставить (нет улучшений)";
+  } else if (row.action === "needs_identify") {
+    tr.classList.add("gear-advisor__row--identify");
+    tdAction.textContent = "⚠️ опознать вручную";
   } else if (row.action === "equip") {
     tr.classList.add("gear-advisor__row--equip");
     tdAction.textContent = `надеть: ${itemLabel}`;
@@ -2362,7 +2384,8 @@ function renderBazaarAdvisorRow(row: {
 
   function fmtDamage(dice?: string, avg?: number): string {
     if (!dice) return "";
-    return avg ? `[${dice} (ср. ${avg.toFixed(1)})]` : `[${dice}]`;
+    const cleanDice = dice.replace(/\s*\(ср\..*?\)/g, "").trim();
+    return avg ? `[${cleanDice} (ср. ${avg.toFixed(1)})]` : `[${cleanDice}]`;
   }
 
   function fmtArmor(ac?: number, armor?: number): string {
@@ -2495,6 +2518,12 @@ function createSocket(): WebSocket {
         farmPeriodicAction = message.payload.periodicAction;
         renderFarmButton();
 renderMapRecordingButton();
+        break;
+      case "farm2_state":
+        farm2Enabled = message.payload.enabled;
+        farm2ZoneId = message.payload.zoneId;
+        farm2PendingActivation = message.payload.pendingActivation;
+        renderFarmButton();
         break;
       case "stats_update":
         currentStats = message.payload;
@@ -2881,23 +2910,10 @@ zLevelUpButton.addEventListener("click", () => {
 });
 
 farmToggleButton.addEventListener("click", () => {
-  if (!farmEnabled) {
-    openFarmSettingsModal();
-  } else {
-    sendClientEvent({
-      type: "farm_toggle",
-      payload: {
-        enabled: false,
-        targetValues: farmTargetValues,
-        healCommands: farmHealCommands,
-        healThresholdPercent: farmHealThresholdPercent,
-        fleeCommand: farmFleeCommand,
-        fleeThresholdPercent: farmFleeThresholdPercent,
-        lootValues: farmLootValues,
-        periodicAction: farmPeriodicAction,
-      },
-    });
-  }
+  sendClientEvent({
+    type: "farm2_toggle",
+    payload: { enabled: !farm2Enabled },
+  });
 });
 
 farmModalStart.addEventListener("click", () => {

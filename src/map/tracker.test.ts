@@ -48,6 +48,7 @@ describe("processParsedEvents", () => {
           vnum: 6001,
           name: "Перед трактиром",
           exits: ["east", "south", "west"],
+          closedExits: [],
         },
       },
     ] satisfies ParsedEvent[]);
@@ -75,6 +76,7 @@ describe("processParsedEvents", () => {
           vnum: 6001,
           name: "Перед трактиром",
           exits: ["east", "south", "west"],
+          closedExits: [],
         },
       },
     ] satisfies ParsedEvent[]);
@@ -95,6 +97,7 @@ describe("processParsedEvents", () => {
           vnum: 6000,
           name: "В трактире",
           exits: ["north", "up"],
+          closedExits: [],
         },
       },
     ] satisfies ParsedEvent[]);
@@ -127,6 +130,7 @@ describe("processParsedEvents", () => {
           vnum: 6049,
           name: "Комната отдыха",
           exits: ["down"],
+          closedExits: [],
         },
       },
     ] satisfies ParsedEvent[]);
@@ -153,6 +157,7 @@ describe("processParsedEvents", () => {
           vnum: 6240,
           name: "Портальная комната",
           exits: ["south"],
+          closedExits: [],
         },
       },
     ] satisfies ParsedEvent[]);

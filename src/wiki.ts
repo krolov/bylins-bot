@@ -750,7 +750,28 @@ export function parseMudIdentifyBlock(block: string): { name: string; itemType: 
     partial.isMetal = /сталь|железо|булат|бронза|серебро|золото|медь|олово|латунь|мифрил/i.test(matMatch[1]);
   }
 
-  const remortsM = /Требует\s+перевоплощений\s*:\s*(\d+)/i.exec(stripped);
+  const acM = /защита\s*\(AC\)\s*:\s*(-?\d+)/i.exec(stripped);
+  if (acM) partial.ac = parseInt(acM[1]);
+
+  const armorM = /броня\s*:\s*(\d+)/i.exec(stripped);
+  if (armorM) partial.armor = parseInt(armorM[1]);
+
+  const wearSlots: string[] = [];
+  if (/надеть на туловище/i.test(stripped)) wearSlots.push("туловище");
+  if (/надеть на голову/i.test(stripped)) wearSlots.push("голову");
+  if (/надеть на ноги/i.test(stripped)) wearSlots.push("ноги");
+  if (/можно обуть/i.test(stripped)) wearSlots.push("ступни");
+  if (/надеть на кисти/i.test(stripped)) wearSlots.push("кисти");
+  if (/надеть на руки/i.test(stripped)) wearSlots.push("руки");
+  if (/надеть на плечи/i.test(stripped)) wearSlots.push("плечи");
+  if (/надеть на пояс/i.test(stripped)) wearSlots.push("пояс");
+  if (/надеть на запястья/i.test(stripped)) wearSlots.push("запястья");
+  if (/надеть на шею/i.test(stripped)) wearSlots.push("шею");
+  if (/надеть на палец/i.test(stripped)) wearSlots.push("палец");
+  if (wearSlots.length > 0) partial.wearSlots = wearSlots as GearWearSlot[];
+
+  const remortsM = /Максимальное количество перевоплощение\s*:\s*(\d+)/i.exec(stripped)
+    ?? /Требует\s+перевоплощений\s*:\s*(\d+)/i.exec(stripped);
   if (remortsM) partial.remorts = parseInt(remortsM[1]);
 
   const rightHandReqs: StatRequirement[] = [];
@@ -803,9 +824,39 @@ export function mergeItemSources(
   base: GearItemCard | null,
   wiki: GearItemCard | null,
   mud: PartialGearItemCard | null,
+  mudName?: string,
+  mudItemType?: string,
 ): GearItemCard | null {
   const foundation = wiki ?? base;
-  if (!foundation) return null;
+
+  if (!foundation) {
+    if (!mud || !mudName) return null;
+    return {
+      id: 0,
+      name: mudName,
+      itemType: mudItemType ?? "БРОНЯ",
+      ac: mud.ac ?? 0,
+      armor: mud.armor ?? 0,
+      wearSlots: (mud.wearSlots as GearWearSlot[] | undefined) ?? [],
+      weaponClass: mud.weaponClass ?? null,
+      damageAvg: mud.damageAvg ?? 0,
+      damageDice: mud.damageDice ?? null,
+      canWearRight: mud.canWearRight ?? false,
+      canWearLeft: mud.canWearLeft ?? false,
+      canWearBoth: mud.canWearBoth ?? false,
+      rightHandReqs: mud.rightHandReqs ?? [],
+      leftHandReqs: mud.leftHandReqs ?? [],
+      bothHandReqs: mud.bothHandReqs ?? [],
+      wearReqs: mud.wearReqs ?? [],
+      material: mud.material ?? "",
+      isMetal: mud.isMetal ?? false,
+      isShiny: false,
+      affects: mud.affects ?? [],
+      properties: mud.properties ?? [],
+      forbidden: mud.forbidden ?? [],
+      remorts: mud.remorts ?? 0,
+    };
+  }
 
   const merged: GearItemCard = { ...foundation };
 
@@ -852,12 +903,15 @@ export function mergeItemSources(
     if (mud.leftHandReqs !== undefined) merged.leftHandReqs = mud.leftHandReqs;
     if (mud.bothHandReqs !== undefined) merged.bothHandReqs = mud.bothHandReqs;
     if (mud.wearReqs !== undefined) merged.wearReqs = mud.wearReqs;
-  if (mud.material !== undefined) merged.material = mud.material;
-  if (mud.isMetal !== undefined) merged.isMetal = mud.isMetal;
-  if (mud.affects !== undefined) merged.affects = mud.affects;
-  if (mud.properties !== undefined) merged.properties = mud.properties;
-  if (mud.forbidden !== undefined) merged.forbidden = mud.forbidden;
-  if (mud.remorts !== undefined) merged.remorts = mud.remorts;
+    if (mud.material !== undefined) merged.material = mud.material;
+    if (mud.isMetal !== undefined) merged.isMetal = mud.isMetal;
+    if (mud.affects !== undefined) merged.affects = mud.affects;
+    if (mud.properties !== undefined) merged.properties = mud.properties;
+    if (mud.forbidden !== undefined) merged.forbidden = mud.forbidden;
+    if (mud.remorts !== undefined) merged.remorts = mud.remorts;
+    if (mud.ac !== undefined) merged.ac = mud.ac;
+    if (mud.armor !== undefined) merged.armor = mud.armor;
+    if (mud.wearSlots !== undefined) merged.wearSlots = mud.wearSlots as GearWearSlot[];
   }
 
   return merged;

@@ -44,7 +44,7 @@ function meetsReqs(reqs: StatRequirement[], stats: CharStats): boolean {
 
 export interface GearScanRow {
   slot: string;
-  action: "keep" | "buy" | "equip" | "no_upgrade";
+  action: "keep" | "buy" | "equip" | "no_upgrade" | "needs_identify";
   itemName?: string;
   price?: number;
   shopNumber?: number;
@@ -79,9 +79,18 @@ interface WsData {
 
 type BunWs = ServerWebSocket<WsData>;
 
+export interface GearScoreEntry {
+  itemName: string;
+  slot: string;
+  score: number;
+  itemType: "armor" | "weapon";
+  hand?: "right" | "left" | "both";
+}
+
 export interface GearScanDeps {
   sendCommand: (cmd: string) => void;
   onProgress: (msg: string) => void;
+  onScore?: (entry: GearScoreEntry) => void;
   waitForOutput: (timeoutMs: number) => Promise<string>;
   cancelWait: () => void;
   registerTextHandler: (handler: (text: string) => void) => void;
@@ -106,27 +115,19 @@ async function withThrottle<T>(tasks: (() => Promise<T>)[], limit: number): Prom
   return results;
 }
 
-function makeItemCache(deps: GearScanDeps): {
+function makeItemFinder(deps: GearScanDeps): {
   findItem: (name: string) => Promise<GearItemCard | null>;
   concurrency: number;
 } {
-  const memCache = new Map<string, GearItemCard | null>();
   const nextProxy = createProxyPicker(deps.wikiProxies);
 
   async function findItem(name: string): Promise<GearItemCard | null> {
     const key = name.toLowerCase();
 
-    if (memCache.has(key)) return memCache.get(key)!;
-
-    const dbCached = await deps.getItemByName(key);
-    if (dbCached) {
-      if (dbCached.itemType === "NOT_FOUND") {
-        memCache.set(key, null);
-        return null;
-      }
-      const card = gearItemCardFromCache(key, dbCached.itemType, dbCached.data);
-      memCache.set(key, card);
-      return card;
+    const dbRow = await deps.getItemByName(key);
+    if (dbRow) {
+      if (dbRow.itemType === "NOT_FOUND") return null;
+      return gearItemCardFromCache(key, dbRow.itemType, dbRow.data);
     }
 
     const proxy = nextProxy();
@@ -135,13 +136,11 @@ function makeItemCache(deps: GearScanDeps): {
     const exact = results.find((r) => r.name.toLowerCase() === key);
     const hit = exact ?? results[0];
     if (!hit) {
-      memCache.set(key, null);
       void deps.upsertItem(key, "NOT_FOUND", {}).catch(() => {});
       return null;
     }
     const cardHtml = await fetchWiki({ id: String(hit.id) }, proxy);
     const card = parseGearItemCard(cardHtml, hit.id);
-    memCache.set(key, card);
     if (card) {
       void deps.upsertItem(key, card.itemType, gearItemCardToData(card)).catch(() => {});
     }
@@ -317,8 +316,8 @@ function createOutputWaiter(): {
 export async function runGearScan(
   deps: GearScanDeps,
 ): Promise<GearScanResult> {
-  const { sendCommand, onProgress, registerTextHandler: registerHandler, unregisterTextHandler: unregisterHandler } = deps;
-  const { findItem, concurrency } = makeItemCache(deps);
+  const { sendCommand, onProgress, onScore, registerTextHandler: registerHandler, unregisterTextHandler: unregisterHandler } = deps;
+  const { findItem, concurrency } = makeItemFinder(deps);
   const waiter = createOutputWaiter();
   registerHandler(waiter.feed);
 
@@ -334,6 +333,19 @@ export async function runGearScan(
     const coins = parseCoins(levelText);
     const profile = selectProfile(levelText);
     const charStats = parseCharStats(levelText);
+
+    function scoreArmor(item: GearItemCard, slot: string): number {
+      const score = armorScore(item, profile);
+      onScore?.({ itemName: item.name, slot, score, itemType: "armor" });
+      return score;
+    }
+
+    function scoreWeapon(item: GearItemCard, slot: string, hand: "right" | "left" | "both"): number {
+      const score = weaponScore(item, hand, profile);
+      onScore?.({ itemName: item.name, slot, score, itemType: "weapon", hand });
+      return score;
+    }
+
     onProgress(`Монет на руках: ${coins}. Профиль: ${profile.id}. Сила: ${charStats["сила"] ?? "?"}, Подв: ${charStats["ловкость"] ?? "?"}, Перевоплощений: ${charStats.remorts ?? 0}`);
 
     const equipped: Map<string, string[]> = new Map();
@@ -348,8 +360,6 @@ export async function runGearScan(
         }
       }
     }
-    onProgress(`[DEBUG] equipped slots: ${[...equipped.entries()].map(([s, ns]) => `"${s}"→[${ns.map(n => `"${n}"`).join(",")}]`).join(", ") || "(пусто)"}`);
-
     onProgress("Листаю список магазина...");
     const shopItems: Array<{ name: string; price: number; shopNumber: number }> = [];
     sendCommand("спис");
@@ -369,38 +379,31 @@ export async function runGearScan(
     const invText = await waiter.waitFor(GEAR_SCAN_TIMEOUT_MS);
     const invCounts = parseInvLines(invText);
     const invNames = [...invCounts.keys()];
-    onProgress(`[DEBUG] инвентарь (${invNames.length}): ${invNames.map((n) => `"${n}"`).join(", ") || "(пусто)"}`);
     onProgress(`В инвентаре ${invNames.length} предметов. Анализирую...`);
 
     const shopCards = await withThrottle(shopItems.map((s) => async () => {
       try {
         const card = await findItem(s.name);
-        if (!card) onProgress(`[DEBUG] shop: "${s.name}" → не найден на вики`);
         return card ? { card, price: s.price, shopNumber: s.shopNumber, source: "shop" as const } : null;
       } catch {
-        onProgress(`[DEBUG] shop: "${s.name}" → ошибка wiki`);
         return null;
       }
     }), concurrency,);
     const validShop = shopCards.filter(
       (x): x is { card: GearItemCard; price: number; shopNumber: number; source: "shop" } => x !== null,
     );
-    onProgress(`[DEBUG] shop valid: ${validShop.map((x) => `"${x.card.name}"(${x.card.wearSlots.join("/")||x.card.itemType})`).join(", ") || "(нет)"}`);
 
     const invCards = await withThrottle(invNames.map((name) => async () => {
       try {
         const card = await findItem(name);
-        if (!card) onProgress(`[DEBUG] inv: "${name}" → не найден на вики`);
         return card ? { card, price: 0, source: "inventory" as const, invName: name } : null;
       } catch {
-        onProgress(`[DEBUG] inv: "${name}" → ошибка wiki`);
         return null;
       }
     }), concurrency,);
     const validInv = invCards.filter(
       (x): x is { card: GearItemCard; price: number; source: "inventory"; invName: string } => x !== null,
     );
-    onProgress(`[DEBUG] inv valid: ${validInv.map((x) => `"${x.card.name}"(${x.card.wearSlots.join("/")||x.card.itemType})`).join(", ") || "(нет)"}`);
 
 
     type Candidate = { card: GearItemCard; price: number; shopNumber?: number; source: "shop" | "inventory"; invName?: string };
@@ -417,8 +420,14 @@ export async function runGearScan(
       }),
     ), concurrency,);
     const validCurrent = currentCards.filter((x): x is { slot: string; card: GearItemCard } => x !== null);
-    onProgress(`[DEBUG] current cards: ${validCurrent.map((x) => `"${x.slot}"→"${x.card.name}"`).join(", ") || "(нет)"}`);
 
+    const unknownEquipped = new Map<string, string>();
+    for (const [mudSlot, names] of equipped.entries()) {
+      for (const name of names) {
+        const found = currentCards.find((c) => c !== null && c.slot === mudSlot && c.card.name === name.toLowerCase());
+        if (!found) unknownEquipped.set(mudSlot, name);
+      }
+    }
     const rows: GearScanRow[] = [];
     const chosenInvCardIds = new Set<number>();
 
@@ -482,6 +491,13 @@ export async function runGearScan(
       currentBySlot.set(wikiSlot, card);
     }
 
+    const unknownByWikiSlot = new Map<string, string>();
+    for (const [mudSlot, itemName] of unknownEquipped.entries()) {
+      const wikiSlot = MUD_SLOT_TO_WIKI[mudSlot.toLowerCase()] ?? mudSlot.toLowerCase();
+      unknownByWikiSlot.set(wikiSlot, itemName);
+    }
+
+
     const currentRightWeapon: GearItemCard | undefined = currentBySlot.get("правая рука");
     const currentLeftWeapon: GearItemCard | undefined = currentBySlot.get("левая рука");
     const currentTwoHandedWeapon: GearItemCard | undefined = currentBySlot.get("обе руки");
@@ -506,6 +522,15 @@ export async function runGearScan(
       }
     }
 
+    const equippedRings = [...equipped.entries()]
+      .filter(([s]) => MUD_SLOT_TO_WIKI[s.toLowerCase()] === "палец" || s.toLowerCase() === "палец" || s.toLowerCase() === "на пальце")
+      .flatMap(([, names]) => names);
+    const equippedWristbands = [
+      ...(equipped.get("на правом запястье") ?? []),
+      ...(equipped.get("на левом запястье") ?? []),
+      ...(equipped.get("на запястьях") ?? []),
+    ];
+
     function bestCandidate(
       candidates: Candidate[],
       scoreFn: (c: GearItemCard) => number,
@@ -523,19 +548,26 @@ export async function runGearScan(
       return best && bestScore > 0 ? best : null;
     }
 
-    const twoHandedBest = bestCandidate(shopTwoHandedWeapons, (c) => weaponScore(c, "both", profile));
-    const twoHandedScore = twoHandedBest ? weaponScore(twoHandedBest.card, "both", profile) : -Infinity;
-    const currentTwoHandedScore = currentTwoHandedWeapon ? weaponScore(currentTwoHandedWeapon, "both", profile) : -Infinity;
+    const unknownRightWeapon = unknownByWikiSlot.get("правая рука");
+    const unknownLeftWeapon = unknownByWikiSlot.get("левая рука");
+    const unknownTwoHanded = unknownByWikiSlot.get("обе руки");
+
+    const twoHandedBest = bestCandidate(shopTwoHandedWeapons, (c) => scoreWeapon(c, "обе руки", "both"));
+    const twoHandedScore = twoHandedBest ? scoreWeapon(twoHandedBest.card, "обе руки", "both") : -Infinity;
+    const currentTwoHandedScore = currentTwoHandedWeapon ? scoreWeapon(currentTwoHandedWeapon, "обе руки", "both") : -Infinity;
     const currentOneHandCombinedScore =
-      (currentRightWeapon ? weaponScore(currentRightWeapon, "right", profile) : 0) +
-      (currentLeftWeapon ? weaponScore(currentLeftWeapon, "left", profile) : 0);
+      (currentRightWeapon ? scoreWeapon(currentRightWeapon, "правая рука", "right") : 0) +
+      (currentLeftWeapon ? scoreWeapon(currentLeftWeapon, "левая рука", "left") : 0);
     const useTwoHanded =
       twoHandedBest !== null &&
       twoHandedScore > 0 &&
       twoHandedScore > currentTwoHandedScore &&
-      twoHandedScore > currentOneHandCombinedScore;
+      twoHandedScore > currentOneHandCombinedScore &&
+      !unknownTwoHanded && !unknownRightWeapon && !unknownLeftWeapon;
 
-    if (useTwoHanded && twoHandedBest) {
+    if (unknownTwoHanded) {
+      rows.push({ slot: "обе руки", action: "needs_identify", currentItemName: unknownTwoHanded });
+    } else if (useTwoHanded && twoHandedBest) {
       if (twoHandedBest.source === "inventory") chosenInvCardIds.add(twoHandedBest.card.id);
       rows.push({
         slot: "обе руки",
@@ -553,9 +585,12 @@ export async function runGearScan(
       });
     } else {
 
-    const rightBest = bestCandidate(shopRightWeapons, (c) => weaponScore(c, "right", profile));    if (rightBest) {
-      const currentScore = currentRightWeapon ? weaponScore(currentRightWeapon, "right", profile) : -Infinity;
-      const shopScore = weaponScore(rightBest.card, "right", profile);
+    if (unknownRightWeapon) {
+      rows.push({ slot: "правая рука", action: "needs_identify", currentItemName: unknownRightWeapon });
+    } else {
+    const rightBest = bestCandidate(shopRightWeapons, (c) => scoreWeapon(c, "правая рука", "right"));    if (rightBest) {
+      const currentScore = currentRightWeapon ? scoreWeapon(currentRightWeapon, "правая рука", "right") : -Infinity;
+      const shopScore = scoreWeapon(rightBest.card, "правая рука", "right");
       if (shopScore > currentScore) {
         if (rightBest.source === "inventory") chosenInvCardIds.add(rightBest.card.id);
         rows.push({
@@ -582,11 +617,15 @@ export async function runGearScan(
         });
       }
     }
+    }
 
-    const leftBest = bestCandidate(shopLeftWeapons, (c) => weaponScore(c, "left", profile));
+    if (unknownLeftWeapon) {
+      rows.push({ slot: "левая рука", action: "needs_identify", currentItemName: unknownLeftWeapon });
+    } else {
+    const leftBest = bestCandidate(shopLeftWeapons, (c) => scoreWeapon(c, "левая рука", "left"));
     if (leftBest) {
-      const currentScore = currentLeftWeapon ? weaponScore(currentLeftWeapon, "left", profile) : -Infinity;
-      const shopScore = weaponScore(leftBest.card, "left", profile);
+      const currentScore = currentLeftWeapon ? scoreWeapon(currentLeftWeapon, "левая рука", "left") : -Infinity;
+      const shopScore = scoreWeapon(leftBest.card, "левая рука", "left");
       if (shopScore > currentScore) {
         if (leftBest.source === "inventory") chosenInvCardIds.add(leftBest.card.id);
         rows.push({
@@ -613,18 +652,24 @@ export async function runGearScan(
         });
       }
     }
+    }
 
     }
 
     const chosenRingCardIds = new Set<number>();
     for (let i = 0; i < 2; i++) {
       const subSlot = `палец ${i + 1}`;
-      const remaining = shopRings.filter((c) => !chosenRingCardIds.has(c.card.id));
-      const best = bestCandidate(remaining, (c) => armorScore(c, profile));
-      if (!best) continue;
+      const equippedRingName = equippedRings[i];
       const currentRing = currentRings[i];
-      const currentScore = currentRing ? armorScore(currentRing, profile) : -Infinity;
-      const shopScore = armorScore(best.card, profile);
+      if (equippedRingName && !currentRing) {
+        rows.push({ slot: subSlot, action: "needs_identify", currentItemName: equippedRingName });
+        continue;
+      }
+      const remaining = shopRings.filter((c) => !chosenRingCardIds.has(c.card.id));
+      const best = bestCandidate(remaining, (c) => scoreArmor(c, subSlot));
+      if (!best) continue;
+      const currentScore = currentRing ? scoreArmor(currentRing, subSlot) : -Infinity;
+      const shopScore = scoreArmor(best.card, subSlot);
       chosenRingCardIds.add(best.card.id);
       if (shopScore > currentScore) {
         if (best.source === "inventory") chosenInvCardIds.add(best.card.id);
@@ -656,12 +701,17 @@ export async function runGearScan(
     const chosenWristbandCardIds = new Set<number>();
     for (let i = 0; i < 2; i++) {
       const subSlot = `запястье ${i + 1}`;
-      const remaining = shopWristbands.filter((c) => !chosenWristbandCardIds.has(c.card.id));
-      const best = bestCandidate(remaining, (c) => armorScore(c, profile));
-      if (!best) continue;
+      const equippedWristbandName = equippedWristbands[i];
       const currentWristband = currentWristbands[i];
-      const currentScore = currentWristband ? armorScore(currentWristband, profile) : -Infinity;
-      const shopScore = armorScore(best.card, profile);
+      if (equippedWristbandName && !currentWristband) {
+        rows.push({ slot: subSlot, action: "needs_identify", currentItemName: equippedWristbandName });
+        continue;
+      }
+      const remaining = shopWristbands.filter((c) => !chosenWristbandCardIds.has(c.card.id));
+      const best = bestCandidate(remaining, (c) => scoreArmor(c, subSlot));
+      if (!best) continue;
+      const currentScore = currentWristband ? scoreArmor(currentWristband, subSlot) : -Infinity;
+      const shopScore = scoreArmor(best.card, subSlot);
       chosenWristbandCardIds.add(best.card.id);
       if (shopScore > currentScore) {
         if (best.source === "inventory") chosenInvCardIds.add(best.card.id);
@@ -691,11 +741,22 @@ export async function runGearScan(
     }
 
     for (const [slot, candidates] of shopBySlot.entries()) {
-      const best = bestCandidate(candidates, (c) => armorScore(c, profile));
+      const unknownEquippedItem = unknownByWikiSlot.get(slot);
+      if (unknownEquippedItem) {
+        rows.push({ slot, action: "needs_identify", currentItemName: unknownEquippedItem });
+        continue;
+      }
+      const best = bestCandidate(candidates, (c) => scoreArmor(c, slot));
       if (!best) continue;
       const currentCard = currentBySlot.get(slot);
-      const currentScore = currentCard ? armorScore(currentCard, profile) : -Infinity;
-      const shopScore = armorScore(best.card, profile);
+      const currentPenalized = currentCard !== undefined &&
+        ((profile.rejectMetal && currentCard.isMetal) || (profile.rejectShiny && currentCard.isShiny));
+      if (currentPenalized) {
+        rows.push({ slot, action: "keep", currentItemName: currentCard!.name, currentAc: currentCard!.ac || undefined, currentArmor: currentCard!.armor || undefined });
+        continue;
+      }
+      const currentScore = currentCard ? scoreArmor(currentCard, slot) : -Infinity;
+      const shopScore = scoreArmor(best.card, slot);
       if (shopScore > currentScore) {
         if (best.source === "inventory") chosenInvCardIds.add(best.card.id);
         rows.push({
@@ -742,9 +803,6 @@ export async function runGearScan(
         });
       }
     }
-    const equippedRings = [...equipped.entries()]
-      .filter(([s]) => MUD_SLOT_TO_WIKI[s.toLowerCase()] === "палец" || s.toLowerCase() === "палец" || s.toLowerCase() === "на пальце")
-      .flatMap(([, names]) => names);
     const ringSubSlots = ["палец 1", "палец 2"] as const;
     for (let i = 0; i < 2; i++) {
       const subSlot = ringSubSlots[i];
@@ -753,11 +811,6 @@ export async function runGearScan(
       }
     }
 
-    const equippedWristbands = [
-      ...(equipped.get("на правом запястье") ?? []),
-      ...(equipped.get("на левом запястье") ?? []),
-      ...(equipped.get("на запястьях") ?? []),
-    ];
     const wristSubSlots = ["запястье 1", "запястье 2"] as const;
     for (let i = 0; i < 2; i++) {
       const subSlot = wristSubSlots[i];
@@ -776,7 +829,6 @@ export async function runGearScan(
     }
 
     onProgress("Готово.");
-    onProgress(`[DEBUG] rows: ${rows.map((r) => `${r.slot}:${r.action}${r.itemName ? "→" + r.itemName : ""}${r.currentItemName ? "(cur:" + r.currentItemName + ")" : ""}`).join(", ")}`);
     return { coins, rows, sellItems };
   } finally {
     unregisterHandler(waiter.feed);

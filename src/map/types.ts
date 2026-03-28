@@ -21,14 +21,20 @@ export type ParsedEvent =
     }
   | {
       kind: "dark_room";
+    }
+  | {
+      kind: "mobs_in_room";
+      mobs: string[];
     };
 
 export interface ParserState {
   lineBuffer: string;
+  rawLineBuffer: string;
   pendingRoomHeader: {
     vnum: number;
     name: string;
   } | null;
+  pendingMobs: string[];
 }
 
 export interface PendingMove {

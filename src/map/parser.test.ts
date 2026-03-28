@@ -13,6 +13,7 @@ describe("feedText", () => {
           vnum: 6049,
           name: "Комната отдыха",
           exits: ["north", "south", "down"],
+          closedExits: [],
         },
       },
     ]);
@@ -29,6 +30,7 @@ describe("feedText", () => {
           vnum: 6049,
           name: "Комната отдыха",
           exits: ["north", "south", "down"],
+          closedExits: [],
         },
       },
     ]);
@@ -101,6 +103,7 @@ describe("feedText", () => {
           vnum: 6049,
           name: "Комната отдыха",
           exits: ["down"],
+          closedExits: [],
         },
       },
       {
@@ -109,6 +112,7 @@ describe("feedText", () => {
           vnum: 6000,
           name: "В трактире",
           exits: ["north", "up"],
+          closedExits: [],
         },
       },
     ]);
@@ -125,6 +129,7 @@ describe("feedText", () => {
           vnum: 6049,
           name: "Комната отдыха",
           exits: ["north", "south", "east", "west", "up", "down"],
+          closedExits: [],
         },
       },
     ]);
@@ -141,6 +146,7 @@ describe("feedText", () => {
           vnum: 6049,
           name: "Комната отдыха",
           exits: [],
+          closedExits: [],
         },
       },
       {
@@ -149,6 +155,7 @@ describe("feedText", () => {
           vnum: 6000,
           name: "В трактире",
           exits: ["north", "up"],
+          closedExits: [],
         },
       },
     ]);
@@ -165,6 +172,7 @@ describe("feedText", () => {
           vnum: 6049,
           name: "Комната отдыха",
           exits: ["down"],
+          closedExits: [],
         },
       },
     ]);
@@ -181,6 +189,7 @@ describe("feedText", () => {
           vnum: 6001,
           name: "Перед трактиром",
           exits: ["east", "south", "west"],
+          closedExits: [],
         },
       },
     ]);
@@ -200,6 +209,7 @@ describe("feedText", () => {
           vnum: 4312,
           name: "Заводь",
           exits: ["north"],
+          closedExits: [],
         },
       },
     ]);

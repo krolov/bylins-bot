@@ -1,5 +1,5 @@
 import type { MapAlias, MapEdge, MapNode, MapSnapshot } from "./types";
-import type { GameItem, MapStore, RoomAutoCommand } from "./store";
+import type { GameItem, MapStore, MobName, RoomAutoCommand } from "./store";
 
 export function createMemoryMapStore(): MapStore {
   const rooms = new Map<number, MapNode>();
@@ -146,6 +146,22 @@ export function createMemoryMapStore(): MapStore {
     },
 
     async setSneakSettings(_profileId: string, _settings: unknown): Promise<void> {},
+
+    async saveMobRoomName(_name: string, _vnum: number | null, _combatName?: string): Promise<void> {},
+
+    async saveMobCombatName(_name: string, _vnum: number | null): Promise<void> {},
+
+    async getMobNames(): Promise<MobName[]> {
+      return [];
+    },
+
+    async getMobCombatNamesByZone(_zoneId: number): Promise<string[]> {
+      return [];
+    },
+
+    async getCombatNameByRoomName(_roomName: string): Promise<string | null> {
+      return null;
+    },
   };
 }
 

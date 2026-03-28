@@ -7,6 +7,9 @@ const MOVEMENT_BLOCKED_REGEXP = /Вы не сможете туда пройти|
 const DARK_ROOM_REGEXP = /^Слишком темно\b/i;
 const MOVEMENT_REGEXP = /Вы\s+(?:поплелись|пошли|побежали|полетели|поехали|поскакали|побрели|поплыли)(?:\s+следом\s+за\s+\S+)?\s+(?:на\s+)?(север|юг|восток|запад|вверх|вниз)\.?/i;
 
+const MOB_ANSI_BLOCK_REGEXP = /\u001b\[1;31m([\s\S]*?)\u001b\[(?:0;0|0)m/g;
+const TARGET_PREFIX_REGEXP = /^\([^)]*\)\s*/;
+
 const EXIT_TOKEN_TO_DIRECTION: Record<string, Direction> = {
   n: "north",
   s: "south",
@@ -36,11 +39,21 @@ const ROOM_NAME_STATUS_PREFIX_REGEXP = /^\d+H\s+\d+M\s+\d+o\b.*?>\s*/;
 export function createParserState(): ParserState {
   return {
     lineBuffer: "",
+    rawLineBuffer: "",
     pendingRoomHeader: null,
+    pendingMobs: [],
   };
 }
 
 export function feedText(state: ParserState, text: string): ParsedEvent[] {
+  // Extract mob ANSI blocks from raw text BEFORE stripping ANSI
+  const rawChunk = `${state.rawLineBuffer}${text}`;
+  extractMobsFromRaw(rawChunk, state.pendingMobs);
+
+  // Find the last newline in raw chunk to preserve partial line
+  const lastNewlineInRaw = rawChunk.lastIndexOf("\n");
+  state.rawLineBuffer = lastNewlineInRaw >= 0 ? rawChunk.slice(lastNewlineInRaw + 1) : rawChunk;
+
   const normalized = `${state.lineBuffer}${stripAnsi(text).replace(/\r/g, "")}`;
   const lines = normalized.split("\n");
   state.lineBuffer = lines.pop() ?? "";
@@ -106,6 +119,43 @@ function sanitizeRoomName(name: string): string {
   return name.replace(ROOM_NAME_STATUS_PREFIX_REGEXP, "").trim();
 }
 
+function extractMobsFromRaw(rawText: string, mobs: string[]): void {
+  MOB_ANSI_BLOCK_REGEXP.lastIndex = 0;
+  let blockMatch: RegExpExecArray | null;
+
+  while ((blockMatch = MOB_ANSI_BLOCK_REGEXP.exec(rawText)) !== null) {
+    const blockContent = blockMatch[1];
+    const blockLines = blockContent
+      .split(/\r?\n/)
+      .map((line) => stripAnsi(line).trim())
+      .filter((line) => line.length > 0);
+
+    for (const line of blockLines) {
+      const mobName = extractTargetName(line);
+      if (mobName && !mobs.includes(mobName)) {
+        mobs.push(mobName);
+      }
+    }
+  }
+}
+
+function extractTargetName(line: string): string | null {
+  const candidate = line
+    .replace(TARGET_PREFIX_REGEXP, "")
+    .replace(/\.$/, "")
+    .trim();
+
+  if (!candidate || candidate.length < 2) {
+    return null;
+  }
+
+  if (/^(?:вы|вас|вам|ваших|ваш)\b/i.test(candidate)) {
+    return null;
+  }
+
+  return candidate;
+}
+
 function parseExits(rawExits: string): { exits: Direction[]; closedExits: Direction[] } {
   const exits: Direction[] = [];
   const closedExits: Direction[] = [];
@@ -150,5 +200,12 @@ function flushPendingRoomHeader(state: ParserState, events: ParsedEvent[], exits
   };
 
   events.push({ kind: "room", room });
+
+  // Emit mobs_in_room event if any mobs were captured since last room flush
+  const mobs = state.pendingMobs.splice(0);
+  if (mobs.length > 0) {
+    events.push({ kind: "mobs_in_room", mobs });
+  }
+
   state.pendingRoomHeader = null;
 }

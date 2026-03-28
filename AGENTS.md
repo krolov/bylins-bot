@@ -242,6 +242,7 @@ Never use empty catch blocks. Never swallow errors silently.
 - No `console.log` / `console.error` anywhere in server code.
 - In `server.ts`: log through the private `logEvent(ws, direction, message)` function.
 - In sub-modules (farm, survival, triggers, etc.): log through the `onLog: (message: string) => void` dep injected via the `deps` object — it routes to `logEvent` on the caller side.
+- **All log messages must be in English.** Russian-language log strings are not allowed in server-side code.
 - Use `Bun.env` (not `process.env`) to access environment variables. All env access is centralized in `src/config.ts`; no other file reads `Bun.env` directly.
 
 ### Database (postgres.js)
@@ -375,7 +376,7 @@ farm_toggle (browser) → updateConfig → normalizePeriodicAction → farmContr
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **bylins-bot** (802 symbols, 2151 relationships, 69 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **bylins-bot** (923 symbols, 2414 relationships, 78 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

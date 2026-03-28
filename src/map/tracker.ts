@@ -33,6 +33,7 @@ export interface TrackerResult {
   rooms: ParsedRoom[];
   edges: MapEdge[];
   currentVnum: number | null;
+  movementBlocked: boolean;
 }
 
 export function createTrackerState(): TrackerState {
@@ -60,6 +61,7 @@ export function trackOutgoingCommand(state: TrackerState, command: string): void
 export function processParsedEvents(state: TrackerState, events: ParsedEvent[]): TrackerResult {
   const rooms: ParsedRoom[] = [];
   const edges: MapEdge[] = [];
+  let movementBlocked = false;
 
   for (const event of events) {
     switch (event.kind) {
@@ -72,6 +74,7 @@ export function processParsedEvents(state: TrackerState, events: ParsedEvent[]):
         break;
       case "movement_blocked":
         state.pendingMove = null;
+        movementBlocked = true;
         break;
       case "dark_room":
         state.pendingMove = null;
@@ -104,6 +107,7 @@ export function processParsedEvents(state: TrackerState, events: ParsedEvent[]):
     rooms,
     edges,
     currentVnum: state.currentRoomId,
+    movementBlocked,
   };
 }
 
