@@ -2,7 +2,6 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { runtimeConfig } from "./config.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
-import { createFarmController } from "./farm-script.ts";
 import { createFarm2Controller } from "./farm2/index.ts";
 import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
@@ -20,7 +19,7 @@ import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, p
 import { createRepairController } from "./repair-script.ts";
 import { createSpellController } from "./spell-script.ts";
 import { createSneakController } from "./sneak-script.ts";
-import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, TriggerState, MapAlias, MapSnapshot, PeriodicActionConfig, GearScanRow, SellItem, GameItem } from "./events.type.ts";
+import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, TriggerState, MapAlias, MapSnapshot, GearScanRow, SellItem, GameItem } from "./events.type.ts";
 import { normalizeFarmZoneSettings, normalizeSurvivalSettings, normalizeAutoSpellsSettings, normalizeSneakSettings } from "./settings-normalizers.ts";
 import { createMudConnection } from "./mud-connection.ts";
 import type { Session } from "./mud-connection.ts";
@@ -101,49 +100,6 @@ const mover = createMover({
 let mapRecordingEnabled = true;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
-const farmController = createFarmController({
-  getCurrentRoomId: () => trackerState.currentRoomId,
-  isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
-  getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
-  combatState,
-  sendCommand: (command) => {
-    if (!sharedSession.tcpSocket || !sharedSession.connected) {
-      return;
-    }
-
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "farm-script");
-  },
-  requestRoomScan: () => {
-    if (!sharedSession.tcpSocket || !sharedSession.connected) {
-      return;
-    }
-
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "farm-script");
-  },
-  resolveAlias: async (alias) => {
-    const aliases = await mapStore.getAliases();
-    const entry = aliases.find((a) => a.alias.toLowerCase() === alias.toLowerCase());
-    return entry?.vnum ?? null;
-  },
-  resolveAliasAll: (alias) => mapStore.resolveAliasAll(alias),
-  navigateTo: (vnum) => startNavigation(null, vnum),
-  onStateChange: (farmState) => {
-    broadcastServerEvent({
-      type: "farm_state",
-      payload: farmState,
-    });
-  },
-  onLog: (message) => {
-    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
-    broadcastServerEvent({
-      type: "status",
-      payload: {
-        state: sharedSession.state,
-        message,
-      },
-    });
-  },
-});
 const farm2Controller = createFarm2Controller({
   getCurrentRoomId: () => trackerState.currentRoomId,
   isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
@@ -469,13 +425,6 @@ function parseAndBroadcastStats(text: string): void {
       },
     });
 
-    farmController.updateStats({
-      hp: statsHp,
-      hpMax: statsHpMax,
-      energy: statsEnergy,
-      energyMax: statsEnergyMax,
-    });
-
     farm2Controller.updateStats({
       hp: statsHp,
       hpMax: statsHpMax,
@@ -533,11 +482,6 @@ function sendDefaults(ws: BunServerWebSocket): void {
       startupCommands: runtimeConfig.startupCommands,
       commandDelayMs: runtimeConfig.commandDelayMs,
     },
-  });
-
-  sendServerEvent(ws, {
-    type: "farm_state",
-    payload: farmController.getState(),
   });
 
   sendServerEvent(ws, {
@@ -670,7 +614,6 @@ function resetMapState(): void {
   parserState.pendingRoomHeader = null;
   trackerState.currentRoomId = null;
   trackerState.pendingMove = null;
-  farmController.setEnabled(false);
   farm2Controller.setEnabled(false);
 }
 
@@ -957,11 +900,6 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
   }
 
   if (events.length === 0) {
-    farmController.handleMudText(text, {
-      roomChanged: false,
-      roomDescriptionReceived: false,
-      currentRoomId: trackerState.currentRoomId,
-    });
     farm2Controller.handleMudText(text, {
       roomChanged: false,
       roomDescriptionReceived: false,
@@ -998,12 +936,6 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     currentVnum: trackerState.currentRoomId,
     previousVnum: previousRoomId,
     movementBlocked: result.movementBlocked,
-  });
-
-  farmController.handleMudText(text, {
-    roomChanged: previousRoomId !== trackerState.currentRoomId,
-    roomDescriptionReceived: result.rooms.length > 0,
-    currentRoomId: trackerState.currentRoomId,
   });
 
   farm2Controller.handleMudText(text, {
@@ -1223,30 +1155,6 @@ const server = Bun.serve({
           mapRecordingEnabled = event.payload?.enabled ?? !mapRecordingEnabled;
           logEvent(ws, "browser-in", "map_recording_toggle", { enabled: mapRecordingEnabled });
           broadcastServerEvent({ type: "map_recording_state", payload: { enabled: mapRecordingEnabled } });
-          break;
-        }
-        case "farm_toggle": {
-          const enabled = event.payload?.enabled === true;
-          const pa = event.payload?.periodicAction;
-          farmController.updateConfig({
-            targetValues: event.payload?.targetValues ?? [],
-            healCommands: event.payload?.healCommands ?? [],
-            healThresholdPercent: event.payload?.healThresholdPercent ?? 50,
-            fleeCommand: event.payload?.fleeCommand ?? "",
-            fleeThresholdPercent: event.payload?.fleeThresholdPercent ?? 0,
-            lootValues: event.payload?.lootValues ?? [],
-            periodicAction: {
-              enabled: pa?.enabled === true,
-              gotoAlias1: pa?.gotoAlias1 ?? "",
-              commands: pa?.commands ?? [],
-              commandDelayMs: pa?.commandDelayMs ?? 0,
-              gotoAlias2: pa?.gotoAlias2 ?? "",
-              intervalMs: pa?.intervalMs ?? 0,
-            },
-            useStab: event.payload?.useStab !== false,
-          });
-          logEvent(ws, "browser-in", "farm_toggle", { enabled });
-          farmController.setEnabled(enabled);
           break;
         }
         case "farm2_toggle": {

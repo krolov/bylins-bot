@@ -1,6 +1,5 @@
 import type { MapAlias, MapSnapshot } from "./map/types.ts";
 import type { FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, GameItem } from "./map/store.ts";
-import type { PeriodicActionConfig, FarmStateSnapshot } from "./farm-script.ts";
 import type { Farm2StateSnapshot } from "./farm2/index.ts";
 import type { TriggerState } from "./triggers.ts";
 import type { GearScanRow, SellItem } from "./gear-scan.ts";
@@ -24,27 +23,6 @@ export type ClientEvent =
   | { type: "disconnect" }
   | { type: "map_reset" }
   | { type: "map_reset_area" }
-  | {
-      type: "farm_toggle";
-      payload?: {
-        enabled?: boolean;
-        targetValues?: string[];
-        healCommands?: string[];
-        healThresholdPercent?: number;
-        fleeCommand?: string;
-        fleeThresholdPercent?: number;
-        lootValues?: string[];
-        periodicAction?: {
-          enabled?: boolean;
-          gotoAlias1?: string;
-          commands?: string[];
-          commandDelayMs?: number;
-          gotoAlias2?: string;
-          intervalMs?: number;
-        };
-        useStab?: boolean;
-      };
-    }
   | { type: "farm2_toggle"; payload?: { enabled?: boolean } }
   | { type: "alias_set"; payload?: { vnum?: number; alias?: string } }
   | { type: "alias_delete"; payload?: { vnum?: number } }
@@ -117,10 +95,6 @@ export type ServerEvent =
   | {
       type: "map_update";
       payload: MapSnapshot;
-    }
-  | {
-      type: "farm_state";
-      payload: FarmStateSnapshot;
     }
   | {
       type: "farm2_state";
@@ -232,7 +206,6 @@ export type {
   SneakSettings,
   GameItem,
 } from "./map/store.ts";
-export type { PeriodicActionConfig, FarmStateSnapshot } from "./farm-script.ts";
 export type { Farm2StateSnapshot } from "./farm2/index.ts";
 export type { TriggerState } from "./triggers.ts";
 export type { MapAlias, MapSnapshot } from "./map/types.ts";

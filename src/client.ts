@@ -1,12 +1,3 @@
-interface PeriodicActionConfig {
-  enabled: boolean;
-  gotoAlias1: string;
-  commands: string[];
-  commandDelayMs: number;
-  gotoAlias2: string;
-  intervalMs: number;
-}
-
 interface ConnectDefaults {
   autoConnect: boolean;
   host: string;
@@ -128,21 +119,6 @@ type ServerEvent =
   | {
       type: "map_update";
       payload: MapSnapshotPayload;
-    }
-  | {
-      type: "farm_state";
-      payload: {
-        enabled: boolean;
-        zoneId: number | null;
-        pendingActivation: boolean;
-        targetValues: string[];
-        healCommands: string[];
-        healThresholdPercent: number;
-        fleeCommand: string;
-        fleeThresholdPercent: number;
-        lootValues: string[];
-        periodicAction: PeriodicActionConfig;
-      };
     }
   | {
        type: "farm2_state";
@@ -302,20 +278,6 @@ type ClientEvent =
   | { type: "map_reset" }
   | { type: "map_reset_area" }
   | { type: "map_recording_toggle"; payload?: { enabled?: boolean } }
-   | {
-       type: "farm_toggle";
-       payload: {
-          enabled: boolean;
-          targetValues: string[];
-          healCommands: string[];
-          healThresholdPercent: number;
-          fleeCommand: string;
-          fleeThresholdPercent: number;
-          lootValues: string[];
-          periodicAction: PeriodicActionConfig;
-          useStab?: boolean;
-       };
-     }
   | { type: "farm2_toggle"; payload?: { enabled?: boolean } }
   | { type: "alias_set"; payload: { vnum: number; alias: string } }
   | { type: "alias_delete"; payload: { vnum: number } }
@@ -610,7 +572,7 @@ function parseFarmCommandValues(rawValue: string): string[] {
 }
 
 function openFarmSettingsModal(): void {
-  const zoneId = farmZoneId ?? getZoneId(trackerCurrentVnum ?? 0);
+  const zoneId = farm2ZoneId ?? getZoneId(trackerCurrentVnum ?? 0);
   farmModalZoneId = zoneId;
 
   fillFarmModal(defaultFarmSettings());
@@ -974,29 +936,6 @@ function commitFarmSettings(): void {
     });
   }
 
-  const targetValues = parseFarmTargetValues(settings.targets);
-
-  sendClientEvent({
-      type: "farm_toggle",
-      payload: {
-        enabled: true,
-        targetValues,
-        healCommands: parseFarmCommandValues(settings.healCommands),
-        healThresholdPercent: settings.healThreshold,
-        fleeCommand: settings.fleeCommand,
-        fleeThresholdPercent: settings.fleeThreshold,
-        lootValues: parseFarmCommandValues(settings.loot),
-        periodicAction: {
-          enabled: settings.periodicActionEnabled,
-          gotoAlias1: settings.periodicActionGotoAlias1,
-          commands: parseFarmCommandValues(settings.periodicActionCommand),
-          commandDelayMs: settings.periodicActionCommandDelayMs,
-          gotoAlias2: settings.periodicActionGotoAlias2,
-          intervalMs: settings.periodicActionIntervalMin * 60 * 1000,
-        },
-        useStab: settings.useStab,
-      },
-    });
   closeFarmSettingsModal();
 }
 
@@ -1134,27 +1073,10 @@ let latestMapSnapshot: MapSnapshotPayload = {
   nodes: [],
   edges: [],
 };
-let farmEnabled = false;
 let mapRecordingEnabled = true;
-let farmZoneId: number | null = null;
-let farmPendingActivation = false;
 let farm2Enabled = false;
 let farm2ZoneId: number | null = null;
 let farm2PendingActivation = false;
-let farmTargetValues: string[] = [];
-let farmHealCommands: string[] = [];
-let farmHealThresholdPercent = 50;
-let farmFleeCommand = "";
-let farmFleeThresholdPercent = 0;
-let farmLootValues: string[] = [];
-let farmPeriodicAction: PeriodicActionConfig = {
-  enabled: false,
-  gotoAlias1: "",
-  commands: [],
-  commandDelayMs: 0,
-  gotoAlias2: "",
-  intervalMs: 0,
-};
 let trackerCurrentVnum: number | null = null;
 let currentStats: FarmRuntimeStats = {
   hp: 0,
@@ -2174,13 +2096,6 @@ function renderMapRecordingButton(): void {
   mapRecordingButton.classList.toggle("button-toggle-active", !mapRecordingEnabled);
 }
 
-function parseFarmTargetValues(rawValue: string): string[] {
-  return rawValue
-    .split(/[\n,;]/g)
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-}
-
 function readStartupCommands(): string[] {
   return startupCommandsInput.value
     .split(/\r?\n/g)
@@ -2504,20 +2419,6 @@ function createSocket(): WebSocket {
       case "map_update":
         trackerCurrentVnum = message.payload.currentVnum;
         updateMap(message.payload, false);
-        break;
-      case "farm_state":
-        farmEnabled = message.payload.enabled;
-        farmZoneId = message.payload.zoneId;
-        farmPendingActivation = message.payload.pendingActivation;
-        farmTargetValues = message.payload.targetValues;
-        farmHealCommands = message.payload.healCommands;
-        farmHealThresholdPercent = message.payload.healThresholdPercent;
-        farmFleeCommand = message.payload.fleeCommand;
-        farmFleeThresholdPercent = message.payload.fleeThresholdPercent;
-        farmLootValues = message.payload.lootValues;
-        farmPeriodicAction = message.payload.periodicAction;
-        renderFarmButton();
-renderMapRecordingButton();
         break;
       case "farm2_state":
         farm2Enabled = message.payload.enabled;
