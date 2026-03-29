@@ -25,6 +25,10 @@ export type ParsedEvent =
   | {
       kind: "mobs_in_room";
       mobs: string[];
+    }
+  | {
+      kind: "corpses_in_room";
+      count: number;
     };
 
 export interface ParserState {
@@ -35,6 +39,7 @@ export interface ParserState {
     name: string;
   } | null;
   pendingMobs: string[];
+  pendingCorpseCount: number;
 }
 
 export interface PendingMove {
@@ -68,6 +73,7 @@ export interface MapSnapshot {
   nodes: MapNode[];
   edges: MapEdge[];
   currentVnum: number | null;
+  zoneNames: Array<[number, string]>;
 }
 
 export interface MapAlias {

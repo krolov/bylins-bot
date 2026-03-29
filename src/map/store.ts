@@ -6,15 +6,11 @@ export interface FarmZoneSettings {
   healThreshold: number;
   fleeCommand: string;
   fleeThreshold: number;
-  loot: string;
   periodicActionEnabled: boolean;
   periodicActionGotoAlias1: string;
   periodicActionCommand: string;
   periodicActionCommandDelayMs: number;
   periodicActionGotoAlias2: string;
-  periodicActionIntervalMin: number;
-  survivalEnabled: boolean;
-  useStab: boolean;
 }
 
 export interface SurvivalSettings {
@@ -34,22 +30,6 @@ export interface TriggerSettings {
   rearm: boolean;
 }
 
-export interface AutoSpell {
-  name: string;
-  command: string;
-  enabled: boolean;
-}
-
-export interface AutoSpellsSettings {
-  spells: AutoSpell[];
-  checkIntervalMs: number;
-}
-
-export interface SneakSettings {
-  spells: AutoSpell[];
-  checkIntervalMs: number;
-}
-
 export interface GameItem {
   name: string;
   itemType: string;
@@ -63,6 +43,7 @@ export interface MobName {
   roomName: string | null;
   combatName: string | null;
   lastSeenVnum: number | null;
+  blacklisted: boolean;
   firstSeen: Date;
   lastSeen: Date;
 }
@@ -89,13 +70,12 @@ export interface MapStore {
   setSurvivalSettings(settings: SurvivalSettings): Promise<void>;
   getTriggerSettings(profileId: string): Promise<TriggerSettings | null>;
   setTriggerSettings(profileId: string, settings: TriggerSettings): Promise<void>;
-  getAutoSpellsSettings(profileId: string): Promise<AutoSpellsSettings | null>;
-  setAutoSpellsSettings(profileId: string, settings: AutoSpellsSettings): Promise<void>;
-  getSneakSettings(profileId: string): Promise<SneakSettings | null>;
-  setSneakSettings(profileId: string, settings: SneakSettings): Promise<void>;
   upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void>;
   getItemByName(name: string): Promise<GameItem | null>;
   getItems(): Promise<GameItem[]>;
+  getZoneNames(): Promise<Array<[number, string]>>;
+  setZoneName(zoneId: number, name: string): Promise<void>;
+  deleteZoneName(zoneId: number): Promise<void>;
   setRoomAutoCommand(vnum: number, command: string): Promise<void>;
   deleteRoomAutoCommand(vnum: number): Promise<void>;
   getRoomAutoCommands(): Promise<RoomAutoCommand[]>;
@@ -145,6 +125,7 @@ interface MobNameRow {
   room_name: string | null;
   combat_name: string | null;
   last_seen_vnum: number | null;
+  blacklisted: boolean;
   first_seen: Date;
   last_seen: Date;
 }
@@ -171,144 +152,10 @@ export function createMapStore(database: DatabaseClient): MapStore {
       `;
 
       await database`
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'map_rooms' AND column_name = 'exits'
-          ) THEN
-            ALTER TABLE map_rooms ADD COLUMN exits TEXT[] NOT NULL DEFAULT '{}';
-          END IF;
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'map_rooms' AND column_name = 'visited'
-          ) THEN
-            ALTER TABLE map_rooms ADD COLUMN visited BOOLEAN NOT NULL DEFAULT TRUE;
-          END IF;
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'map_rooms' AND column_name = 'closed_exits'
-          ) THEN
-            ALTER TABLE map_rooms ADD COLUMN closed_exits TEXT[] NOT NULL DEFAULT '{}';
-          END IF;
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'map_rooms' AND column_name = 'color'
-          ) THEN
-            ALTER TABLE map_rooms ADD COLUMN color TEXT;
-          END IF;
-        END$$
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS map_edges (
-          from_vnum INTEGER NOT NULL REFERENCES map_rooms(vnum) ON DELETE CASCADE,
-          to_vnum INTEGER NOT NULL REFERENCES map_rooms(vnum) ON DELETE CASCADE,
-          direction TEXT NOT NULL,
-          is_portal BOOLEAN NOT NULL DEFAULT FALSE,
-          first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          PRIMARY KEY (from_vnum, to_vnum, direction)
+        CREATE TABLE IF NOT EXISTS zone_names (
+          zone_id INT PRIMARY KEY,
+          name TEXT NOT NULL
         )
-      `;
-
-      await database`CREATE INDEX IF NOT EXISTS map_edges_to_vnum_idx ON map_edges (to_vnum)`;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS map_aliases (
-          vnum INTEGER PRIMARY KEY REFERENCES map_rooms(vnum) ON DELETE CASCADE,
-          alias TEXT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS farm_zone_settings (
-          zone_id INTEGER PRIMARY KEY,
-          settings JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS game_items (
-          name TEXT PRIMARY KEY,
-          item_type TEXT NOT NULL,
-          data JSONB NOT NULL DEFAULT '{}',
-          first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS survival_settings (
-          id INTEGER PRIMARY KEY DEFAULT 1,
-          settings JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          CHECK (id = 1)
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS trigger_settings (
-          profile_id TEXT PRIMARY KEY,
-          settings JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS room_auto_commands (
-          vnum INTEGER PRIMARY KEY REFERENCES map_rooms(vnum) ON DELETE CASCADE,
-          command TEXT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS auto_spells_settings (
-          profile_id TEXT PRIMARY KEY,
-          settings JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS sneak_settings (
-          profile_id TEXT PRIMARY KEY,
-          settings JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS room_colors (
-          vnum INTEGER PRIMARY KEY,
-          color TEXT NOT NULL
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS mob_names (
-          id SERIAL PRIMARY KEY,
-          room_name TEXT UNIQUE,
-          combat_name TEXT UNIQUE,
-          last_seen_vnum INTEGER,
-          first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'mob_names' AND column_name = 'last_seen_vnum'
-          ) THEN
-            ALTER TABLE mob_names ADD COLUMN last_seen_vnum INTEGER;
-          END IF;
-        END$$
       `;
     },
 
@@ -382,6 +229,10 @@ export function createMapStore(database: DatabaseClient): MapStore {
         ORDER BY from_vnum ASC, to_vnum ASC, direction ASC
       `;
 
+      const zoneNameRows = await database<{ zone_id: number; name: string }[]>`
+        SELECT zone_id, name FROM zone_names ORDER BY zone_id ASC
+      `;
+
       return {
         currentVnum,
         nodes: nodes.map((node: RoomRow): MapNode => ({
@@ -398,6 +249,7 @@ export function createMapStore(database: DatabaseClient): MapStore {
           direction: edge.direction,
           isPortal: edge.is_portal || getZoneId(edge.from_vnum) !== getZoneId(edge.to_vnum),
         })),
+        zoneNames: zoneNameRows.map((row) => [row.zone_id, row.name]),
       };
     },
 
@@ -551,6 +403,25 @@ export function createMapStore(database: DatabaseClient): MapStore {
       }));
     },
 
+    async getZoneNames(): Promise<Array<[number, string]>> {
+      const rows = await database<{ zone_id: number; name: string }[]>`
+        SELECT zone_id, name FROM zone_names ORDER BY zone_id ASC
+      `;
+      return rows.map((row) => [row.zone_id, row.name]);
+    },
+
+    async setZoneName(zoneId: number, name: string): Promise<void> {
+      await database`
+        INSERT INTO zone_names (zone_id, name)
+        VALUES (${zoneId}, ${name})
+        ON CONFLICT (zone_id) DO UPDATE SET name = EXCLUDED.name
+      `;
+    },
+
+    async deleteZoneName(zoneId: number): Promise<void> {
+      await database`DELETE FROM zone_names WHERE zone_id = ${zoneId}`;
+    },
+
     async setRoomAutoCommand(vnum: number, command: string): Promise<void> {
       await database`
         INSERT INTO room_auto_commands (vnum, command)
@@ -578,58 +449,14 @@ export function createMapStore(database: DatabaseClient): MapStore {
       return rows[0]?.command ?? null;
     },
 
-    async getAutoSpellsSettings(profileId: string): Promise<AutoSpellsSettings | null> {
-      const rows = await database<{ settings: AutoSpellsSettings }[]>`
-        SELECT settings FROM auto_spells_settings WHERE profile_id = ${profileId}
-      `;
-      const raw = rows[0]?.settings ?? null;
-      if (raw === null) return null;
-      if (typeof raw === "string") return JSON.parse(raw) as AutoSpellsSettings;
-      return raw;
-    },
-
-    async setAutoSpellsSettings(profileId: string, settings: AutoSpellsSettings): Promise<void> {
-      const settingsJson = JSON.stringify(settings);
-      await database`
-        INSERT INTO auto_spells_settings (profile_id, settings, updated_at)
-        VALUES (${profileId}, ${settingsJson}::jsonb, NOW())
-        ON CONFLICT (profile_id)
-        DO UPDATE SET
-          settings = EXCLUDED.settings,
-          updated_at = NOW()
-      `;
-    },
-
-    async getSneakSettings(profileId: string): Promise<SneakSettings | null> {
-      const rows = await database<{ settings: SneakSettings }[]>`
-        SELECT settings FROM sneak_settings WHERE profile_id = ${profileId}
-      `;
-      const raw = rows[0]?.settings ?? null;
-      if (raw === null) return null;
-      if (typeof raw === "string") return JSON.parse(raw) as SneakSettings;
-      return raw;
-    },
-
-    async setSneakSettings(profileId: string, settings: SneakSettings): Promise<void> {
-      const settingsJson = JSON.stringify(settings);
-      await database`
-        INSERT INTO sneak_settings (profile_id, settings, updated_at)
-        VALUES (${profileId}, ${settingsJson}::jsonb, NOW())
-        ON CONFLICT (profile_id)
-        DO UPDATE SET
-          settings = EXCLUDED.settings,
-          updated_at = NOW()
-      `;
-    },
-
     async saveMobRoomName(name: string, vnum: number | null, combatName?: string): Promise<void> {
       if (combatName !== undefined) {
         await database`
           INSERT INTO mob_names (room_name, combat_name, last_seen_vnum, first_seen, last_seen)
           VALUES (${name}, ${combatName}, ${vnum}, NOW(), NOW())
-          ON CONFLICT (combat_name)
+          ON CONFLICT (room_name)
           DO UPDATE SET
-            room_name = EXCLUDED.room_name,
+            combat_name = EXCLUDED.combat_name,
             last_seen_vnum = EXCLUDED.last_seen_vnum,
             last_seen = NOW()
         `;
@@ -648,15 +475,21 @@ export function createMapStore(database: DatabaseClient): MapStore {
     async saveMobCombatName(name: string, vnum: number | null): Promise<void> {
       await database`
         INSERT INTO mob_names (combat_name, last_seen_vnum, first_seen, last_seen)
-        VALUES (${name}, ${vnum}, NOW(), NOW())
-        ON CONFLICT (combat_name)
-        DO UPDATE SET last_seen = NOW(), last_seen_vnum = EXCLUDED.last_seen_vnum
+        SELECT ${name}, ${vnum}, NOW(), NOW()
+        WHERE NOT EXISTS (
+          SELECT 1 FROM mob_names WHERE combat_name = ${name}
+        )
+      `;
+      await database`
+        UPDATE mob_names
+        SET last_seen = NOW(), last_seen_vnum = ${vnum}
+        WHERE combat_name = ${name}
       `;
     },
 
     async getMobNames(): Promise<MobName[]> {
       const rows = await database<MobNameRow[]>`
-        SELECT id, room_name, combat_name, last_seen_vnum, first_seen, last_seen
+        SELECT id, room_name, combat_name, last_seen_vnum, blacklisted, first_seen, last_seen
         FROM mob_names
         ORDER BY id ASC
       `;
@@ -665,6 +498,7 @@ export function createMapStore(database: DatabaseClient): MapStore {
         roomName: row.room_name,
         combatName: row.combat_name,
         lastSeenVnum: row.last_seen_vnum,
+        blacklisted: row.blacklisted,
         firstSeen: row.first_seen,
         lastSeen: row.last_seen,
       }));
@@ -676,6 +510,7 @@ export function createMapStore(database: DatabaseClient): MapStore {
         FROM mob_names
         WHERE combat_name IS NOT NULL
           AND last_seen_vnum IS NOT NULL
+          AND blacklisted = FALSE
           AND FLOOR(last_seen_vnum::float / 100) = ${zoneId}
       `;
       return rows.map((row) => row.combat_name);

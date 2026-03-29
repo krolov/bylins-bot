@@ -50,6 +50,7 @@ export function createMemoryMapStore(): MapStore {
           if (a.toVnum !== b.toVnum) return a.toVnum - b.toVnum;
           return a.direction.localeCompare(b.direction);
         }),
+        zoneNames: [],
       };
     },
 
@@ -117,6 +118,14 @@ export function createMemoryMapStore(): MapStore {
       return [];
     },
 
+    async getZoneNames(): Promise<Array<[number, string]>> {
+      return [];
+    },
+
+    async setZoneName(_zoneId: number, _name: string): Promise<void> {},
+
+    async deleteZoneName(_zoneId: number): Promise<void> {},
+
     async setRoomAutoCommand(vnum: number, command: string): Promise<void> {
       autoCommands.set(vnum, command);
     },
@@ -134,18 +143,6 @@ export function createMemoryMapStore(): MapStore {
     async getRoomAutoCommand(vnum: number): Promise<string | null> {
       return autoCommands.get(vnum) ?? null;
     },
-
-    async getAutoSpellsSettings(_profileId: string) {
-      return null;
-    },
-
-    async setAutoSpellsSettings(_profileId: string, _settings: unknown): Promise<void> {},
-
-    async getSneakSettings(_profileId: string) {
-      return null;
-    },
-
-    async setSneakSettings(_profileId: string, _settings: unknown): Promise<void> {},
 
     async saveMobRoomName(_name: string, _vnum: number | null, _combatName?: string): Promise<void> {},
 
