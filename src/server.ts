@@ -17,16 +17,17 @@ import type { GearScoreEntry } from "./gear-scan.ts";
 import { runBazaarScan } from "./bazaar-scan.ts";
 import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache, searchAndCacheWikiItem } from "./wiki.ts";
 import { createRepairController } from "./repair-script.ts";
-import { createSpellController } from "./spell-script.ts";
-import { createSneakController } from "./sneak-script.ts";
-import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, TriggerState, MapAlias, MapSnapshot, GearScanRow, SellItem, GameItem } from "./events.type.ts";
-import { normalizeFarmZoneSettings, normalizeSurvivalSettings, normalizeAutoSpellsSettings, normalizeSneakSettings } from "./settings-normalizers.ts";
+import { createGatherController } from "./gather-script.ts";
+import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, TriggerState, MapAlias, MapSnapshot, GearScanRow, SellItem, GameItem } from "./events.type.ts";
+import { normalizeFarmZoneSettings, normalizeSurvivalSettings } from "./settings-normalizers.ts";
 import { createMudConnection } from "./mud-connection.ts";
 import type { Session } from "./mud-connection.ts";
+import { findVorozheRoute } from "./vorozhe-graph.ts";
 
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
 const LOG_DIR = "/var/log/bylins-bot";
 const LOG_FILE = `${LOG_DIR}/mud-traffic.log`;
+const DEBUG_LOG_FILE = `${LOG_DIR}/debug.log`;
 const GEAR_ADVISOR_LOG_FILE = `${LOG_DIR}/gear-advisor.log`;
 const LAST_PROFILE_FILE = `${LOG_DIR}/last-profile.txt`;
 const MAX_OUTPUT_CHUNKS = 200;
@@ -76,8 +77,6 @@ const mudConnection = createMudConnection({
     clearPendingContainerInspect();
     mudTextHandlers.clear();
     survivalController.reset();
-    spellController.reset();
-    sneakController.reset();
   },
   trackOutgoingCommand: (command) => trackOutgoingCommand(trackerState, command),
   lineEnding: runtimeConfig.lineEnding,
@@ -98,6 +97,7 @@ const mover = createMover({
   },
 });
 let mapRecordingEnabled = true;
+let debugLogEnabled = false;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
 const farm2Controller = createFarm2Controller({
@@ -192,34 +192,14 @@ const repairController = createRepairController({
   },
 });
 
-const spellController = createSpellController({
+const gatherController = createGatherController({
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "spell-script");
-  },
-  isInCombat: () => combatState.getInCombat(),
-  onLog: (message) => {
-    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
-    broadcastServerEvent({
-      type: "status",
-      payload: { state: sharedSession.state, message },
-    });
-  },
-});
-
-const sneakController = createSneakController({
-  sendCommand: (command) => {
-    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "sneak-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "gather-script");
   },
   onLog: (message) => {
-    appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
-    broadcastServerEvent({
-      type: "status",
-      payload: { state: sharedSession.state, message },
-    });
+    logEvent(null, "session", message);
   },
-  isInCombat: () => combatState.getInCombat(),
 });
 
 mkdirSync(LOG_DIR, { recursive: true });
@@ -237,6 +217,9 @@ const triggers = createTriggers({
     logEvent(null, "session", message);
   },
   isInCombat: () => combatState.getInCombat(),
+  getCharacterName: () => {
+    return runtimeConfig.profiles.find((p) => p.id === activeProfileId)?.name ?? "";
+  },
 });
 
 interface NavigationState {
@@ -461,16 +444,6 @@ async function sendSurvivalSettings(ws: BunServerWebSocket): Promise<void> {
   sendServerEvent(ws, { type: "survival_settings_data", payload: survival });
 }
 
-async function sendAutoSpellsSettings(ws: BunServerWebSocket): Promise<void> {
-  const settings = await mapStore.getAutoSpellsSettings(activeProfileId);
-  sendServerEvent(ws, { type: "auto_spells_settings_data", payload: settings });
-}
-
-async function sendSneakSettings(ws: BunServerWebSocket): Promise<void> {
-  const settings = await mapStore.getSneakSettings(activeProfileId);
-  sendServerEvent(ws, { type: "sneak_settings_data", payload: settings });
-}
-
 function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "defaults",
@@ -507,6 +480,16 @@ function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "map_recording_state",
     payload: { enabled: mapRecordingEnabled },
+  });
+
+  sendServerEvent(ws, {
+    type: "gather_state",
+    payload: gatherController.getState(),
+  });
+
+  sendServerEvent(ws, {
+    type: "combat_state",
+    payload: { inCombat: combatState.getInCombat() },
   });
 
   if (statsHpMax > 0 || statsEnergyMax > 0) {
@@ -549,6 +532,10 @@ function appendGearAdvisorLog(line: string): void {
   appendFileSync(GEAR_ADVISOR_LOG_FILE, `${line}\n`, "utf8");
 }
 
+function appendDebugLog(line: string): void {
+  appendFileSync(DEBUG_LOG_FILE, `${line}\n`, "utf8");
+}
+
 function logEvent(
   ws: BunServerWebSocket | null,
   direction: "session" | "mud-in" | "mud-out" | "browser-in" | "browser-out" | "error",
@@ -565,6 +552,10 @@ function logEvent(
     : "";
 
   appendLogLine(`[${timestamp}] session=${sessionId} direction=${direction} message=${JSON.stringify(message)}${suffix ? ` ${suffix}` : ""}`);
+
+  if (debugLogEnabled && (direction === "mud-in" || direction === "mud-out")) {
+    appendDebugLog(`[${timestamp}] direction=${direction} message=${JSON.stringify(message)}${suffix ? ` ${suffix}` : ""}`);
+  }
 }
 
 function normalizeTextMessage(message: string | ArrayBuffer | Uint8Array): string {
@@ -589,6 +580,13 @@ function handleSendCommand(ws: BunServerWebSocket, command: string | undefined):
   const trimmedCommand = command?.trim();
 
   if (!trimmedCommand) {
+    return;
+  }
+
+  if (trimmedCommand.startsWith("#go ")) {
+    const dir = trimmedCommand.slice(4).trim();
+    const mudCmd = combatState.getInCombat() ? `беж ${dir}` : `краст ${dir}`;
+    mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, mudCmd, "browser");
     return;
   }
 
@@ -850,19 +848,19 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
   combatState.handleMudText(text);
   triggers.handleMudText(text);
   survivalController.handleMudText(text);
-  spellController.handleMudText(text);
-  sneakController.handleMudText(text);
+  gatherController.handleMudText(text);
   const { enteredCombat, exitedCombat } = combatState.getTransition();
 
   if (enteredCombat) {
     triggers.onCombatStart();
+    broadcastServerEvent({ type: "combat_state", payload: { inCombat: true } });
   } else if (exitedCombat) {
     triggers.onCombatEnd();
+    broadcastServerEvent({ type: "combat_state", payload: { inCombat: false } });
   }
 
   if (exitedCombat) {
     scheduleSurvivalTick(50);
-    sneakController.onCombatEnd();
   } else if (!combatState.getInCombat()) {
     scheduleSurvivalTick(150);
   }
@@ -874,11 +872,15 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
   const previousRoomId = trackerState.currentRoomId;
 
   const mobsInRoom: string[] = [];
+  let corpseCount = 0;
   for (const event of events) {
     if (event.kind === "mobs_in_room") {
       for (const name of event.mobs) {
         if (!mobsInRoom.includes(name)) mobsInRoom.push(name);
       }
+    }
+    if (event.kind === "corpses_in_room") {
+      corpseCount += event.count;
     }
   }
 
@@ -906,6 +908,7 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
       currentRoomId: trackerState.currentRoomId,
       mobsInRoom: [],
       combatMobNames,
+      corpseCount: 0,
     });
     return;
   }
@@ -944,6 +947,7 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     currentRoomId: trackerState.currentRoomId,
     mobsInRoom,
     combatMobNames,
+    corpseCount,
   });
 
   if (trackerState.currentRoomId !== null && trackerState.currentRoomId !== previousRoomId) {
@@ -975,16 +979,6 @@ if (savedSurvival) {
 const savedTriggers = await mapStore.getTriggerSettings(activeProfileId);
 if (savedTriggers) {
   triggers.setEnabled(savedTriggers);
-}
-
-const savedAutoSpells = await mapStore.getAutoSpellsSettings(activeProfileId);
-if (savedAutoSpells) {
-  spellController.updateConfig(normalizeAutoSpellsSettings(savedAutoSpells));
-}
-
-const savedSneak = await mapStore.getSneakSettings(activeProfileId);
-if (savedSneak) {
-  sneakController.updateConfig(normalizeSneakSettings(savedSneak));
 }
 
 roomChangedListeners.add((vnum: number) => {
@@ -1083,8 +1077,6 @@ const server = Bun.serve({
 
       void sendMapSnapshot(ws);
       void sendSurvivalSettings(ws);
-      void sendAutoSpellsSettings(ws);
-      void sendSneakSettings(ws);
     },
     async message(ws, message) {
       let event: ClientEvent;
@@ -1112,16 +1104,6 @@ const server = Bun.serve({
             if (saved) triggers.setEnabled(saved);
           }).catch((error: unknown) => {
             logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading trigger settings");
-          });
-          void mapStore.getAutoSpellsSettings(activeProfileId).then((saved) => {
-            if (saved) spellController.updateConfig(normalizeAutoSpellsSettings(saved));
-          }).catch((error: unknown) => {
-            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading auto spells settings");
-          });
-          void mapStore.getSneakSettings(activeProfileId).then((saved) => {
-            if (saved) sneakController.updateConfig(normalizeSneakSettings(saved));
-          }).catch((error: unknown) => {
-            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading sneak settings");
           });
           break;
         case "send":
@@ -1155,6 +1137,12 @@ const server = Bun.serve({
           mapRecordingEnabled = event.payload?.enabled ?? !mapRecordingEnabled;
           logEvent(ws, "browser-in", "map_recording_toggle", { enabled: mapRecordingEnabled });
           broadcastServerEvent({ type: "map_recording_state", payload: { enabled: mapRecordingEnabled } });
+          break;
+        }
+        case "debug_log_toggle": {
+          debugLogEnabled = event.payload?.enabled ?? !debugLogEnabled;
+          logEvent(ws, "browser-in", "debug_log_toggle", { enabled: debugLogEnabled });
+          broadcastServerEvent({ type: "debug_log_state", payload: { enabled: debugLogEnabled } });
           break;
         }
         case "farm2_toggle": {
@@ -1295,39 +1283,31 @@ const server = Bun.serve({
           });
           break;
         }
-        case "auto_spells_settings_get": {
-          logEvent(ws, "browser-in", "auto_spells_settings_get");
-          await sendAutoSpellsSettings(ws);
+        case "gather_toggle": {
+          const newEnabled = typeof event.payload?.enabled === "boolean"
+            ? event.payload.enabled
+            : !gatherController.getState().enabled;
+          gatherController.setEnabled(newEnabled);
+          logEvent(ws, "browser-in", `gather_toggle enabled=${String(newEnabled)}`);
+          broadcastServerEvent({ type: "gather_state", payload: gatherController.getState() });
           break;
         }
-        case "auto_spells_settings_save": {
-          const raw = event.payload;
-          if (raw) {
-            const settings: AutoSpellsSettings = {
-              spells: Array.isArray(raw.spells) ? raw.spells : [],
-              checkIntervalMs: typeof raw.checkIntervalMs === "number" ? raw.checkIntervalMs : 60_000,
-            };
-            logEvent(ws, "browser-in", "auto_spells_settings_save");
-            await mapStore.setAutoSpellsSettings(activeProfileId, settings);
-            spellController.updateConfig(normalizeAutoSpellsSettings(settings));
+        case "gather_sell_bag": {
+          logEvent(ws, "browser-in", "gather_sell_bag");
+          const { bag } = gatherController.getState();
+          if (sharedSession.tcpSocket && sharedSession.connected) {
+            mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket, `выставить все ${bag}`, "gather-script");
           }
           break;
         }
-        case "sneak_settings_get": {
-          logEvent(ws, "browser-in", "sneak_settings_get");
-          await sendSneakSettings(ws);
-          break;
-        }
-        case "sneak_settings_save": {
-          const raw = event.payload;
-          if (raw) {
-            const settings: SneakSettings = {
-              spells: Array.isArray(raw.spells) ? raw.spells : [],
-              checkIntervalMs: typeof raw.checkIntervalMs === "number" ? raw.checkIntervalMs : 20_000,
-            };
-            logEvent(ws, "browser-in", "sneak_settings_save");
-            await mapStore.setSneakSettings(activeProfileId, settings);
-            sneakController.updateConfig(normalizeSneakSettings(settings));
+        case "zone_name_set": {
+          const { zoneId, name } = event.payload;
+          if (name === null || name === "") {
+            await mapStore.deleteZoneName(zoneId);
+            logEvent(ws, "browser-in", "zone_name_delete", { zoneId });
+          } else {
+            await mapStore.setZoneName(zoneId, name);
+            logEvent(ws, "browser-in", "zone_name_set", { zoneId, name });
           }
           break;
         }
@@ -1350,6 +1330,24 @@ const server = Bun.serve({
               payload: { query, found: false, error: err instanceof Error ? err.message : "Ошибка поиска" },
             });
           }
+          break;
+        }
+        case "vorozhe_route_find": {
+          const from = event.payload?.from?.trim() ?? "";
+          const to = event.payload?.to?.trim() ?? "";
+          logEvent(ws, "browser-in", `vorozhe_route_find: ${from} → ${to}`);
+          if (!from || !to) break;
+          const result = findVorozheRoute(from, to);
+          sendServerEvent(ws, {
+            type: "vorozhe_route_result",
+            payload: {
+              from,
+              to,
+              found: result.found,
+              steps: result.steps,
+              totalItems: result.totalItems as Record<string, number>,
+            },
+          });
           break;
         }
         case "room_auto_command_set": {

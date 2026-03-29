@@ -1,8 +1,9 @@
 import type { MapAlias, MapSnapshot } from "./map/types.ts";
-import type { FarmZoneSettings, SurvivalSettings, AutoSpellsSettings, SneakSettings, GameItem } from "./map/store.ts";
+import type { FarmZoneSettings, SurvivalSettings, GameItem } from "./map/store.ts";
 import type { Farm2StateSnapshot } from "./farm2/index.ts";
 import type { TriggerState } from "./triggers.ts";
 import type { GearScanRow, SellItem } from "./gear-scan.ts";
+import type { GatherState } from "./gather-script.ts";
 
 export interface WsData {
   sessionId: string;
@@ -50,12 +51,13 @@ export type ClientEvent =
   | { type: "gear_drop"; payload: { dropCommand: string } }
   | { type: "gear_apply"; payload: { commands: string[] } }
   | { type: "repair_start" }
-  | { type: "auto_spells_settings_get" }
-  | { type: "auto_spells_settings_save"; payload?: Partial<AutoSpellsSettings> }
-  | { type: "sneak_settings_get" }
-  | { type: "sneak_settings_save"; payload?: Partial<SneakSettings> }
   | { type: "map_recording_toggle"; payload?: { enabled?: boolean } }
-  | { type: "wiki_item_search"; payload?: { query?: string } };
+  | { type: "wiki_item_search"; payload?: { query?: string } }
+  | { type: "vorozhe_route_find"; payload?: { from?: string; to?: string } }
+  | { type: "gather_toggle"; payload?: { enabled?: boolean } }
+  | { type: "gather_sell_bag" }
+  | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
+  | { type: "debug_log_toggle"; payload?: { enabled?: boolean } };
 
 export type ServerEvent =
   | {
@@ -177,15 +179,8 @@ export type ServerEvent =
       };
     }
   | { type: "repair_state"; payload: { running: boolean; message: string } }
-  | {
-      type: "auto_spells_settings_data";
-      payload: AutoSpellsSettings | null;
-    }
-  | {
-      type: "sneak_settings_data";
-      payload: SneakSettings | null;
-    }
   | { type: "map_recording_state"; payload: { enabled: boolean } }
+  | { type: "combat_state"; payload: { inCombat: boolean } }
   | {
       type: "wiki_item_search_result";
       payload: {
@@ -197,16 +192,27 @@ export type ServerEvent =
         loadLocation?: string;
         error?: string;
       };
-    };
+    }
+  | {
+      type: "vorozhe_route_result";
+      payload: {
+        from: string;
+        to: string;
+        found: boolean;
+        steps: Array<{ from: string; to: string; items: string[] }>;
+        totalItems: Record<string, number>;
+      };
+    }
+  | { type: "gather_state"; payload: GatherState }
+  | { type: "debug_log_state"; payload: { enabled: boolean } };
 
 export type {
   FarmZoneSettings,
   SurvivalSettings,
-  AutoSpellsSettings,
-  SneakSettings,
   GameItem,
 } from "./map/store.ts";
 export type { Farm2StateSnapshot } from "./farm2/index.ts";
 export type { TriggerState } from "./triggers.ts";
 export type { MapAlias, MapSnapshot } from "./map/types.ts";
 export type { GearScanRow, SellItem } from "./gear-scan.ts";
+export type { GatherState } from "./gather-script.ts";
