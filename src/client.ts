@@ -66,6 +66,7 @@ interface MapSnapshotPayload {
   currentVnum: number | null;
   nodes: MapNodePayload[];
   edges: MapEdgePayload[];
+  zoneNames: Array<[number, string]>;
 }
 
 interface AliasPayload {
@@ -173,7 +174,7 @@ type ServerEvent =
     }
   | {
        type: "triggers_state";
-        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean };
+        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean };
     }
   | {
       type: "items_data";
@@ -246,14 +247,7 @@ type ServerEvent =
       };
     }
   | { type: "repair_state"; payload: { running: boolean; message: string } }
-  | {
-      type: "auto_spells_settings_data";
-      payload: import("./auto-spells-ui.ts").AutoSpellsSettings | null;
-    }
-  | {
-      type: "sneak_settings_data";
-      payload: import("./auto-spells-ui.ts").AutoSpellsSettings | null;
-    }
+  | { type: "combat_state"; payload: { inCombat: boolean } }
   | { type: "map_recording_state"; payload: { enabled: boolean } }
   | {
       type: "wiki_item_search_result";
@@ -266,7 +260,19 @@ type ServerEvent =
         loadLocation?: string;
         error?: string;
       };
-    };
+    }
+  | {
+      type: "vorozhe_route_result";
+      payload: {
+        from: string;
+        to: string;
+        found: boolean;
+        steps: Array<{ from: string; to: string; items: string[] }>;
+        totalItems: Record<string, number>;
+      };
+    }
+  | { type: "gather_state"; payload: { enabled: boolean; bag: string } }
+  | { type: "debug_log_state"; payload: { enabled: boolean } };
 
 type ClientEvent =
   | {
@@ -294,7 +300,7 @@ type ClientEvent =
     }
   | {
       type: "triggers_toggle";
-      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean; light?: boolean };
+      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean; light?: boolean; followLeader?: boolean };
     }
   | { type: "item_db_get" }
   | { type: "room_auto_command_set"; payload: { vnum: number; command: string } }
@@ -308,15 +314,14 @@ type ClientEvent =
   | { type: "gear_drop"; payload: { dropCommand: string } }
   | { type: "gear_apply"; payload: { commands: string[] } }
   | { type: "repair_start" }
-  | { type: "auto_spells_settings_get" }
-  | { type: "auto_spells_settings_save"; payload: import("./auto-spells-ui.ts").AutoSpellsSettings }
-  | { type: "sneak_settings_get" }
-  | { type: "sneak_settings_save"; payload: import("./auto-spells-ui.ts").AutoSpellsSettings }
-  | { type: "wiki_item_search"; payload: { query: string } };
+  | { type: "wiki_item_search"; payload: { query: string } }
+  | { type: "vorozhe_route_find"; payload: { from: string; to: string } }
+  | { type: "gather_toggle"; payload?: { enabled?: boolean } }
+  | { type: "gather_sell_bag" }
+  | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
+  | { type: "debug_log_toggle"; payload?: { enabled?: boolean } };
 
 import type { SurvivalSettings } from "./events.type.ts";
-import { initAutoSpellsUi } from "./auto-spells-ui.ts";
-import { initSneakUi } from "./sneak-ui.ts";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -348,6 +353,7 @@ const zLevelDownButton = requireElement<HTMLButtonElement>("#z-level-down");
 const zLevelUpButton = requireElement<HTMLButtonElement>("#z-level-up");
 const zLevelLabel = requireElement<HTMLSpanElement>("#z-level-label");
 const farmToggleButton = requireElement<HTMLButtonElement>("#farm-toggle-button");
+const farmSettingsButton = requireElement<HTMLButtonElement>("#farm-settings-button");
 const mapCanvasElement = requireElement<HTMLDivElement>("#map-canvas");
 const hpBarFill = requireElement<HTMLElement>("#hp-bar-fill");
 const hpBarLabel = requireElement<HTMLElement>("#hp-bar-label");
@@ -388,7 +394,6 @@ const farmModalHeal = requireElement<HTMLTextAreaElement>("#farm-modal-heal");
 const farmModalHealThreshold = requireElement<HTMLInputElement>("#farm-modal-heal-threshold");
 const farmModalFleeCommand = requireElement<HTMLInputElement>("#farm-modal-flee-command");
 const farmModalFleeThreshold = requireElement<HTMLInputElement>("#farm-modal-flee-threshold");
-const farmModalLoot = requireElement<HTMLTextAreaElement>("#farm-modal-loot");
 const farmModalClose = requireElement<HTMLButtonElement>("#farm-modal-close");
 const farmModalCancel = requireElement<HTMLButtonElement>("#farm-modal-cancel");
 const farmModalStart = requireElement<HTMLButtonElement>("#farm-modal-start");
@@ -397,8 +402,6 @@ const farmModalPeriodicAlias1 = requireElement<HTMLInputElement>("#farm-modal-pe
 const farmModalPeriodicCommand = requireElement<HTMLTextAreaElement>("#farm-modal-periodic-command");
 const farmModalPeriodicCommandDelay = requireElement<HTMLInputElement>("#farm-modal-periodic-command-delay");
 const farmModalPeriodicAlias2 = requireElement<HTMLInputElement>("#farm-modal-periodic-alias2");
-const farmModalPeriodicInterval = requireElement<HTMLInputElement>("#farm-modal-periodic-interval");
-const farmModalUseStab = requireElement<HTMLInputElement>("#farm-modal-use-stab");
 
 const survivalSettingsButton = requireElement<HTMLButtonElement>("#survival-settings-button");
 const survivalSettingsModal = requireElement<HTMLDivElement>("#survival-settings-modal");
@@ -432,10 +435,18 @@ const triggerStandUpCheckbox = requireElement<HTMLInputElement>("#trigger-stand-
 const triggerRearmCheckbox = requireElement<HTMLInputElement>("#trigger-rearm");
 const triggerCurseCheckbox = requireElement<HTMLInputElement>("#trigger-curse");
 const triggerLightCheckbox = requireElement<HTMLInputElement>("#trigger-light");
+const triggerFollowLeaderCheckbox = requireElement<HTMLInputElement>("#trigger-follow-leader");
 
 const itemDbButton = requireElement<HTMLButtonElement>("#item-db-button");
 
 const mapRecordingButton = requireElement<HTMLButtonElement>("#map-recording-button");
+const globalMapButton = requireElement<HTMLButtonElement>("#global-map-button");
+const globalMapModal = requireElement<HTMLDivElement>("#global-map-modal");
+const globalMapModalClose = requireElement<HTMLButtonElement>("#global-map-modal-close");
+const globalMapCanvas = requireElement<HTMLDivElement>("#global-map-canvas");
+const globalMapZoomIn = requireElement<HTMLButtonElement>("#global-map-zoom-in");
+const globalMapZoomOut = requireElement<HTMLButtonElement>("#global-map-zoom-out");
+const globalMapZoomLabel = requireElement<HTMLSpanElement>("#global-map-zoom-label");
 const itemDbModal = requireElement<HTMLDivElement>("#item-db-modal");
 const itemDbModalBackdrop = requireElement<HTMLDivElement>("#item-db-modal .farm-modal__backdrop");
 const itemDbModalClose = requireElement<HTMLButtonElement>("#item-db-modal-close");
@@ -471,6 +482,23 @@ const bazaarAdvisorStatus = requireElement<HTMLParagraphElement>("#bazaar-adviso
 const bazaarAdvisorTableBody = requireElement<HTMLTableSectionElement>("#bazaar-advisor-table-body");
 const bazaarAdvisorCoins = requireElement<HTMLSpanElement>("#bazaar-advisor-coins");
 
+const vorozheButton = requireElement<HTMLButtonElement>("#vorozhe-button");
+const vorozheModal = requireElement<HTMLDivElement>("#vorozhe-modal");
+const vorozheModalClose = requireElement<HTMLButtonElement>("#vorozhe-modal-close");
+const vorozheModalCancel = requireElement<HTMLButtonElement>("#vorozhe-modal-cancel");
+const vorozheModalBackdrop = requireElement<HTMLDivElement>("#vorozhe-modal .farm-modal__backdrop");
+const vorozheFromButtons = requireElement<HTMLDivElement>("#vorozhe-from-buttons");
+const vorozheToButtons = requireElement<HTMLDivElement>("#vorozhe-to-buttons");
+const vorozheResult = requireElement<HTMLDivElement>("#vorozhe-result");
+const vorozheNoRoute = requireElement<HTMLDivElement>("#vorozhe-no-route");
+const vorozheRouteTable = requireElement<HTMLTableElement>("#vorozhe-route-table");
+const vorozheRouteTbody = requireElement<HTMLTableSectionElement>("#vorozhe-route-tbody");
+const vorozheTotal = requireElement<HTMLDivElement>("#vorozhe-total");
+
+const gatherToggleButton = requireElement<HTMLButtonElement>("#gather-toggle-button");
+const gatherSellButton = requireElement<HTMLButtonElement>("#gather-sell-button");
+const debugLogButton = requireElement<HTMLButtonElement>("#debug-log-button");
+
 let farmModalZoneId: number | null = null;
 let currentSurvivalSettings: SurvivalSettings = defaultSurvivalSettings();
 
@@ -480,14 +508,11 @@ interface FarmSettings {
   healThreshold: number;
   fleeCommand: string;
   fleeThreshold: number;
-  loot: string;
   periodicActionEnabled: boolean;
   periodicActionGotoAlias1: string;
   periodicActionCommand: string;
   periodicActionCommandDelayMs: number;
   periodicActionGotoAlias2: string;
-  periodicActionIntervalMin: number;
-  useStab: boolean;
 }
 
 interface FarmRuntimeStats {
@@ -498,7 +523,7 @@ interface FarmRuntimeStats {
 }
 
 function defaultFarmSettings(): FarmSettings {
-  return { targets: "", healCommands: "", healThreshold: 50, fleeCommand: "", fleeThreshold: 0, loot: "", periodicActionEnabled: false, periodicActionGotoAlias1: "", periodicActionCommand: "", periodicActionCommandDelayMs: 0, periodicActionGotoAlias2: "", periodicActionIntervalMin: 30, useStab: true };
+  return { targets: "", healCommands: "", healThreshold: 50, fleeCommand: "", fleeThreshold: 0, periodicActionEnabled: false, periodicActionGotoAlias1: "", periodicActionCommand: "", periodicActionCommandDelayMs: 0, periodicActionGotoAlias2: "" };
 }
 
 function defaultSurvivalSettings(): SurvivalSettings {
@@ -513,14 +538,11 @@ function normalizeFarmSettings(raw: Partial<FarmSettings>): FarmSettings {
     healThreshold: typeof raw.healThreshold === "number" && Number.isFinite(raw.healThreshold) ? raw.healThreshold : def.healThreshold,
     fleeCommand: typeof raw.fleeCommand === "string" ? raw.fleeCommand : def.fleeCommand,
     fleeThreshold: typeof raw.fleeThreshold === "number" && Number.isFinite(raw.fleeThreshold) ? raw.fleeThreshold : def.fleeThreshold,
-    loot: typeof raw.loot === "string" ? raw.loot : def.loot,
     periodicActionEnabled: raw.periodicActionEnabled === true,
     periodicActionGotoAlias1: typeof raw.periodicActionGotoAlias1 === "string" ? raw.periodicActionGotoAlias1 : def.periodicActionGotoAlias1,
     periodicActionCommand: typeof raw.periodicActionCommand === "string" ? raw.periodicActionCommand : def.periodicActionCommand,
     periodicActionCommandDelayMs: typeof raw.periodicActionCommandDelayMs === "number" && Number.isFinite(raw.periodicActionCommandDelayMs) ? raw.periodicActionCommandDelayMs : def.periodicActionCommandDelayMs,
     periodicActionGotoAlias2: typeof raw.periodicActionGotoAlias2 === "string" ? raw.periodicActionGotoAlias2 : def.periodicActionGotoAlias2,
-    periodicActionIntervalMin: typeof raw.periodicActionIntervalMin === "number" && Number.isFinite(raw.periodicActionIntervalMin) ? raw.periodicActionIntervalMin : def.periodicActionIntervalMin,
-    useStab: raw.useStab !== false,
   };
 }
 
@@ -543,14 +565,11 @@ function fillFarmModal(settings: FarmSettings): void {
   farmModalHealThreshold.value = String(settings.healThreshold);
   farmModalFleeCommand.value = settings.fleeCommand;
   farmModalFleeThreshold.value = String(settings.fleeThreshold);
-  farmModalLoot.value = settings.loot;
   farmModalPeriodicEnabled.checked = settings.periodicActionEnabled;
   farmModalPeriodicAlias1.value = settings.periodicActionGotoAlias1;
   farmModalPeriodicCommand.value = settings.periodicActionCommand;
   farmModalPeriodicCommandDelay.value = String(settings.periodicActionCommandDelayMs);
   farmModalPeriodicAlias2.value = settings.periodicActionGotoAlias2;
-  farmModalPeriodicInterval.value = String(settings.periodicActionIntervalMin);
-  farmModalUseStab.checked = settings.useStab;
 }
 
 function fillSurvivalModal(settings: SurvivalSettings): void {
@@ -598,7 +617,7 @@ function closeSurvivalSettingsModal(): void {
   survivalSettingsModal.classList.add("farm-modal--hidden");
 }
 
-let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean } = { dodge: true, standUp: true, rearm: true, curse: false, light: false };
+let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean } = { dodge: true, standUp: true, rearm: true, curse: false, light: false, followLeader: true };
 
 function openTriggersModal(): void {
   triggerDodgeCheckbox.checked = currentTriggerState.dodge;
@@ -606,6 +625,7 @@ function openTriggersModal(): void {
   triggerRearmCheckbox.checked = currentTriggerState.rearm;
   triggerCurseCheckbox.checked = currentTriggerState.curse;
   triggerLightCheckbox.checked = currentTriggerState.light;
+  triggerFollowLeaderCheckbox.checked = currentTriggerState.followLeader;
   triggersModal.classList.remove("farm-modal--hidden");
 }
 
@@ -919,14 +939,11 @@ function commitFarmSettings(): void {
     healThreshold: Number(farmModalHealThreshold.value) || 50,
     fleeCommand: farmModalFleeCommand.value.trim(),
     fleeThreshold: Number(farmModalFleeThreshold.value) || 0,
-    loot: farmModalLoot.value.trim(),
     periodicActionEnabled: farmModalPeriodicEnabled.checked,
     periodicActionGotoAlias1: farmModalPeriodicAlias1.value.trim(),
     periodicActionCommand: farmModalPeriodicCommand.value.trim(),
     periodicActionCommandDelayMs: Math.max(0, Number(farmModalPeriodicCommandDelay.value) || 0),
     periodicActionGotoAlias2: farmModalPeriodicAlias2.value.trim(),
-    periodicActionIntervalMin: Number(farmModalPeriodicInterval.value) || 30,
-    useStab: farmModalUseStab.checked,
   };
 
   if (farmModalZoneId !== null) {
@@ -1072,7 +1089,10 @@ let latestMapSnapshot: MapSnapshotPayload = {
   currentVnum: null,
   nodes: [],
   edges: [],
+  zoneNames: [],
 };
+let globalMapZoom = 0.6;
+let globalMapOpen = false;
 let mapRecordingEnabled = true;
 let farm2Enabled = false;
 let farm2ZoneId: number | null = null;
@@ -1789,10 +1809,583 @@ function createDefaultTerminalStyle(): TerminalStyle {
 
 function updateMap(snapshot: MapSnapshotPayload, fullReset: boolean): void {
   latestMapSnapshot = snapshot;
+  for (const [zoneId, name] of snapshot.zoneNames) {
+    zoneNames.set(zoneId, name);
+  }
+  saveZoneNames(zoneNames);
   resetGridLayout();
   integrateSnapshot(snapshot);
   renderGridMap(snapshot);
+  if (globalMapOpen) {
+    renderZoneMap(snapshot);
+  }
 }
+
+interface ZoneNode {
+  zoneId: number;
+  roomCount: number;
+  visitedCount: number;
+  gridX: number;
+  gridY: number;
+}
+
+interface ZoneEdge {
+  fromZone: number;
+  toZone: number;
+  direction: string;
+}
+
+function loadZoneNames(): Map<number, string> {
+  try {
+    const raw = localStorage.getItem("zoneNames");
+    if (!raw) return new Map();
+    return new Map(JSON.parse(raw) as [number, string][]);
+  } catch {
+    return new Map();
+  }
+}
+
+function saveZoneNames(names: Map<number, string>): void {
+  localStorage.setItem("zoneNames", JSON.stringify(Array.from(names.entries())));
+}
+
+let zoneNames: Map<number, string> = loadZoneNames();
+
+function buildZoneGraph(snapshot: MapSnapshotPayload): { zones: Map<number, ZoneNode>; edges: ZoneEdge[] } {
+  const zones = new Map<number, ZoneNode>();
+
+  for (const node of snapshot.nodes) {
+    const zoneId = getZoneId(node.vnum);
+    const existing = zones.get(zoneId);
+    if (existing) {
+      existing.roomCount++;
+      if (node.visited) existing.visitedCount++;
+    } else {
+      zones.set(zoneId, { zoneId, roomCount: 1, visitedCount: node.visited ? 1 : 0, gridX: 0, gridY: 0 });
+    }
+  }
+
+  const edgeSet = new Set<string>();
+  const edges: ZoneEdge[] = [];
+  for (const edge of snapshot.edges) {
+    const fromZone = getZoneId(edge.fromVnum);
+    const toZone = getZoneId(edge.toVnum);
+    if (fromZone === toZone) continue;
+    const key = fromZone < toZone ? `${fromZone}-${toZone}` : `${toZone}-${fromZone}`;
+    if (edgeSet.has(key)) continue;
+    edgeSet.add(key);
+    edges.push({ fromZone, toZone, direction: edge.direction });
+  }
+
+  return { zones, edges };
+}
+
+function layoutZoneGraph(zones: Map<number, ZoneNode>, edges: ZoneEdge[]): void {
+  if (zones.size === 0) return;
+
+  const DIR_OFFSET: Record<string, [number, number]> = {
+    north:     [0, -1],
+    south:     [0,  1],
+    east:      [1,  0],
+    west:      [-1, 0],
+    northeast: [1, -1],
+    northwest: [-1, -1],
+    southeast: [1,  1],
+    southwest: [-1,  1],
+    up:        [0, -1],
+    down:      [0,  1],
+  };
+
+  const adj = new Map<number, { nb: number; dx: number; dy: number }[]>();
+  for (const z of zones.keys()) adj.set(z, []);
+  for (const edge of edges) {
+    const off = DIR_OFFSET[edge.direction];
+    const dx = off ? off[0] : 0;
+    const dy = off ? off[1] : 0;
+    adj.get(edge.fromZone)?.push({ nb: edge.toZone, dx,  dy  });
+    adj.get(edge.toZone)?.push(  { nb: edge.fromZone, dx: -dx, dy: -dy });
+  }
+
+  const sortedZones = Array.from(zones.keys()).sort((a, b) => a - b);
+  const col = new Map<number, number>();
+  const row = new Map<number, number>();
+  const visited = new Set<number>();
+  const components: number[][] = [];
+
+  for (const startZone of sortedZones) {
+    if (visited.has(startZone)) continue;
+    const comp: number[] = [];
+    const q = [startZone];
+    visited.add(startZone);
+    while (q.length > 0) {
+      const cur = q.shift()!;
+      comp.push(cur);
+      for (const { nb } of adj.get(cur) ?? []) {
+        if (!visited.has(nb)) { visited.add(nb); q.push(nb); }
+      }
+    }
+    components.push(comp);
+  }
+
+  function cellKey(x: number, y: number): string { return `${x},${y}`; }
+
+  let globalOffsetX = 0;
+
+  for (const component of components) {
+    const root = component[0]!;
+    const posX = new Map<number, number>();
+    const posY = new Map<number, number>();
+    const localOccupied = new Map<string, number>();
+
+    posX.set(root, 0);
+    posY.set(root, 0);
+    localOccupied.set(cellKey(0, 0), root);
+
+    const bfsQ = [root];
+    const placed = new Set([root]);
+
+    while (bfsQ.length > 0) {
+      const cur = bfsQ.shift()!;
+      const cx = posX.get(cur)!;
+      const cy = posY.get(cur)!;
+
+      for (const { nb, dx, dy } of adj.get(cur) ?? []) {
+        if (placed.has(nb)) continue;
+        placed.add(nb);
+
+        let tx = cx + dx * 2;
+        let ty = cy + dy * 2;
+
+        if (localOccupied.has(cellKey(tx, ty))) {
+          const perps: [number, number][] = dy !== 0
+            ? [[2, 0], [-2, 0], [4, 0], [-4, 0], [6, 0], [-6, 0], [8, 0], [-8, 0]]
+            : [[0, 2], [0, -2], [0, 4], [0, -4], [0, 6], [0, -6], [0, 8], [0, -8]];
+          let found = false;
+          for (const [ox, oy] of perps) {
+            if (!localOccupied.has(cellKey(tx + ox, ty + oy))) {
+              tx += ox; ty += oy; found = true; break;
+            }
+          }
+          if (!found) {
+            outer: for (let r = 2; r <= 16; r += 2) {
+              for (let ox = -r; ox <= r; ox += 2) {
+                for (let oy = -r; oy <= r; oy += 2) {
+                  if (Math.abs(ox) !== r && Math.abs(oy) !== r) continue;
+                  if (!localOccupied.has(cellKey(tx + ox, ty + oy))) {
+                    tx += ox; ty += oy; break outer;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        posX.set(nb, tx);
+        posY.set(nb, ty);
+        localOccupied.set(cellKey(tx, ty), nb);
+        bfsQ.push(nb);
+      }
+    }
+
+    const allX = [...posX.values()];
+    const allY = [...posY.values()];
+    const minCX = Math.min(...allX);
+    const maxCX = Math.max(...allX);
+
+    for (const z of component) {
+      col.set(z, globalOffsetX + (posX.get(z)! - minCX));
+      row.set(z, posY.get(z)!);
+    }
+
+    globalOffsetX += (maxCX - minCX) + 4;
+  }
+
+  const allRows = [...row.values()];
+  const minRow = Math.min(...allRows);
+
+  for (const zoneId of zones.keys()) {
+    const zone = zones.get(zoneId)!;
+    zone.gridX = col.get(zoneId) ?? 0;
+    zone.gridY = (row.get(zoneId) ?? 0) - minRow;
+  }
+}
+
+function routeZoneEdge(
+  fromZone: ZoneNode,
+  toZone: ZoneNode,
+  occupied: Set<string>,
+): Array<[number, number]> {
+  const sx = fromZone.gridX, sy = fromZone.gridY;
+  const tx = toZone.gridX, ty = toZone.gridY;
+  if (sx === tx && sy === ty) return [[sx, sy]];
+
+  const key = (x: number, y: number): string => `${x},${y}`;
+
+  const DIRS: [number, number][] = [
+    [1, 0], [-1, 0], [0, 1], [0, -1],
+    [1, 1], [-1, 1], [1, -1], [-1, -1],
+  ];
+
+  type Node = { x: number; y: number; g: number; f: number; parent: Node | null };
+  const open = new Map<string, Node>();
+  const closed = new Set<string>();
+
+  const startNode: Node = { x: sx, y: sy, g: 0, f: Math.abs(tx - sx) + Math.abs(ty - sy), parent: null };
+  open.set(key(sx, sy), startNode);
+
+  let iterations = 0;
+  while (open.size > 0 && iterations++ < 2000) {
+    let current: Node | null = null;
+    for (const node of open.values()) {
+      if (!current || node.f < current.f) current = node;
+    }
+    if (!current) break;
+
+    if (current.x === tx && current.y === ty) {
+      const path: Array<[number, number]> = [];
+      let n: Node | null = current;
+      while (n) { path.unshift([n.x, n.y]); n = n.parent; }
+      return path;
+    }
+
+    open.delete(key(current.x, current.y));
+    closed.add(key(current.x, current.y));
+
+    for (const [dx, dy] of DIRS) {
+      const nx = current.x + dx;
+      const ny = current.y + dy;
+      const nk = key(nx, ny);
+      if (closed.has(nk)) continue;
+      const isTarget = nx === tx && ny === ty;
+      if (!isTarget && occupied.has(nk)) continue;
+
+      const moveCost = dx !== 0 && dy !== 0 ? 1.4 : 1.0;
+      const crossPenalty = !isTarget && (
+        (dx !== 0 && dy !== 0 && (occupied.has(key(current.x + dx, current.y)) || occupied.has(key(current.x, current.y + dy))))
+      ) ? 3 : 0;
+      const g = current.g + moveCost + crossPenalty;
+      const h = Math.abs(tx - nx) + Math.abs(ty - ny);
+      const existing = open.get(nk);
+      if (!existing || g < existing.g) {
+        open.set(nk, { x: nx, y: ny, g, f: g + h, parent: current });
+      }
+    }
+  }
+
+  return [[sx, sy], [tx, ty]];
+}
+
+const ZONE_CELL = 80;
+const ZONE_TILE = 130;
+const ZONE_PAD = 2;
+
+let globalMapZoneRenameId: number | null = null;
+
+function renderZoneMap(snapshot: MapSnapshotPayload): void {
+  globalMapCanvas.innerHTML = "";
+
+  if (snapshot.nodes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "map-empty";
+    empty.textContent = "No map data yet";
+    globalMapCanvas.appendChild(empty);
+    return;
+  }
+
+  const { zones, edges } = buildZoneGraph(snapshot);
+  if (zones.size === 0) return;
+
+  layoutZoneGraph(zones, edges);
+
+  const scale = globalMapZoom;
+  const G_CELL = Math.round(ZONE_CELL * scale);
+  const G_TILE = Math.round(ZONE_TILE * scale);
+  const G_PAD = ZONE_PAD;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const z of zones.values()) {
+    if (z.gridX < minX) minX = z.gridX;
+    if (z.gridY < minY) minY = z.gridY;
+    if (z.gridX > maxX) maxX = z.gridX;
+    if (z.gridY > maxY) maxY = z.gridY;
+  }
+
+  const cols = maxX - minX + 1;
+  const rows = maxY - minY + 1;
+  const canvasW = (cols + G_PAD * 2) * G_CELL;
+  const canvasH = (rows + G_PAD * 2) * G_CELL;
+
+  function toRenderY(gy: number): number { return gy - minY; }
+  function tileCenter(gx: number, gy: number): [number, number] {
+    return [(gx - minX + G_PAD) * G_CELL + G_TILE / 2, (toRenderY(gy) + G_PAD) * G_CELL + G_TILE / 2];
+  }
+  function tileEdgePoint(gx: number, gy: number, towardGx: number, towardGy: number): [number, number] {
+    const [cx, cy] = tileCenter(gx, gy);
+    const dx = towardGx - gx;
+    const dy = towardGy - gy;
+    const half = G_TILE / 2;
+    const ex = dx === 0 ? 0 : dx > 0 ? half : -half;
+    const ey = dy === 0 ? 0 : dy > 0 ? half : -half;
+    if (dx !== 0 && dy !== 0) {
+      return [cx + ex, cy + ey];
+    }
+    return [cx + ex, cy + ey];
+  }
+
+  const wrapper = document.createElement("div");
+  wrapper.style.width = `${canvasW}px`;
+  wrapper.style.height = `${canvasH}px`;
+  wrapper.style.position = "relative";
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", String(canvasW));
+  svg.setAttribute("height", String(canvasH));
+  svg.style.position = "absolute";
+  svg.style.inset = "0";
+  svg.style.pointerEvents = "none";
+
+  const currentZoneId = snapshot.currentVnum != null ? getZoneId(snapshot.currentVnum) : null;
+
+  const occupiedCells = new Set<string>(
+    Array.from(zones.values()).map((z) => `${z.gridX},${z.gridY}`)
+  );
+
+  for (const edge of edges) {
+    const from = zones.get(edge.fromZone);
+    const to = zones.get(edge.toZone);
+    if (!from || !to) continue;
+
+    const path = routeZoneEdge(from, to, occupiedCells);
+    if (path.length < 2) continue;
+
+    const pixelPoints: [number, number][] = path.map(([gx, gy], i) => {
+      if (i === 0) {
+        const [ngx, ngy] = path[1]!;
+        return tileEdgePoint(gx, gy, ngx, ngy);
+      }
+      if (i === path.length - 1) {
+        const [pgx, pgy] = path[path.length - 2]!;
+        return tileEdgePoint(gx, gy, pgx, pgy);
+      }
+      return tileCenter(gx, gy);
+    });
+
+    const points = pixelPoints.map(([x, y]) => `${x},${y}`).join(" ");
+
+    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    polyline.setAttribute("points", points);
+    polyline.setAttribute("class", "global-map-portal-line");
+    polyline.setAttribute("fill", "none");
+    polyline.setAttribute("data-from", String(edge.fromZone));
+    polyline.setAttribute("data-to", String(edge.toZone));
+    svg.appendChild(polyline);
+  }
+
+  wrapper.appendChild(svg);
+
+  for (const zone of zones.values()) {
+    const isCurrent = zone.zoneId === currentZoneId;
+    const px = (zone.gridX - minX + G_PAD) * G_CELL;
+    const py = (toRenderY(zone.gridY) + G_PAD) * G_CELL;
+
+    const tile = document.createElement("div");
+    tile.className = isCurrent ? "zone-tile zone-tile--current" : "zone-tile";
+    tile.style.left = `${px}px`;
+    tile.style.top = `${py}px`;
+    tile.style.width = `${G_TILE}px`;
+    tile.style.height = `${G_TILE}px`;
+    tile.setAttribute("data-zone-id", String(zone.zoneId));
+
+    const zIdStr = String(zone.zoneId);
+    tile.addEventListener("mouseenter", () => {
+      svg.querySelectorAll<SVGPolylineElement>("polyline").forEach((pl) => {
+        const isConnected =
+          pl.getAttribute("data-from") === zIdStr || pl.getAttribute("data-to") === zIdStr;
+        pl.classList.toggle("global-map-portal-line--active", isConnected);
+        pl.classList.toggle("global-map-portal-line--dim", !isConnected);
+      });
+    });
+    tile.addEventListener("mouseleave", () => {
+      svg.querySelectorAll<SVGPolylineElement>("polyline").forEach((pl) => {
+        pl.classList.remove("global-map-portal-line--active", "global-map-portal-line--dim");
+      });
+    });
+
+    const idEl = document.createElement("div");
+    idEl.className = "zone-tile__id";
+    idEl.textContent = `${zone.zoneId} - ${zone.visitedCount}`;
+    tile.appendChild(idEl);
+
+    const customName = zoneNames.get(zone.zoneId);
+    const nameEl = document.createElement("div");
+    nameEl.className = "zone-tile__name";
+    nameEl.textContent = customName ?? "";
+    tile.appendChild(nameEl);
+
+    wrapper.appendChild(tile);
+  }
+
+  globalMapCanvas.appendChild(wrapper);
+
+  if (currentZoneId != null) {
+    const currentZone = zones.get(currentZoneId);
+    if (currentZone) {
+      const snapZone = currentZone;
+      requestAnimationFrame(() => {
+        const [cx, cy] = tileCenter(snapZone.gridX, snapZone.gridY);
+        globalMapCanvas.scrollLeft = cx - globalMapCanvas.clientWidth / 2;
+        globalMapCanvas.scrollTop = cy - globalMapCanvas.clientHeight / 2;
+      });
+    }
+  }
+}
+
+function updateGlobalMapZoomLabel(): void {
+  globalMapZoomLabel.textContent = `${Math.round(globalMapZoom * 100)}%`;
+}
+
+function openGlobalMap(): void {
+  globalMapOpen = true;
+  globalMapModal.classList.remove("global-map-modal--hidden");
+  renderZoneMap(latestMapSnapshot);
+}
+
+function closeGlobalMap(): void {
+  globalMapOpen = false;
+  globalMapModal.classList.add("global-map-modal--hidden");
+  closeZoneRenamePopup();
+}
+
+globalMapButton.addEventListener("click", openGlobalMap);
+globalMapModalClose.addEventListener("click", closeGlobalMap);
+
+globalMapModal.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  if (target === globalMapModal || target.classList.contains("global-map-modal__backdrop")) {
+    closeGlobalMap();
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && globalMapOpen) closeGlobalMap();
+});
+
+globalMapZoomIn.addEventListener("click", () => {
+  globalMapZoom = Math.min(2.0, parseFloat((globalMapZoom + 0.2).toFixed(1)));
+  updateGlobalMapZoomLabel();
+  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+});
+
+globalMapZoomOut.addEventListener("click", () => {
+  globalMapZoom = Math.max(0.2, parseFloat((globalMapZoom - 0.2).toFixed(1)));
+  updateGlobalMapZoomLabel();
+  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+});
+
+let globalMapDragOrigin: { x: number; y: number; scrollLeft: number; scrollTop: number } | null = null;
+let globalMapDidDrag = false;
+
+globalMapCanvas.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  globalMapDidDrag = false;
+  globalMapDragOrigin = {
+    x: e.clientX,
+    y: e.clientY,
+    scrollLeft: globalMapCanvas.scrollLeft,
+    scrollTop: globalMapCanvas.scrollTop,
+  };
+  globalMapCanvas.setPointerCapture(e.pointerId);
+  globalMapCanvas.classList.add("map-canvas--dragging");
+});
+
+globalMapCanvas.addEventListener("pointermove", (e) => {
+  if (!globalMapDragOrigin) return;
+  if (Math.abs(e.clientX - globalMapDragOrigin.x) > 4 || Math.abs(e.clientY - globalMapDragOrigin.y) > 4) {
+    globalMapDidDrag = true;
+  }
+  globalMapCanvas.scrollLeft = globalMapDragOrigin.scrollLeft - (e.clientX - globalMapDragOrigin.x);
+  globalMapCanvas.scrollTop = globalMapDragOrigin.scrollTop - (e.clientY - globalMapDragOrigin.y);
+});
+
+globalMapCanvas.addEventListener("pointerup", () => {
+  globalMapDragOrigin = null;
+  globalMapCanvas.classList.remove("map-canvas--dragging");
+});
+
+globalMapCanvas.addEventListener("pointercancel", () => {
+  globalMapDragOrigin = null;
+  globalMapCanvas.classList.remove("map-canvas--dragging");
+});
+
+globalMapCanvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  if (globalMapDidDrag) return;
+  const target = e.target as HTMLElement;
+  const tile = target.closest<HTMLElement>(".zone-tile");
+  if (!tile) return;
+  const zoneId = Number(tile.getAttribute("data-zone-id"));
+  if (isNaN(zoneId)) return;
+  openZoneRenamePopup(zoneId, e.clientX, e.clientY);
+});
+
+const zoneRenamePopup = requireElement<HTMLDivElement>("#zone-rename-popup");
+const zoneRenameInput = requireElement<HTMLInputElement>("#zone-rename-input");
+const zoneRenameTitle = requireElement<HTMLSpanElement>("#zone-rename-title");
+const zoneRenameSave = requireElement<HTMLButtonElement>("#zone-rename-save");
+const zoneRenameDelete = requireElement<HTMLButtonElement>("#zone-rename-delete");
+const zoneRenameClose = requireElement<HTMLButtonElement>("#zone-rename-close");
+
+function openZoneRenamePopup(zoneId: number, clientX: number, clientY: number): void {
+  globalMapZoneRenameId = zoneId;
+  zoneRenameTitle.textContent = `Зона ${zoneId}`;
+  zoneRenameInput.value = zoneNames.get(zoneId) ?? "";
+  zoneRenamePopup.classList.remove("zone-rename-popup--hidden");
+
+  const popupW = 220;
+  const popupH = 100;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const left = Math.min(clientX, vw - popupW - 8);
+  const top = Math.min(clientY, vh - popupH - 8);
+  zoneRenamePopup.style.left = `${left}px`;
+  zoneRenamePopup.style.top = `${top}px`;
+  requestAnimationFrame(() => zoneRenameInput.focus());
+}
+
+function closeZoneRenamePopup(): void {
+  globalMapZoneRenameId = null;
+  zoneRenamePopup.classList.add("zone-rename-popup--hidden");
+}
+
+function saveZoneRename(): void {
+  if (globalMapZoneRenameId === null) return;
+  const name = zoneRenameInput.value.trim();
+  if (name) {
+    zoneNames.set(globalMapZoneRenameId, name);
+  } else {
+    zoneNames.delete(globalMapZoneRenameId);
+  }
+  saveZoneNames(zoneNames);
+  sendClientEvent({ type: "zone_name_set", payload: { zoneId: globalMapZoneRenameId, name: name || null } });
+  closeZoneRenamePopup();
+  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+}
+
+zoneRenameSave.addEventListener("click", saveZoneRename);
+zoneRenameClose.addEventListener("click", closeZoneRenamePopup);
+zoneRenameDelete.addEventListener("click", () => {
+  if (globalMapZoneRenameId !== null) {
+    zoneNames.delete(globalMapZoneRenameId);
+    saveZoneNames(zoneNames);
+    sendClientEvent({ type: "zone_name_set", payload: { zoneId: globalMapZoneRenameId, name: null } });
+  }
+  closeZoneRenamePopup();
+  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+});
+zoneRenameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveZoneRename();
+  if (e.key === "Escape") closeZoneRenamePopup();
+});
 
 function cloneStyle(style: TerminalStyle): TerminalStyle {
   return {
@@ -1969,13 +2562,18 @@ function parseAnsiSegments(chunk: string): AnsiSegment[] {
 
 const MAX_CHAT_LINES = 200;
 
+const CHAT_FILTER_NAMES = ["Незнакомец", "Ворожея", "Кузнец", "Хитрый лавочник", "Здоровый дядька", "Владелец двора", "Раненый воин", "Травник"];
+
 function isChatLine(text: string): boolean {
+  if (CHAT_FILTER_NAMES.some((name) => text.includes(name))) return false;
   return (
     /сказал[аи]?\s+вам\s*[:'"]/.test(text) ||
     /сказал[аи]?\s*:\s*'/.test(text) ||
     /Вы сказали\s*:\s*'/.test(text) ||
     /Услышали вы голос/.test(text) ||
-    /шепнул[аи]?\s+вам/.test(text)
+    /шепнул[аи]?\s+вам/.test(text) ||
+    /дружине\s*:\s*'/.test(text) ||
+    /Вы дружине\s*:\s*'/.test(text)
   );
 }
 
@@ -2152,6 +2750,117 @@ function openBazaarAdvisorModal(): void {
 
 function closeBazaarAdvisorModal(): void {
   bazaarAdvisorPanel.classList.add("gear-advisor-panel--hidden");
+}
+
+const VOROZHE_CITIES = [
+  "Брянск", "Великий Новгород", "Владимир", "Вышгород", "Галич",
+  "Искоростень", "Киев", "Корсунь", "Курск", "Ладога",
+  "Любеч", "Меньск", "Муром", "Переяславль", "Полоцк",
+  "Псков", "Путивль", "Ростов Великий", "Русса", "Рязань",
+  "Тверь", "Торжок", "Тотьма", "Туров", "Чернигов",
+] as const;
+
+let vorozheFrom: string | null = null;
+let vororozheFromButtons: HTMLButtonElement[] = [];
+let vorozheTo: string | null = null;
+let vorozheToButtonsList: HTMLButtonElement[] = [];
+
+function initVorozheModal(): void {
+  VOROZHE_CITIES.forEach((city) => {
+    const fromBtn = document.createElement("button");
+    fromBtn.type = "button";
+    fromBtn.className = "vorozhe-city-btn";
+    fromBtn.textContent = city;
+    fromBtn.addEventListener("click", () => {
+      vorozheFrom = city;
+      vororozheFromButtons.forEach(b => b.classList.remove("vorozhe-city-btn--active"));
+      fromBtn.classList.add("vorozhe-city-btn--active");
+      maybeRequestVorozheRoute();
+    });
+    vorozheFromButtons.appendChild(fromBtn);
+    vororozheFromButtons.push(fromBtn);
+
+    const toBtn = document.createElement("button");
+    toBtn.type = "button";
+    toBtn.className = "vorozhe-city-btn";
+    toBtn.textContent = city;
+    toBtn.addEventListener("click", () => {
+      vorozheTo = city;
+      vorozheToButtonsList.forEach(b => b.classList.remove("vorozhe-city-btn--active"));
+      toBtn.classList.add("vorozhe-city-btn--active");
+      maybeRequestVorozheRoute();
+    });
+    vorozheToButtons.appendChild(toBtn);
+    vorozheToButtonsList.push(toBtn);
+  });
+}
+
+function maybeRequestVorozheRoute(): void {
+  if (!vorozheFrom || !vorozheTo) return;
+  sendClientEvent({ type: "vorozhe_route_find", payload: { from: vorozheFrom, to: vorozheTo } });
+}
+
+function openVorozheModal(): void {
+  vorozheModal.classList.remove("farm-modal--hidden");
+}
+
+function closeVorozheModal(): void {
+  vorozheModal.classList.add("farm-modal--hidden");
+}
+
+function renderVorozheResult(payload: {
+  from: string;
+  to: string;
+  found: boolean;
+  steps: Array<{ from: string; to: string; items: string[] }>;
+  totalItems: Record<string, number>;
+}): void {
+  vorozheResult.classList.remove("vorozhe-modal__result--hidden");
+
+  if (!payload.found || payload.steps.length === 0) {
+    if (payload.from === payload.to) {
+      vorozheNoRoute.classList.remove("vorozhe-modal__no-route--hidden");
+      vorozheNoRoute.textContent = "Вы уже в этом городе";
+    } else {
+      vorozheNoRoute.classList.remove("vorozhe-modal__no-route--hidden");
+      vorozheNoRoute.textContent = "Маршрут не найден";
+    }
+    vorozheRouteTable.classList.add("vorozhe-modal__table--hidden");
+    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
+    return;
+  }
+
+  vorozheNoRoute.classList.add("vorozhe-modal__no-route--hidden");
+  vorozheRouteTable.classList.remove("vorozhe-modal__table--hidden");
+  vorozheTotal.classList.remove("vorozhe-modal__total--hidden");
+
+  vorozheRouteTbody.innerHTML = "";
+  for (const step of payload.steps) {
+    const tr = document.createElement("tr");
+    const tdFrom = document.createElement("td");
+    tdFrom.textContent = step.from;
+    const tdTo = document.createElement("td");
+    tdTo.textContent = step.to;
+    const tdItems = document.createElement("td");
+    step.items.forEach((item) => {
+      const badge = document.createElement("span");
+      badge.className = "vorozhe-item-badge";
+      badge.textContent = item;
+      tdItems.appendChild(badge);
+    });
+    tr.appendChild(tdFrom);
+    tr.appendChild(tdTo);
+    tr.appendChild(tdItems);
+    vorozheRouteTbody.appendChild(tr);
+  }
+
+  const totalEntries = Object.entries(payload.totalItems);
+  if (totalEntries.length > 0) {
+    const parts = totalEntries.map(([item, count]) => `${item} ×${count}`);
+    vorozheTotal.textContent = `Итого нужно: ${parts.join(", ")}`;
+  } else {
+    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
+  }
 }
 
 function renderGearAdvisorRow(row: {
@@ -2474,10 +3183,21 @@ function createSocket(): WebSocket {
         triggerRearmCheckbox.checked = message.payload.rearm;
         triggerCurseCheckbox.checked = message.payload.curse;
         triggerLightCheckbox.checked = message.payload.light;
+        triggerFollowLeaderCheckbox.checked = message.payload.followLeader;
         break;
       case "map_recording_state":
         mapRecordingEnabled = message.payload.enabled;
         renderMapRecordingButton();
+        break;
+      case "gather_state":
+        gatherToggleButton.classList.toggle("button-toggle-active", message.payload.enabled);
+        break;
+      case "debug_log_state":
+        debugLogButton.classList.toggle("button-toggle-active", message.payload.enabled);
+        debugLogButton.title = message.payload.enabled ? "Дебаг лог: вкл" : "Дебаг лог: выкл";
+        break;
+      case "combat_state":
+        hotkeysInCombat = message.payload.inCombat;
         break;
       case "items_data":
         renderItemDbTable(message.payload.items);
@@ -2552,16 +3272,6 @@ function createSocket(): WebSocket {
           ? `Починка: ${message.payload.message}`
           : "Починить снаряжение";
         break;
-      case "auto_spells_settings_data": {
-        const payload = message.payload;
-        if (payload !== null) onAutoSpellsData(payload);
-        break;
-      }
-      case "sneak_settings_data": {
-        const payload = message.payload;
-        if (payload !== null) onSneakData(payload);
-        break;
-      }
       case "wiki_item_search_result": {
         const p = message.payload;
         itemDbWikiBtn.disabled = false;
@@ -2577,6 +3287,10 @@ function createSocket(): WebSocket {
           itemDbWikiResult.textContent = parts.join("\n\n") || "Найдено, но карточка пуста";
           sendClientEvent({ type: "item_db_get" });
         }
+        break;
+      }
+      case "vorozhe_route_result": {
+        renderVorozheResult(message.payload);
         break;
       }
     }
@@ -2817,6 +3531,8 @@ farmToggleButton.addEventListener("click", () => {
   });
 });
 
+farmSettingsButton.addEventListener("click", openFarmSettingsModal);
+
 farmModalStart.addEventListener("click", () => {
   commitFarmSettings();
 });
@@ -2904,11 +3620,28 @@ mapRecordingButton.addEventListener("click", () => {
   renderMapRecordingButton();
 });
 
+gatherToggleButton.addEventListener("click", () => {
+  sendClientEvent({ type: "gather_toggle" });
+});
+
+gatherSellButton.addEventListener("click", () => {
+  sendClientEvent({ type: "gather_sell_bag" });
+});
+
+debugLogButton.addEventListener("click", () => {
+  sendClientEvent({ type: "debug_log_toggle" });
+});
+
 gearAdvisorButton.addEventListener("click", openGearAdvisorModal);
 gearAdvisorModalClose.addEventListener("click", closeGearAdvisorModal);
 
 bazaarAdvisorButton.addEventListener("click", openBazaarAdvisorModal);
 bazaarAdvisorModalClose.addEventListener("click", closeBazaarAdvisorModal);
+
+vorozheButton.addEventListener("click", openVorozheModal);
+vorozheModalClose.addEventListener("click", closeVorozheModal);
+vorozheModalCancel.addEventListener("click", closeVorozheModal);
+vorozheModalBackdrop.addEventListener("click", closeVorozheModal);
 
 itemDbTabs.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
@@ -2958,6 +3691,11 @@ triggerCurseCheckbox.addEventListener("change", () => {
 triggerLightCheckbox.addEventListener("change", () => {
   currentTriggerState = { ...currentTriggerState, light: triggerLightCheckbox.checked };
   sendClientEvent({ type: "triggers_toggle", payload: { light: triggerLightCheckbox.checked } });
+});
+
+triggerFollowLeaderCheckbox.addEventListener("change", () => {
+  currentTriggerState = { ...currentTriggerState, followLeader: triggerFollowLeaderCheckbox.checked };
+  sendClientEvent({ type: "triggers_toggle", payload: { followLeader: triggerFollowLeaderCheckbox.checked } });
 });
 
 document.addEventListener("keydown", (e) => {
@@ -3090,16 +3828,24 @@ const HOTKEYS_STORAGE_KEY = "mud_hotkeys";
 const LAST_PROFILE_KEY = "mud_last_profile";
 
 interface HotkeyEntry {
-  key: string;       // e.g. "ArrowUp", "KeyW", "F1"
-  command: string;   // MUD command to send
-  label: string;     // Human-readable key label shown in UI
+  key: string;            // e.g. "ArrowUp", "Ctrl+ArrowUp", "KeyW", "F1"
+  command: string;        // MUD command to send (out of combat)
+  combatCommand?: string; // MUD command to send when in combat (optional)
+  label: string;          // Human-readable key label shown in UI
 }
 
 const DEFAULT_HOTKEYS: HotkeyEntry[] = [
-  { key: "ArrowUp",    command: "север",  label: "↑" },
-  { key: "ArrowDown",  command: "юг",     label: "↓" },
-  { key: "ArrowLeft",  command: "запад",  label: "←" },
-  { key: "ArrowRight", command: "восток", label: "→" },
+  { key: "ArrowUp",        command: "север",   label: "↑" },
+  { key: "ArrowDown",      command: "юг",      label: "↓" },
+  { key: "ArrowLeft",      command: "запад",   label: "←" },
+  { key: "ArrowRight",     command: "восток",  label: "→" },
+  { key: "Opt+ArrowUp",    command: "#go с",   label: "Opt+↑" },
+  { key: "Opt+ArrowDown",  command: "#go ю",   label: "Opt+↓" },
+  { key: "Opt+ArrowLeft",  command: "#go з",   label: "Opt+←" },
+  { key: "Opt+ArrowRight", command: "#go в",   label: "Opt+→" },
+  { key: "KeyZ",           command: "карта",   label: "Я" },
+  { key: "KeyX",           command: "огл",     label: "Ч" },
+  { key: "KeyA",           command: "освеж тр", label: "Ф" },
 ];
 
 function loadHotkeys(): HotkeyEntry[] {
@@ -3108,9 +3854,12 @@ function loadHotkeys(): HotkeyEntry[] {
     if (raw) {
       const parsed = JSON.parse(raw) as unknown;
       if (Array.isArray(parsed)) {
-        return (parsed as HotkeyEntry[]).filter(
+        const saved = (parsed as HotkeyEntry[]).filter(
           (e) => typeof e.key === "string" && typeof e.command === "string" && typeof e.label === "string"
         );
+        const savedKeys = new Set(saved.map((e) => e.key));
+        const missing = DEFAULT_HOTKEYS.filter((e) => !savedKeys.has(e.key));
+        return [...saved, ...missing];
       }
     }
   } catch {
@@ -3124,6 +3873,7 @@ function saveHotkeys(entries: HotkeyEntry[]): void {
 }
 
 let hotkeys: HotkeyEntry[] = loadHotkeys();
+let hotkeysInCombat = false;
 
 function isTextInputFocused(): boolean {
   const active = document.activeElement;
@@ -3133,18 +3883,19 @@ function isTextInputFocused(): boolean {
 }
 
 document.addEventListener("keydown", (e) => {
-  // Don't fire hotkeys when typing in any input/textarea
-  if (isTextInputFocused()) return;
-  // Don't fire if a modifier key combo (Ctrl/Meta) is pressed
-  if (e.ctrlKey || e.metaKey) return;
+  const modifier = e.metaKey ? "Cmd+" : e.altKey ? "Opt+" : e.ctrlKey ? "Ctrl+" : "";
+  if (!modifier && isTextInputFocused()) return;
 
-  const entry = hotkeys.find((h) => h.key === e.code || h.key === e.key);
-  if (!entry || !entry.command.trim()) return;
+  const eventKey = modifier + (e.code || e.key);
+  const entry = hotkeys.find((h) => h.key === eventKey || (!modifier && (h.key === e.code || h.key === e.key)));
+  if (!entry) return;
 
-  // Prevent default browser behavior for matched keys (e.g. page scroll on arrows)
+  const cmd = (hotkeysInCombat && entry.combatCommand) ? entry.combatCommand : entry.command;
+  if (!cmd.trim()) return;
+
   e.preventDefault();
 
-  sendClientEvent({ type: "send", payload: { command: entry.command.trim() } });
+  sendClientEvent({ type: "send", payload: { command: cmd.trim() } });
 });
 
 // ── Hotkey modal ───────────────────────────────────────────────────────────────
@@ -3259,8 +4010,10 @@ hotkeysModal.addEventListener("keydown", (e) => {
   e.stopPropagation();
 
   const label = keyToLabel(e);
+  const modifier = e.metaKey ? "Cmd+" : e.altKey ? "Opt+" : e.ctrlKey ? "Ctrl+" : "";
+  const keyCode = modifier + (e.code || e.key);
   capturingCell.keyEl.value = label;
-  capturingCell.keyEl.title = `Код: ${e.code || e.key}`;
+  capturingCell.keyEl.title = `Код: ${keyCode}`;
   capturingCell.keyEl.classList.remove("hotkeys-modal__key-input--capturing");
   capturingCell = null;
 });
@@ -3272,11 +4025,9 @@ function keyToLabel(e: KeyboardEvent): string {
     Delete: "Del", Home: "Home", End: "End", PageUp: "PgUp", PageDown: "PgDn",
     Insert: "Ins", Space: "Пробел",
   };
-  if (labels[e.key]) return labels[e.key]!;
-  if (e.key.length === 1) return e.key.toUpperCase();
-  // Function keys
-  if (/^F\d+$/.test(e.key)) return e.key;
-  return e.code || e.key;
+  const base = labels[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : (/^F\d+$/.test(e.key) ? e.key : e.code || e.key));
+  const prefix = e.metaKey ? "Cmd+" : e.altKey ? "Opt+" : e.ctrlKey ? "Ctrl+" : "";
+  return prefix + base;
 }
 
 function openHotkeysModal(): void {
@@ -3318,8 +4069,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-const onAutoSpellsData = initAutoSpellsUi({ sendClientEvent });
-const onSneakData = initSneakUi({ sendClientEvent });
+initVorozheModal();
 
 renderFarmButton();
 updateActionBadges();
