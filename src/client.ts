@@ -2845,6 +2845,19 @@ function appendOutput(text: string): void {
   const shouldAutoScroll = isScrolledToBottom();
   const segments = parseAnsiSegments(text);
 
+  // Parse last enemy name from combat prompt: e.g. "... [Ринли:Невредима] [крестьянин:Ранен] > "
+  // There may be multiple [...:...] blocks; take the last one as the current target.
+  // Strip ANSI escape codes first — raw text may contain color sequences inside [...] blocks.
+  const cleanText = text.replace(/\x1b\[[0-9;]*m/g, "");
+  const combatPromptMatches = [...cleanText.matchAll(/\[([^\]:]+):[А-Яа-яЁё. ]+\]/g)];
+  if (combatPromptMatches.length > 0) {
+    const last = combatPromptMatches[combatPromptMatches.length - 1];
+    if (last[1]) {
+      const words = last[1].trim().split(/\s+/);
+      lastEnemy = words.map((w) => w.slice(0, 4)).join(".");
+    }
+  }
+
   for (const segment of segments) {
     appendStyledText(segment.text, segment.style);
   }
@@ -4139,6 +4152,7 @@ const DEFAULT_HOTKEYS: HotkeyEntry[] = [
   { key: "Opt+ArrowRight", command: "#go в",   label: "Opt+→" },
   { key: "KeyZ",           command: "карта",   label: "Я" },
   { key: "KeyX",           command: "огл",     label: "Ч" },
+  { key: "KeyW",           command: "заколоть $target", label: "Ц" },
   { key: "KeyA",           command: "освеж тр", label: "Ф" },
   { key: "KeyQ",           command: "взя все.тр;;взя все все.тр;;бро все.тр", label: "Й" },
   { key: "Digit5",         command: "взя возвр склад1;;зачит возвр", label: "5" },
@@ -4170,6 +4184,7 @@ function saveHotkeys(entries: HotkeyEntry[]): void {
 
 let hotkeys: HotkeyEntry[] = loadHotkeys();
 let hotkeysInCombat = false;
+let lastEnemy = "";
 
 function isTextInputFocused(): boolean {
   const active = document.activeElement;
@@ -4186,12 +4201,14 @@ document.addEventListener("keydown", (e) => {
   const entry = hotkeys.find((h) => h.key === eventKey || (!modifier && (h.key === e.code || h.key === e.key)));
   if (!entry) return;
 
-  const cmd = (hotkeysInCombat && entry.combatCommand) ? entry.combatCommand : entry.command;
+  const rawCmd = (hotkeysInCombat && entry.combatCommand) ? entry.combatCommand : entry.command;
+  const cmd = rawCmd.replaceAll("$target", lastEnemy);
   if (!cmd.trim()) return;
 
   e.preventDefault();
 
   for (const part of cmd.split(";;").map((s) => s.trim()).filter(Boolean)) {
+    appendStyledText(`> ${part}\n`, { foreground: "bright-black", bold: false });
     sendClientEvent({ type: "send", payload: { command: part } });
   }
 });
