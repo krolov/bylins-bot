@@ -129,10 +129,6 @@ type ServerEvent =
          pendingActivation: boolean;
          attackCommand: string;
          targetValues: string[];
-         healCommands: string[];
-         healThresholdPercent: number;
-         fleeCommand: string;
-         fleeThresholdPercent: number;
        };
     }
   | {
@@ -188,61 +184,49 @@ type ServerEvent =
         entries: Array<{ vnum: number; command: string }>;
       };
     }
-  | { type: "gear_scan_progress"; payload: { message: string } }
-  | { type: "gear_scan_result";
+  | { type: "compare_scan_progress"; payload: { message: string } }
+  | {
+      type: "compare_scan_result";
       payload: {
+        hasShop: boolean;
         coins: number;
-        rows: Array<{
+        slots: Array<{
           slot: string;
-          action: "keep" | "buy" | "equip" | "no_upgrade" | "needs_identify";
-          itemName?: string;
-          price?: number;
-          shopNumber?: number;
-          canAfford?: boolean;
-          source?: "shop" | "inventory";
-          damageDice?: string;
-          damageAvg?: number;
-          itemAc?: number;
-          itemArmor?: number;
-          currentItemName?: string;
-          currentDamageDice?: string;
-          currentDamageAvg?: number;
-          currentAc?: number;
-          currentArmor?: number;
-        }>;
-        sellItems: Array<{
-          name: string;
-          count: number;
-          sellCommand: string;
-        }>;
-      };
-    }
-  | { type: "bazaar_scan_progress"; payload: { message: string } }
-  | { type: "bazaar_scan_result";
-      payload: {
-        coins: number;
-        rows: Array<{
-          slot: string;
-          action: "keep" | "buy" | "equip" | "no_upgrade";
-          itemName?: string;
-          price?: number;
-          shopNumber?: number;
-          canAfford?: boolean;
-          source?: "shop" | "inventory" | "bazaar";
-          damageDice?: string;
-          damageAvg?: number;
-          itemAc?: number;
-          itemArmor?: number;
-          currentItemName?: string;
-          currentDamageDice?: string;
-          currentDamageAvg?: number;
-          currentAc?: number;
-          currentArmor?: number;
-        }>;
-        sellItems: Array<{
-          name: string;
-          count: number;
-          sellCommand: string;
+          currentItemName: string | null;
+          currentScore: number;
+          currentCard: {
+            id: number;
+            name: string;
+            itemType: string;
+            ac: number;
+            armor: number;
+            damageAvg: number;
+            affects: string[];
+            properties: string[];
+            material: string;
+            wearSlots: string[];
+          } | null;
+          candidates: Array<{
+            itemId: number;
+            itemName: string;
+            price: number;
+            listNumber: number;
+            score: number;
+            source: "shop" | "bazaar" | "inventory";
+            hasGameData: boolean;
+            card: {
+              id: number;
+              name: string;
+              itemType: string;
+              ac: number;
+              armor: number;
+              damageAvg: number;
+              affects: string[];
+              properties: string[];
+              material: string;
+              wearSlots: string[];
+            };
+          }>;
         }>;
       };
     }
@@ -272,7 +256,39 @@ type ServerEvent =
       };
     }
   | { type: "gather_state"; payload: { enabled: boolean; bag: string } }
-  | { type: "debug_log_state"; payload: { enabled: boolean } };
+  | { type: "debug_log_state"; payload: { enabled: boolean } }
+  | {
+      type: "container_contents";
+      payload: {
+        container: "bag" | "chest";
+        items: Array<{ name: string; count: number }>;
+      };
+    }
+  | {
+      type: "inventory_contents";
+      payload: {
+        items: Array<{ name: string; count: number }>;
+      };
+    }
+  | {
+      type: "equipped_contents";
+      payload: {
+        items: Array<{ slot: string; name: string; keyword: string; wearCmd: string }>;
+      };
+    }
+  | {
+      type: "chat_message";
+      payload: {
+        text: string;
+        timestamp: number;
+      };
+    }
+  | {
+      type: "chat_history";
+      payload: {
+        messages: Array<{ text: string; timestamp: number }>;
+      };
+    };
 
 type ClientEvent =
   | {
@@ -308,18 +324,18 @@ type ClientEvent =
   | { type: "room_auto_commands_get" }
   | { type: "survival_settings_get" }
   | { type: "survival_settings_save"; payload: SurvivalSettings }
-  | { type: "gear_scan_start" }
-  | { type: "bazaar_scan_start" }
-  | { type: "gear_sell"; payload: { sellCommand: string } }
-  | { type: "gear_drop"; payload: { dropCommand: string } }
-  | { type: "gear_apply"; payload: { commands: string[] } }
+  | { type: "compare_scan_start" }
+  | { type: "compare_apply"; payload: { commands: string[] } }
   | { type: "repair_start" }
   | { type: "wiki_item_search"; payload: { query: string } }
   | { type: "vorozhe_route_find"; payload: { from: string; to: string } }
   | { type: "gather_toggle"; payload?: { enabled?: boolean } }
   | { type: "gather_sell_bag" }
   | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
-  | { type: "debug_log_toggle"; payload?: { enabled?: boolean } };
+  | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
+  | { type: "inspect_container"; payload: { container: "bag" | "chest" } }
+  | { type: "inspect_inventory" }
+| { type: "equipped_scan" };
 
 import type { SurvivalSettings } from "./events.type.ts";
 
@@ -360,11 +376,16 @@ const hpBarLabel = requireElement<HTMLElement>("#hp-bar-label");
 const energyBarFill = requireElement<HTMLElement>("#energy-bar-fill");
 const energyBarLabel = requireElement<HTMLElement>("#energy-bar-label");
 const mapTabMap = requireElement<HTMLButtonElement>("#map-tab-map");
-const mapTabNav = requireElement<HTMLButtonElement>("#map-tab-nav");
 const mapPanelMap = requireElement<HTMLDivElement>("#map-panel-map");
-const mapPanelNav = requireElement<HTMLDivElement>("#map-panel-nav");
-const aliasList = requireElement<HTMLUListElement>("#alias-list");
-const aliasListEmpty = requireElement<HTMLParagraphElement>("#alias-list-empty");
+const containerTabInventory = requireElement<HTMLButtonElement>("#container-tab-inventory");
+const containerTabNav = requireElement<HTMLButtonElement>("#container-tab-nav");
+const containerPanelInventory = requireElement<HTMLDivElement>("#container-panel-inventory");
+const containerPanelNav = requireElement<HTMLDivElement>("#container-panel-nav");
+const navAliasList = requireElement<HTMLUListElement>("#nav-alias-list");
+const navAliasListEmpty = requireElement<HTMLParagraphElement>("#nav-alias-list-empty");
+const navZoneList = requireElement<HTMLUListElement>("#nav-zone-list");
+const navZoneListEmpty = requireElement<HTMLParagraphElement>("#nav-zone-list-empty");
+const navZoneAliasesTitle = requireElement<HTMLDivElement>("#nav-zone-aliases-title");
 const navStatus = requireElement<HTMLDivElement>("#nav-status");
 const aliasPopup = requireElement<HTMLDivElement>("#alias-popup");
 const aliasPopupTitle = requireElement<HTMLSpanElement>("#alias-popup-title");
@@ -389,19 +410,14 @@ const autoCmdPopupClose = requireElement<HTMLButtonElement>("#auto-cmd-popup-clo
 
 const farmSettingsModal = requireElement<HTMLDivElement>("#farm-settings-modal");
 const farmModalBackdrop = requireElement<HTMLDivElement>("#farm-settings-modal .farm-modal__backdrop");
-const farmModalTargets = requireElement<HTMLTextAreaElement>("#farm-modal-targets");
-const farmModalHeal = requireElement<HTMLTextAreaElement>("#farm-modal-heal");
-const farmModalHealThreshold = requireElement<HTMLInputElement>("#farm-modal-heal-threshold");
-const farmModalFleeCommand = requireElement<HTMLInputElement>("#farm-modal-flee-command");
-const farmModalFleeThreshold = requireElement<HTMLInputElement>("#farm-modal-flee-threshold");
+const farmModalAttackCommand = requireElement<HTMLInputElement>("#farm-modal-attack-command");
+const farmModalSkinningEnabled = requireElement<HTMLInputElement>("#farm-modal-skinning-enabled");
+const farmModalSkinningVerb = requireElement<HTMLInputElement>("#farm-modal-skinning-verb");
+const farmModalLootMeat = requireElement<HTMLInputElement>("#farm-modal-loot-meat");
+const farmModalLootHide = requireElement<HTMLInputElement>("#farm-modal-loot-hide");
 const farmModalClose = requireElement<HTMLButtonElement>("#farm-modal-close");
 const farmModalCancel = requireElement<HTMLButtonElement>("#farm-modal-cancel");
 const farmModalStart = requireElement<HTMLButtonElement>("#farm-modal-start");
-const farmModalPeriodicEnabled = requireElement<HTMLInputElement>("#farm-modal-periodic-enabled");
-const farmModalPeriodicAlias1 = requireElement<HTMLInputElement>("#farm-modal-periodic-alias1");
-const farmModalPeriodicCommand = requireElement<HTMLTextAreaElement>("#farm-modal-periodic-command");
-const farmModalPeriodicCommandDelay = requireElement<HTMLInputElement>("#farm-modal-periodic-command-delay");
-const farmModalPeriodicAlias2 = requireElement<HTMLInputElement>("#farm-modal-periodic-alias2");
 
 const survivalSettingsButton = requireElement<HTMLButtonElement>("#survival-settings-button");
 const survivalSettingsModal = requireElement<HTMLDivElement>("#survival-settings-modal");
@@ -467,20 +483,13 @@ const itemDetailModalCloseFooter  = requireElement<HTMLButtonElement>("#item-det
 const itemDetailModalTitle        = requireElement<HTMLSpanElement>("#item-detail-modal-title");
 const itemDetailModalBody         = requireElement<HTMLDivElement>("#item-detail-modal-body");
 
-const gearAdvisorButton = requireElement<HTMLButtonElement>("#gear-advisor-button");
-const gearAdvisorPanel = requireElement<HTMLDivElement>("#gear-advisor-panel");
-const gearAdvisorModalClose = requireElement<HTMLButtonElement>("#gear-advisor-modal-close");
-const gearAdvisorStatus = requireElement<HTMLParagraphElement>("#gear-advisor-status");
-const gearAdvisorTableBody = requireElement<HTMLTableSectionElement>("#gear-advisor-table-body");
-const gearAdvisorCoins = requireElement<HTMLSpanElement>("#gear-advisor-coins");
-const gearAdvisorSellList = requireElement<HTMLDivElement>("#gear-advisor-sell-list");
-
-const bazaarAdvisorButton = requireElement<HTMLButtonElement>("#bazaar-advisor-button");
-const bazaarAdvisorPanel = requireElement<HTMLDivElement>("#bazaar-advisor-panel");
-const bazaarAdvisorModalClose = requireElement<HTMLButtonElement>("#bazaar-advisor-modal-close");
-const bazaarAdvisorStatus = requireElement<HTMLParagraphElement>("#bazaar-advisor-status");
-const bazaarAdvisorTableBody = requireElement<HTMLTableSectionElement>("#bazaar-advisor-table-body");
-const bazaarAdvisorCoins = requireElement<HTMLSpanElement>("#bazaar-advisor-coins");
+const compareButton = requireElement<HTMLButtonElement>("#compare-button");
+const compareAdvisorPanel = requireElement<HTMLDivElement>("#compare-advisor-panel");
+const compareAdvisorClose = requireElement<HTMLButtonElement>("#compare-advisor-close");
+const compareAdvisorTitle = requireElement<HTMLSpanElement>("#compare-advisor-title");
+const compareAdvisorStatus = requireElement<HTMLParagraphElement>("#compare-advisor-status");
+const compareAdvisorTableBody = requireElement<HTMLTableSectionElement>("#compare-advisor-table-body");
+const compareAdvisorCoins = requireElement<HTMLParagraphElement>("#compare-advisor-coins");
 
 const vorozheButton = requireElement<HTMLButtonElement>("#vorozhe-button");
 const vorozheModal = requireElement<HTMLDivElement>("#vorozhe-modal");
@@ -497,22 +506,36 @@ const vorozheTotal = requireElement<HTMLDivElement>("#vorozhe-total");
 
 const gatherToggleButton = requireElement<HTMLButtonElement>("#gather-toggle-button");
 const gatherSellButton = requireElement<HTMLButtonElement>("#gather-sell-button");
+const scratchClanBtn = requireElement<HTMLButtonElement>("#scratch-clan-btn");
+const equipAllBtn = requireElement<HTMLButtonElement>("#equip-all-btn");
 const debugLogButton = requireElement<HTMLButtonElement>("#debug-log-button");
+
+const bagPanelList = requireElement<HTMLTableSectionElement>("#bag-panel-list");
+const chestPanelList = requireElement<HTMLTableSectionElement>("#chest-panel-list");
+const inventoryPanelList = requireElement<HTMLTableSectionElement>("#inventory-panel-list");
+
+const VOROZHE_CITIES = [
+  "Брянск", "Великий Новгород", "Владимир", "Вышгород", "Галич",
+  "Искоростень", "Киев", "Корсунь", "Курск", "Ладога",
+  "Любеч", "Меньск", "Муром", "Переяславль", "Полоцк",
+  "Псков", "Путивль", "Ростов Великий", "Русса", "Рязань",
+  "Тверь", "Торжок", "Тотьма", "Туров", "Чернигов",
+] as const;
+
+let vorozheFrom: string | null = null;
+let vororozheFromButtons: HTMLButtonElement[] = [];
+let vorozheTo: string | null = null;
+let vorozheToButtonsList: HTMLButtonElement[] = [];
 
 let farmModalZoneId: number | null = null;
 let currentSurvivalSettings: SurvivalSettings = defaultSurvivalSettings();
 
 interface FarmSettings {
-  targets: string;
-  healCommands: string;
-  healThreshold: number;
-  fleeCommand: string;
-  fleeThreshold: number;
-  periodicActionEnabled: boolean;
-  periodicActionGotoAlias1: string;
-  periodicActionCommand: string;
-  periodicActionCommandDelayMs: number;
-  periodicActionGotoAlias2: string;
+  attackCommand: string;
+  skinningSalvoEnabled: boolean;
+  skinningSkinVerb: string;
+  lootMeatCommand: string;
+  lootHideCommand: string;
 }
 
 interface FarmRuntimeStats {
@@ -523,7 +546,13 @@ interface FarmRuntimeStats {
 }
 
 function defaultFarmSettings(): FarmSettings {
-  return { targets: "", healCommands: "", healThreshold: 50, fleeCommand: "", fleeThreshold: 0, periodicActionEnabled: false, periodicActionGotoAlias1: "", periodicActionCommand: "", periodicActionCommandDelayMs: 0, periodicActionGotoAlias2: "" };
+  return {
+    attackCommand: "заколоть",
+    skinningSalvoEnabled: false,
+    skinningSkinVerb: "освеж",
+    lootMeatCommand: "пол все.мяс торб",
+    lootHideCommand: "пол все.шкур торб",
+  };
 }
 
 function defaultSurvivalSettings(): SurvivalSettings {
@@ -533,16 +562,11 @@ function defaultSurvivalSettings(): SurvivalSettings {
 function normalizeFarmSettings(raw: Partial<FarmSettings>): FarmSettings {
   const def = defaultFarmSettings();
   return {
-    targets: typeof raw.targets === "string" ? raw.targets : def.targets,
-    healCommands: typeof raw.healCommands === "string" ? raw.healCommands : def.healCommands,
-    healThreshold: typeof raw.healThreshold === "number" && Number.isFinite(raw.healThreshold) ? raw.healThreshold : def.healThreshold,
-    fleeCommand: typeof raw.fleeCommand === "string" ? raw.fleeCommand : def.fleeCommand,
-    fleeThreshold: typeof raw.fleeThreshold === "number" && Number.isFinite(raw.fleeThreshold) ? raw.fleeThreshold : def.fleeThreshold,
-    periodicActionEnabled: raw.periodicActionEnabled === true,
-    periodicActionGotoAlias1: typeof raw.periodicActionGotoAlias1 === "string" ? raw.periodicActionGotoAlias1 : def.periodicActionGotoAlias1,
-    periodicActionCommand: typeof raw.periodicActionCommand === "string" ? raw.periodicActionCommand : def.periodicActionCommand,
-    periodicActionCommandDelayMs: typeof raw.periodicActionCommandDelayMs === "number" && Number.isFinite(raw.periodicActionCommandDelayMs) ? raw.periodicActionCommandDelayMs : def.periodicActionCommandDelayMs,
-    periodicActionGotoAlias2: typeof raw.periodicActionGotoAlias2 === "string" ? raw.periodicActionGotoAlias2 : def.periodicActionGotoAlias2,
+    attackCommand: typeof raw.attackCommand === "string" ? raw.attackCommand : def.attackCommand,
+    skinningSalvoEnabled: typeof raw.skinningSalvoEnabled === "boolean" ? raw.skinningSalvoEnabled : def.skinningSalvoEnabled,
+    skinningSkinVerb: typeof raw.skinningSkinVerb === "string" ? raw.skinningSkinVerb : def.skinningSkinVerb,
+    lootMeatCommand: typeof raw.lootMeatCommand === "string" ? raw.lootMeatCommand : def.lootMeatCommand,
+    lootHideCommand: typeof raw.lootHideCommand === "string" ? raw.lootHideCommand : def.lootHideCommand,
   };
 }
 
@@ -560,16 +584,11 @@ function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSett
   };
 }
 function fillFarmModal(settings: FarmSettings): void {
-  farmModalTargets.value = settings.targets;
-  farmModalHeal.value = settings.healCommands;
-  farmModalHealThreshold.value = String(settings.healThreshold);
-  farmModalFleeCommand.value = settings.fleeCommand;
-  farmModalFleeThreshold.value = String(settings.fleeThreshold);
-  farmModalPeriodicEnabled.checked = settings.periodicActionEnabled;
-  farmModalPeriodicAlias1.value = settings.periodicActionGotoAlias1;
-  farmModalPeriodicCommand.value = settings.periodicActionCommand;
-  farmModalPeriodicCommandDelay.value = String(settings.periodicActionCommandDelayMs);
-  farmModalPeriodicAlias2.value = settings.periodicActionGotoAlias2;
+  farmModalAttackCommand.value = settings.attackCommand;
+  farmModalSkinningEnabled.checked = settings.skinningSalvoEnabled;
+  farmModalSkinningVerb.value = settings.skinningSkinVerb;
+  farmModalLootMeat.value = settings.lootMeatCommand;
+  farmModalLootHide.value = settings.lootHideCommand;
 }
 
 function fillSurvivalModal(settings: SurvivalSettings): void {
@@ -596,7 +615,7 @@ function openFarmSettingsModal(): void {
 
   fillFarmModal(defaultFarmSettings());
   farmSettingsModal.classList.remove("farm-modal--hidden");
-  farmModalTargets.focus();
+  farmModalAttackCommand.focus();
 
   sendClientEvent({ type: "farm_settings_get", payload: { zoneId } });
 }
@@ -934,16 +953,11 @@ function updateActionBadges(): void {
 
 function commitFarmSettings(): void {
   const settings: FarmSettings = {
-    targets: farmModalTargets.value.trim(),
-    healCommands: farmModalHeal.value.trim(),
-    healThreshold: Number(farmModalHealThreshold.value) || 50,
-    fleeCommand: farmModalFleeCommand.value.trim(),
-    fleeThreshold: Number(farmModalFleeThreshold.value) || 0,
-    periodicActionEnabled: farmModalPeriodicEnabled.checked,
-    periodicActionGotoAlias1: farmModalPeriodicAlias1.value.trim(),
-    periodicActionCommand: farmModalPeriodicCommand.value.trim(),
-    periodicActionCommandDelayMs: Math.max(0, Number(farmModalPeriodicCommandDelay.value) || 0),
-    periodicActionGotoAlias2: farmModalPeriodicAlias2.value.trim(),
+    attackCommand: farmModalAttackCommand.value.trim(),
+    skinningSalvoEnabled: farmModalSkinningEnabled.checked,
+    skinningSkinVerb: farmModalSkinningVerb.value.trim(),
+    lootMeatCommand: farmModalLootMeat.value.trim(),
+    lootHideCommand: farmModalLootHide.value.trim(),
   };
 
   if (farmModalZoneId !== null) {
@@ -956,11 +970,16 @@ function commitFarmSettings(): void {
   closeFarmSettingsModal();
 }
 
-function switchMapTab(tab: "map" | "nav"): void {
+function switchMapTab(tab: "map"): void {
   mapTabMap.classList.toggle("map-tab--active", tab === "map");
-  mapTabNav.classList.toggle("map-tab--active", tab === "nav");
   mapPanelMap.classList.toggle("map-tab-panel--hidden", tab !== "map");
-  mapPanelNav.classList.toggle("map-tab-panel--hidden", tab !== "nav");
+}
+
+function switchContainerTab(tab: "inventory" | "nav"): void {
+  containerTabInventory.classList.toggle("map-tab--active", tab === "inventory");
+  containerTabNav.classList.toggle("map-tab--active", tab === "nav");
+  containerPanelInventory.classList.toggle("container-panels__panel--hidden", tab !== "inventory");
+  containerPanelNav.classList.toggle("container-panels__panel--hidden", tab !== "nav");
 }
 
 function openAliasPopup(vnum: number, existingAlias: string | undefined, roomName: string): void {
@@ -1012,11 +1031,22 @@ function closeMapContextMenu(): void {
   mapContextMenu.classList.add("map-context-menu--hidden");
 }
 
-function renderAliasList(): void {
-  aliasList.innerHTML = "";
-  aliasListEmpty.classList.toggle("alias-list-empty--hidden", currentAliases.length > 0);
+function renderNavPanel(): void {
+  const currentVnum = latestMapSnapshot.currentVnum;
+  const currentZone = currentVnum !== null ? getZoneId(currentVnum) : null;
 
-  for (const entry of currentAliases) {
+  navZoneAliasesTitle.textContent = currentZone !== null
+    ? `Текущая зона ${zoneNames.get(currentZone) ? `— ${zoneNames.get(currentZone)}` : `(${currentZone}xx)`}`
+    : "Текущая зона";
+
+  const zoneAliases = currentZone !== null
+    ? currentAliases.filter(a => getZoneId(a.vnum) === currentZone)
+    : [];
+
+  navAliasList.innerHTML = "";
+  navAliasListEmpty.classList.toggle("alias-list-empty--hidden", zoneAliases.length > 0);
+
+  for (const entry of zoneAliases) {
     const li = document.createElement("li");
     li.className = "alias-list__item";
 
@@ -1024,9 +1054,9 @@ function renderAliasList(): void {
     label.className = "alias-list__label";
     label.textContent = entry.alias;
 
-    const vnum = document.createElement("span");
-    vnum.className = "alias-list__vnum";
-    vnum.textContent = String(entry.vnum);
+    const vnumSpan = document.createElement("span");
+    vnumSpan.className = "alias-list__vnum";
+    vnumSpan.textContent = String(entry.vnum);
 
     const goBtn = document.createElement("button");
     goBtn.type = "button";
@@ -1041,10 +1071,81 @@ function renderAliasList(): void {
     });
 
     li.appendChild(label);
-    li.appendChild(vnum);
+    li.appendChild(vnumSpan);
     li.appendChild(goBtn);
-    aliasList.appendChild(li);
+    navAliasList.appendChild(li);
   }
+
+  const neighborZones = buildNeighborZones(currentZone);
+
+  navZoneList.innerHTML = "";
+  navZoneListEmpty.classList.toggle("alias-list-empty--hidden", neighborZones.length > 0);
+
+  for (const zone of neighborZones) {
+    const li = document.createElement("li");
+    li.className = "nav-zone-list__item";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "nav-zone-list__name";
+    nameSpan.textContent = zoneNames.get(zone.zoneId) ?? `Зона ${zone.zoneId}xx`;
+
+    const goBtn = document.createElement("button");
+    goBtn.type = "button";
+    goBtn.className = "button-small nav-zone-list__go";
+    goBtn.textContent = "Идти";
+    goBtn.addEventListener("click", () => {
+      sendClientEvent({ type: "navigate_to", payload: { vnums: zone.entryVnums } });
+    });
+
+    li.appendChild(nameSpan);
+    li.appendChild(goBtn);
+    navZoneList.appendChild(li);
+  }
+}
+
+interface NeighborZone {
+  zoneId: number;
+  entryVnums: number[];
+}
+
+function buildNeighborZones(currentZone: number | null): NeighborZone[] {
+  if (currentZone === null || latestMapSnapshot.nodes.length === 0) return [];
+
+  const neighborZoneIds = new Set<number>();
+  for (const edge of latestMapSnapshot.edges) {
+    const fromZone = getZoneId(edge.fromVnum);
+    const toZone = getZoneId(edge.toVnum);
+    if (fromZone === currentZone && toZone !== currentZone) {
+      neighborZoneIds.add(toZone);
+    }
+    if (toZone === currentZone && fromZone !== currentZone) {
+      neighborZoneIds.add(fromZone);
+    }
+  }
+
+  const visitedVnums = new Set(
+    latestMapSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
+  );
+
+  const result: NeighborZone[] = [];
+  for (const zoneId of neighborZoneIds) {
+    const zoneVnums = latestMapSnapshot.nodes
+      .filter(n => getZoneId(n.vnum) === zoneId && visitedVnums.has(n.vnum))
+      .map(n => n.vnum);
+    if (zoneVnums.length > 0) {
+      result.push({ zoneId, entryVnums: zoneVnums });
+    }
+  }
+
+  result.sort((a, b) => {
+    const nameA = zoneNames.get(a.zoneId) ?? "";
+    const nameB = zoneNames.get(b.zoneId) ?? "";
+    if (nameA && !nameB) return -1;
+    if (!nameA && nameB) return 1;
+    return nameA.localeCompare(nameB) || a.zoneId - b.zoneId;
+  });
+
+  return result;
 }
 
 function renderNavStatus(state: NavigationStatePayload): void {
@@ -1094,6 +1195,26 @@ let latestMapSnapshot: MapSnapshotPayload = {
 let globalMapZoom = 0.6;
 let globalMapOpen = false;
 let mapRecordingEnabled = true;
+let pendingEquippedAction: "scratch" | "equip" | null = null;
+
+const INVENTORY_WEAR_CMD: Record<string, string> = {
+  "правый указательный палец": "над",
+  "левый указательный палец": "над",
+  "на шее": "над",
+  "на груди": "над",
+  "на теле": "над",
+  "на голове": "над",
+  "на ногах": "над",
+  "на ступнях": "над",
+  "на кистях": "над",
+  "на руках": "над",
+  "на плечах": "над",
+  "на поясе": "над",
+  "на правом запястье": "над",
+  "на левом запястье": "над",
+  "в правой руке": "воор",
+  "в левой руке": "держ",
+};
 let farm2Enabled = false;
 let farm2ZoneId: number | null = null;
 let farm2PendingActivation = false;
@@ -1816,9 +1937,7 @@ function updateMap(snapshot: MapSnapshotPayload, fullReset: boolean): void {
   resetGridLayout();
   integrateSnapshot(snapshot);
   renderGridMap(snapshot);
-  if (globalMapOpen) {
-    renderZoneMap(snapshot);
-  }
+  renderNavPanel();
 }
 
 interface ZoneNode {
@@ -2075,9 +2194,9 @@ function routeZoneEdge(
   return [[sx, sy], [tx, ty]];
 }
 
-const ZONE_CELL = 80;
-const ZONE_TILE = 130;
-const ZONE_PAD = 2;
+const ZONE_CELL = 120;
+const ZONE_TILE = 100;
+const ZONE_PAD = 3;
 
 let globalMapZoneRenameId: number | null = null;
 
@@ -2150,35 +2269,117 @@ function renderZoneMap(snapshot: MapSnapshotPayload): void {
     Array.from(zones.values()).map((z) => `${z.gridX},${z.gridY}`)
   );
 
+  const pairEdgeCount = new Map<string, number>();
+  const pairEdgeIndex = new Map<string, number>();
+  for (const edge of edges) {
+    const k = [Math.min(edge.fromZone, edge.toZone), Math.max(edge.fromZone, edge.toZone)].join(",");
+    pairEdgeCount.set(k, (pairEdgeCount.get(k) ?? 0) + 1);
+    pairEdgeIndex.set(k, 0);
+  }
+
+  function buildSvgPath(pixelPoints: [number, number][], offsetPx: number): string {
+    if (pixelPoints.length < 2) return "";
+
+    const applyOffset = (pts: [number, number][], offset: number): [number, number][] => {
+      if (offset === 0 || pts.length < 2) return pts;
+      const [ax, ay] = pts[0]!;
+      const [bx, by] = pts[pts.length - 1]!;
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      return pts.map(([x, y]) => [x + nx * offset, y + ny * offset] as [number, number]);
+    };
+
+    const pts = applyOffset(pixelPoints, offsetPx);
+
+    if (pts.length === 2) {
+      return `M ${pts[0]![0]},${pts[0]![1]} L ${pts[1]![0]},${pts[1]![1]}`;
+    }
+
+    let d = `M ${pts[0]![0]},${pts[0]![1]}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const [px1, py1] = pts[i]!;
+      const [px2, py2] = pts[i + 1]!;
+      const qx = (px1 + px2) / 2;
+      const qy = (py1 + py2) / 2;
+      d += ` L ${px1},${py1} Q ${px1},${py1} ${qx},${qy}`;
+    }
+    d += ` L ${pts[pts.length - 1]![0]},${pts[pts.length - 1]![1]}`;
+    return d;
+  }
+
   for (const edge of edges) {
     const from = zones.get(edge.fromZone);
     const to = zones.get(edge.toZone);
     if (!from || !to) continue;
 
-    const path = routeZoneEdge(from, to, occupiedCells);
-    if (path.length < 2) continue;
+    const routePath = routeZoneEdge(from, to, occupiedCells);
+    if (routePath.length < 2) continue;
 
-    const pixelPoints: [number, number][] = path.map(([gx, gy], i) => {
+    const pixelPoints: [number, number][] = routePath.map(([gx, gy], i) => {
       if (i === 0) {
-        const [ngx, ngy] = path[1]!;
+        const [ngx, ngy] = routePath[1]!;
         return tileEdgePoint(gx, gy, ngx, ngy);
       }
-      if (i === path.length - 1) {
-        const [pgx, pgy] = path[path.length - 2]!;
+      if (i === routePath.length - 1) {
+        const [pgx, pgy] = routePath[routePath.length - 2]!;
         return tileEdgePoint(gx, gy, pgx, pgy);
       }
       return tileCenter(gx, gy);
     });
 
-    const points = pixelPoints.map(([x, y]) => `${x},${y}`).join(" ");
+    const pairKey = [Math.min(edge.fromZone, edge.toZone), Math.max(edge.fromZone, edge.toZone)].join(",");
+    const count = pairEdgeCount.get(pairKey) ?? 1;
+    const idx = pairEdgeIndex.get(pairKey) ?? 0;
+    pairEdgeIndex.set(pairKey, idx + 1);
 
-    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-    polyline.setAttribute("points", points);
-    polyline.setAttribute("class", "global-map-portal-line");
-    polyline.setAttribute("fill", "none");
-    polyline.setAttribute("data-from", String(edge.fromZone));
-    polyline.setAttribute("data-to", String(edge.toZone));
-    svg.appendChild(polyline);
+    const BUNDLE_SPACING = 6;
+    const offsetPx = count === 1 ? 0 : (idx - (count - 1) / 2) * BUNDLE_SPACING;
+
+    const d = buildSvgPath(pixelPoints, offsetPx);
+
+    const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    pathEl.setAttribute("d", d);
+    pathEl.setAttribute("class", "global-map-portal-line");
+    pathEl.setAttribute("fill", "none");
+    pathEl.setAttribute("data-from", String(edge.fromZone));
+    pathEl.setAttribute("data-to", String(edge.toZone));
+    svg.appendChild(pathEl);
+  }
+
+  function findZonePath(fromZoneId: number, toZoneId: number): Set<string> {
+    if (fromZoneId === toZoneId) return new Set();
+    const adj = new Map<number, number[]>();
+    for (const e of edges) {
+      if (!adj.has(e.fromZone)) adj.set(e.fromZone, []);
+      if (!adj.has(e.toZone)) adj.set(e.toZone, []);
+      adj.get(e.fromZone)!.push(e.toZone);
+      adj.get(e.toZone)!.push(e.fromZone);
+    }
+    const prev = new Map<number, number>();
+    const visited = new Set([fromZoneId]);
+    const queue = [fromZoneId];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      if (cur === toZoneId) break;
+      for (const nb of adj.get(cur) ?? []) {
+        if (!visited.has(nb)) {
+          visited.add(nb);
+          prev.set(nb, cur);
+          queue.push(nb);
+        }
+      }
+    }
+    const pathEdges = new Set<string>();
+    let cur: number | undefined = toZoneId;
+    while (cur !== undefined && prev.has(cur)) {
+      const p: number = prev.get(cur)!;
+      pathEdges.add(`${Math.min(p, cur)},${Math.max(p, cur)}`);
+      cur = p;
+    }
+    return pathEdges;
   }
 
   wrapper.appendChild(svg);
@@ -2198,16 +2399,24 @@ function renderZoneMap(snapshot: MapSnapshotPayload): void {
 
     const zIdStr = String(zone.zoneId);
     tile.addEventListener("mouseenter", () => {
-      svg.querySelectorAll<SVGPolylineElement>("polyline").forEach((pl) => {
-        const isConnected =
-          pl.getAttribute("data-from") === zIdStr || pl.getAttribute("data-to") === zIdStr;
-        pl.classList.toggle("global-map-portal-line--active", isConnected);
-        pl.classList.toggle("global-map-portal-line--dim", !isConnected);
+      const pathEdges = currentZoneId != null && zone.zoneId !== currentZoneId
+        ? findZonePath(zone.zoneId, currentZoneId)
+        : new Set<string>();
+
+      svg.querySelectorAll<SVGPathElement>("path").forEach((pl) => {
+        const f = pl.getAttribute("data-from")!;
+        const t = pl.getAttribute("data-to")!;
+        const isConnected = f === zIdStr || t === zIdStr;
+        const pairKey = `${Math.min(Number(f), Number(t))},${Math.max(Number(f), Number(t))}`;
+        const isPath = pathEdges.has(pairKey);
+        pl.classList.toggle("global-map-portal-line--active", isConnected && !isPath);
+        pl.classList.toggle("global-map-portal-line--path", isPath);
+        pl.classList.toggle("global-map-portal-line--dim", !isConnected && !isPath);
       });
     });
     tile.addEventListener("mouseleave", () => {
-      svg.querySelectorAll<SVGPolylineElement>("polyline").forEach((pl) => {
-        pl.classList.remove("global-map-portal-line--active", "global-map-portal-line--dim");
+      svg.querySelectorAll<SVGPathElement>("path").forEach((pl) => {
+        pl.classList.remove("global-map-portal-line--active", "global-map-portal-line--path", "global-map-portal-line--dim");
       });
     });
 
@@ -2562,75 +2771,31 @@ function parseAnsiSegments(chunk: string): AnsiSegment[] {
 
 const MAX_CHAT_LINES = 200;
 
-const CHAT_FILTER_NAMES = ["Незнакомец", "Ворожея", "Кузнец", "Хитрый лавочник", "Здоровый дядька", "Владелец двора", "Раненый воин", "Травник"];
-
-function isChatLine(text: string): boolean {
-  if (CHAT_FILTER_NAMES.some((name) => text.includes(name))) return false;
-  return (
-    /сказал[аи]?\s+вам\s*[:'"]/.test(text) ||
-    /сказал[аи]?\s*:\s*'/.test(text) ||
-    /Вы сказали\s*:\s*'/.test(text) ||
-    /Услышали вы голос/.test(text) ||
-    /шепнул[аи]?\s+вам/.test(text) ||
-    /дружине\s*:\s*'/.test(text) ||
-    /Вы дружине\s*:\s*'/.test(text)
-  );
-}
-
-function appendChat(segments: AnsiSegment[]): void {
+function appendChatMessage(text: string, timestamp: number): void {
   const isChatScrolledToBottom = chatOutputElement.scrollHeight - chatOutputElement.scrollTop - chatOutputElement.clientHeight <= 30;
-  let appended = false;
 
-  const lineSegments: AnsiSegment[] = [];
+  const line = document.createElement("span");
+  line.className = "chat-line";
 
-  const flushLine = () => {
-    const lineText = lineSegments.map((s) => s.text).join("");
-    if (isChatLine(lineText)) {
-      const line = document.createElement("span");
-      line.className = "chat-line";
+  const timeSpan = document.createElement("span");
+  timeSpan.className = "chat-line__time";
+  const d = new Date(timestamp);
+  timeSpan.textContent = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  line.appendChild(timeSpan);
 
-      const timeSpan = document.createElement("span");
-      timeSpan.className = "chat-line__time";
-      const now = new Date();
-      timeSpan.textContent = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      line.appendChild(timeSpan);
+  const textSpan = document.createElement("span");
+  textSpan.textContent = text;
+  line.appendChild(textSpan);
 
-      for (const seg of lineSegments) {
-        if (seg.text.length === 0) continue;
-        const span = document.createElement("span");
-        span.className = classNamesForStyle(seg.style).join(" ");
-        span.textContent = seg.text;
-        line.appendChild(span);
-      }
+  chatOutputElement.appendChild(line);
 
-      chatOutputElement.appendChild(line);
-      appended = true;
-    }
-    lineSegments.length = 0;
-  };
-
-  for (const segment of segments) {
-    const parts = segment.text.split("\n");
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i]!;
-      if (part.length > 0) {
-        lineSegments.push({ text: part, style: segment.style });
-      }
-      if (i < parts.length - 1) {
-        flushLine();
-      }
-    }
+  const children = chatOutputElement.children;
+  while (children.length > MAX_CHAT_LINES) {
+    children[0]?.remove();
   }
-  flushLine();
 
-  if (appended) {
-    const children = chatOutputElement.children;
-    while (children.length > MAX_CHAT_LINES) {
-      children[0]?.remove();
-    }
-    if (isChatScrolledToBottom) {
-      chatOutputElement.scrollTop = chatOutputElement.scrollHeight;
-    }
+  if (isChatScrolledToBottom) {
+    chatOutputElement.scrollTop = chatOutputElement.scrollHeight;
   }
 }
 
@@ -2641,8 +2806,6 @@ function appendOutput(text: string): void {
   for (const segment of segments) {
     appendStyledText(segment.text, segment.style);
   }
-
-  appendChat(segments);
 
   const children = outputElement.children;
   if (children.length > MAX_OUTPUT_SEGMENTS) {
@@ -2726,368 +2889,6 @@ function flushPendingQueue(): void {
   }
 }
 
-function openGearAdvisorModal(): void {
-  gearAdvisorTableBody.innerHTML = "";
-  gearAdvisorCoins.textContent = "";
-  gearAdvisorStatus.textContent = "Запускаю...";
-  gearAdvisorSellList.innerHTML = "";
-  gearAdvisorSellList.classList.add("gear-advisor__sell--hidden");
-  gearAdvisorPanel.classList.remove("gear-advisor-panel--hidden");
-  sendClientEvent({ type: "gear_scan_start" });
-}
-
-function closeGearAdvisorModal(): void {
-  gearAdvisorPanel.classList.add("gear-advisor-panel--hidden");
-}
-
-function openBazaarAdvisorModal(): void {
-  bazaarAdvisorTableBody.innerHTML = "";
-  bazaarAdvisorCoins.textContent = "";
-  bazaarAdvisorStatus.textContent = "Запускаю...";
-  bazaarAdvisorPanel.classList.remove("gear-advisor-panel--hidden");
-  sendClientEvent({ type: "bazaar_scan_start" });
-}
-
-function closeBazaarAdvisorModal(): void {
-  bazaarAdvisorPanel.classList.add("gear-advisor-panel--hidden");
-}
-
-const VOROZHE_CITIES = [
-  "Брянск", "Великий Новгород", "Владимир", "Вышгород", "Галич",
-  "Искоростень", "Киев", "Корсунь", "Курск", "Ладога",
-  "Любеч", "Меньск", "Муром", "Переяславль", "Полоцк",
-  "Псков", "Путивль", "Ростов Великий", "Русса", "Рязань",
-  "Тверь", "Торжок", "Тотьма", "Туров", "Чернигов",
-] as const;
-
-let vorozheFrom: string | null = null;
-let vororozheFromButtons: HTMLButtonElement[] = [];
-let vorozheTo: string | null = null;
-let vorozheToButtonsList: HTMLButtonElement[] = [];
-
-function initVorozheModal(): void {
-  VOROZHE_CITIES.forEach((city) => {
-    const fromBtn = document.createElement("button");
-    fromBtn.type = "button";
-    fromBtn.className = "vorozhe-city-btn";
-    fromBtn.textContent = city;
-    fromBtn.addEventListener("click", () => {
-      vorozheFrom = city;
-      vororozheFromButtons.forEach(b => b.classList.remove("vorozhe-city-btn--active"));
-      fromBtn.classList.add("vorozhe-city-btn--active");
-      maybeRequestVorozheRoute();
-    });
-    vorozheFromButtons.appendChild(fromBtn);
-    vororozheFromButtons.push(fromBtn);
-
-    const toBtn = document.createElement("button");
-    toBtn.type = "button";
-    toBtn.className = "vorozhe-city-btn";
-    toBtn.textContent = city;
-    toBtn.addEventListener("click", () => {
-      vorozheTo = city;
-      vorozheToButtonsList.forEach(b => b.classList.remove("vorozhe-city-btn--active"));
-      toBtn.classList.add("vorozhe-city-btn--active");
-      maybeRequestVorozheRoute();
-    });
-    vorozheToButtons.appendChild(toBtn);
-    vorozheToButtonsList.push(toBtn);
-  });
-}
-
-function maybeRequestVorozheRoute(): void {
-  if (!vorozheFrom || !vorozheTo) return;
-  sendClientEvent({ type: "vorozhe_route_find", payload: { from: vorozheFrom, to: vorozheTo } });
-}
-
-function openVorozheModal(): void {
-  vorozheModal.classList.remove("farm-modal--hidden");
-}
-
-function closeVorozheModal(): void {
-  vorozheModal.classList.add("farm-modal--hidden");
-}
-
-function renderVorozheResult(payload: {
-  from: string;
-  to: string;
-  found: boolean;
-  steps: Array<{ from: string; to: string; items: string[] }>;
-  totalItems: Record<string, number>;
-}): void {
-  vorozheResult.classList.remove("vorozhe-modal__result--hidden");
-
-  if (!payload.found || payload.steps.length === 0) {
-    if (payload.from === payload.to) {
-      vorozheNoRoute.classList.remove("vorozhe-modal__no-route--hidden");
-      vorozheNoRoute.textContent = "Вы уже в этом городе";
-    } else {
-      vorozheNoRoute.classList.remove("vorozhe-modal__no-route--hidden");
-      vorozheNoRoute.textContent = "Маршрут не найден";
-    }
-    vorozheRouteTable.classList.add("vorozhe-modal__table--hidden");
-    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
-    return;
-  }
-
-  vorozheNoRoute.classList.add("vorozhe-modal__no-route--hidden");
-  vorozheRouteTable.classList.remove("vorozhe-modal__table--hidden");
-  vorozheTotal.classList.remove("vorozhe-modal__total--hidden");
-
-  vorozheRouteTbody.innerHTML = "";
-  for (const step of payload.steps) {
-    const tr = document.createElement("tr");
-    const tdFrom = document.createElement("td");
-    tdFrom.textContent = step.from;
-    const tdTo = document.createElement("td");
-    tdTo.textContent = step.to;
-    const tdItems = document.createElement("td");
-    step.items.forEach((item) => {
-      const badge = document.createElement("span");
-      badge.className = "vorozhe-item-badge";
-      badge.textContent = item;
-      tdItems.appendChild(badge);
-    });
-    tr.appendChild(tdFrom);
-    tr.appendChild(tdTo);
-    tr.appendChild(tdItems);
-    vorozheRouteTbody.appendChild(tr);
-  }
-
-  const totalEntries = Object.entries(payload.totalItems);
-  if (totalEntries.length > 0) {
-    const parts = totalEntries.map(([item, count]) => `${item} ×${count}`);
-    vorozheTotal.textContent = `Итого нужно: ${parts.join(", ")}`;
-  } else {
-    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
-  }
-}
-
-function renderGearAdvisorRow(row: {
-  slot: string;
-  action: string;
-  itemName?: string;
-  price?: number;
-  shopNumber?: number;
-  canAfford?: boolean;
-  source?: string;
-  damageDice?: string;
-  damageAvg?: number;
-  itemAc?: number;
-  itemArmor?: number;
-  currentItemName?: string;
-  currentDamageDice?: string;
-  currentDamageAvg?: number;
-  currentAc?: number;
-  currentArmor?: number;
-}): HTMLTableRowElement {
-  const tr = document.createElement("tr");
-  tr.className = "gear-advisor__row";
-
-  const tdSlot = document.createElement("td");
-  tdSlot.className = "gear-advisor__cell";
-  tdSlot.textContent = row.slot;
-  tr.appendChild(tdSlot);
-
-  const tdAction = document.createElement("td");
-  tdAction.className = "gear-advisor__cell";
-
-   function fmtDamage(dice?: string, avg?: number): string {
-    if (!dice) return "";
-    const cleanDice = dice.replace(/\s*\(ср\..*?\)/g, "").trim();
-    return avg ? `[${cleanDice} (ср. ${avg.toFixed(1)})]` : `[${cleanDice}]`;
-  }
-
-  function fmtArmor(ac?: number, armor?: number): string {
-    const parts: string[] = [];
-    if (ac) parts.push(`AC ${ac}`);
-    if (armor) parts.push(`броня ${armor}`);
-    return parts.length ? `[${parts.join(", ")}]` : "";
-  }
-
-  const itemStats = fmtDamage(row.damageDice, row.damageAvg) || fmtArmor(row.itemAc, row.itemArmor);
-  const itemLabel = itemStats ? `${row.itemName ?? ""} ${itemStats}` : (row.itemName ?? "");
-
-  if (row.action === "keep") {
-    tr.classList.add("gear-advisor__row--keep");
-    tdAction.textContent = "оставить";
-  } else if (row.action === "no_upgrade") {
-    tr.classList.add("gear-advisor__row--keep");
-    tdAction.textContent = "оставить (нет улучшений)";
-  } else if (row.action === "needs_identify") {
-    tr.classList.add("gear-advisor__row--identify");
-    tdAction.textContent = "⚠️ опознать вручную";
-  } else if (row.action === "equip") {
-    tr.classList.add("gear-advisor__row--equip");
-    tdAction.textContent = `надеть: ${itemLabel}`;
-  } else if (row.action === "buy") {
-    const numStr = row.shopNumber != null ? `${row.shopNumber}` : "";
-    const priceStr = row.price != null ? ` [${row.price} кун]` : "";
-    if (row.canAfford) {
-      tr.classList.add("gear-advisor__row--buy");
-      tdAction.textContent = `купить ${numStr}${priceStr}: ${itemLabel}`.trim();
-    } else {
-      tr.classList.add("gear-advisor__row--buy-cant");
-      tdAction.textContent = `купить ${numStr}${priceStr} (не хватает): ${itemLabel}`.trim();
-    }
-  }
-  tr.appendChild(tdAction);
-
-  const tdCurrent = document.createElement("td");
-  tdCurrent.className = "gear-advisor__cell gear-advisor__cell--current";
-  if (row.currentItemName) {
-    const curStats = fmtDamage(row.currentDamageDice, row.currentDamageAvg)
-      || fmtArmor(row.currentAc, row.currentArmor);
-    tdCurrent.textContent = curStats
-      ? `${row.currentItemName} ${curStats}`
-      : row.currentItemName;
-  } else {
-    tdCurrent.textContent = "—";
-  }
-  tr.appendChild(tdCurrent);
-
-  if (row.action === "buy" || row.action === "equip") {
-    const tdApply = document.createElement("td");
-    tdApply.className = "gear-advisor__cell gear-advisor__cell--apply";
-    const applyBtn = document.createElement("button");
-    applyBtn.className = "button-secondary button-small";
-    applyBtn.textContent = "Применить";
-    applyBtn.addEventListener("click", () => {
-      const cmds: string[] = [];
-      if (row.action === "buy" && row.shopNumber != null) {
-        cmds.push(`купить ${row.shopNumber}`);
-      }
-      if (row.currentItemName) {
-        cmds.push(`снять !${row.currentItemName}!`);
-      }
-      if (row.itemName) {
-        const wearCmd = row.slot === "правая рука" ? "вооруж" : row.slot === "левая рука" ? "держ" : "надеть";
-        cmds.push(`${wearCmd} !${row.itemName}!`);
-      }
-      if (cmds.length > 0) {
-        sendClientEvent({ type: "gear_apply", payload: { commands: cmds } });
-        applyBtn.disabled = true;
-        applyBtn.textContent = "...";
-      }
-    });
-    tdApply.appendChild(applyBtn);
-    tr.appendChild(tdApply);
-  }
-
-  return tr;
-}
-
-function renderBazaarAdvisorRow(row: {
-  slot: string;
-  action: string;
-  itemName?: string;
-  price?: number;
-  shopNumber?: number;
-  canAfford?: boolean;
-  source?: string;
-  damageDice?: string;
-  damageAvg?: number;
-  itemAc?: number;
-  itemArmor?: number;
-  currentItemName?: string;
-  currentDamageDice?: string;
-  currentDamageAvg?: number;
-  currentAc?: number;
-  currentArmor?: number;
-}): HTMLTableRowElement {
-  const tr = document.createElement("tr");
-  tr.className = "gear-advisor__row";
-
-  const tdSlot = document.createElement("td");
-  tdSlot.className = "gear-advisor__cell";
-  tdSlot.textContent = row.slot;
-  tr.appendChild(tdSlot);
-
-  const tdAction = document.createElement("td");
-  tdAction.className = "gear-advisor__cell";
-
-  function fmtDamage(dice?: string, avg?: number): string {
-    if (!dice) return "";
-    const cleanDice = dice.replace(/\s*\(ср\..*?\)/g, "").trim();
-    return avg ? `[${cleanDice} (ср. ${avg.toFixed(1)})]` : `[${cleanDice}]`;
-  }
-
-  function fmtArmor(ac?: number, armor?: number): string {
-    const parts: string[] = [];
-    if (ac) parts.push(`AC ${ac}`);
-    if (armor) parts.push(`броня ${armor}`);
-    return parts.length ? `[${parts.join(", ")}]` : "";
-  }
-
-  const itemStats = fmtDamage(row.damageDice, row.damageAvg) || fmtArmor(row.itemAc, row.itemArmor);
-  const itemLabel = itemStats ? `${row.itemName ?? ""} ${itemStats}` : (row.itemName ?? "");
-
-  if (row.action === "keep") {
-    tr.classList.add("gear-advisor__row--keep");
-    tdAction.textContent = "оставить";
-  } else if (row.action === "no_upgrade") {
-    tr.classList.add("gear-advisor__row--keep");
-    tdAction.textContent = "оставить (нет улучшений)";
-  } else if (row.action === "equip") {
-    tr.classList.add("gear-advisor__row--equip");
-    tdAction.textContent = `надеть: ${itemLabel}`;
-  } else if (row.action === "buy") {
-    const numStr = row.shopNumber != null ? `${row.shopNumber}` : "";
-    const priceStr = row.price != null ? ` [${row.price} кун]` : "";
-    if (row.canAfford) {
-      tr.classList.add("gear-advisor__row--buy");
-      tdAction.textContent = `базар купить ${numStr}${priceStr}: ${itemLabel}`.trim();
-    } else {
-      tr.classList.add("gear-advisor__row--buy-cant");
-      tdAction.textContent = `базар купить ${numStr}${priceStr} (не хватает): ${itemLabel}`.trim();
-    }
-  }
-  tr.appendChild(tdAction);
-
-  const tdCurrent = document.createElement("td");
-  tdCurrent.className = "gear-advisor__cell gear-advisor__cell--current";
-  if (row.currentItemName) {
-    const curStats = fmtDamage(row.currentDamageDice, row.currentDamageAvg)
-      || fmtArmor(row.currentAc, row.currentArmor);
-    tdCurrent.textContent = curStats
-      ? `${row.currentItemName} ${curStats}`
-      : row.currentItemName;
-  } else {
-    tdCurrent.textContent = "—";
-  }
-  tr.appendChild(tdCurrent);
-
-  if ((row.action === "buy" || row.action === "equip") && row.canAfford) {
-    const tdApply = document.createElement("td");
-    tdApply.className = "gear-advisor__cell gear-advisor__cell--apply";
-    const applyBtn = document.createElement("button");
-    applyBtn.className = "button-secondary button-small";
-    applyBtn.textContent = "Применить";
-    applyBtn.addEventListener("click", () => {
-      const cmds: string[] = [];
-      if (row.action === "buy" && row.shopNumber != null) {
-        cmds.push(`базар купить ${row.shopNumber}`);
-      }
-      if (row.currentItemName) {
-        cmds.push(`снять !${row.currentItemName}!`);
-      }
-      if (row.itemName) {
-        const wearCmd = row.slot === "правая рука" ? "вооруж" : row.slot === "левая рука" ? "держ" : "надеть";
-        cmds.push(`${wearCmd} !${row.itemName}!`);
-      }
-      if (cmds.length > 0) {
-        sendClientEvent({ type: "gear_apply", payload: { commands: cmds } });
-        applyBtn.disabled = true;
-        applyBtn.textContent = "...";
-      }
-    });
-    tdApply.appendChild(applyBtn);
-    tr.appendChild(tdApply);
-  }
-
-  return tr;
-}
-
 function createSocket(): WebSocket {
   const nextSocket = new WebSocket(getSocketUrl());
 
@@ -3095,6 +2896,9 @@ function createSocket(): WebSocket {
     reconnectDelay = 1000;
     setStatus("Connected");
     flushPendingQueue();
+    sendClientEvent({ type: "send", payload: { command: "осм торб" } });
+    sendClientEvent({ type: "send", payload: { command: "осм сунду" } });
+    sendClientEvent({ type: "send", payload: { command: "инв" } });
   });
 
   nextSocket.addEventListener("message", (event) => {
@@ -3141,7 +2945,7 @@ function createSocket(): WebSocket {
         break;
       case "aliases_snapshot":
         currentAliases = message.payload.aliases;
-        renderAliasList();
+        renderNavPanel();
         renderGridMap(latestMapSnapshot);
         break;
       case "navigation_state":
@@ -3205,67 +3009,12 @@ function createSocket(): WebSocket {
       case "room_auto_commands_snapshot":
         currentRoomAutoCommands = new Map(message.payload.entries.map((e) => [e.vnum, e.command]));
         break;
-      case "gear_scan_progress":
-        gearAdvisorStatus.textContent = message.payload.message;
+      case "compare_scan_progress":
+        compareAdvisorStatus.textContent = message.payload.message;
         break;
-      case "gear_scan_result":
-        gearAdvisorStatus.textContent = "";
-        gearAdvisorCoins.textContent = `Монеты: ${message.payload.coins}`;
-        gearAdvisorTableBody.innerHTML = "";
-        for (const row of message.payload.rows) {
-          gearAdvisorTableBody.appendChild(renderGearAdvisorRow(row));
-        }
-        gearAdvisorSellList.innerHTML = "";
-        if (message.payload.sellItems.length > 0) {
-          gearAdvisorSellList.classList.remove("gear-advisor__sell--hidden");
-          for (const item of message.payload.sellItems) {
-            const sellRow = document.createElement("div");
-            sellRow.className = "gear-advisor__sell-row";
-
-            const nameSpan = document.createElement("span");
-            nameSpan.className = "gear-advisor__sell-name";
-            nameSpan.textContent = item.count > 1 ? `${item.name} ×${item.count}` : item.name;
-
-            const sellBtn = document.createElement("button");
-            sellBtn.type = "button";
-            sellBtn.className = "button-secondary button-small gear-advisor__sell-btn";
-            sellBtn.textContent = "Продать";
-            sellBtn.addEventListener("click", () => {
-              sendClientEvent({ type: "gear_sell", payload: { sellCommand: item.sellCommand } });
-              sellRow.remove();
-            });
-
-            const dropBtn = document.createElement("button");
-            dropBtn.type = "button";
-            dropBtn.className = "button-secondary button-small gear-advisor__sell-btn";
-            dropBtn.textContent = "Бросить";
-            dropBtn.addEventListener("click", () => {
-              const dropCommand = item.count > 1 ? `бросить все.${item.name}` : `бросить ${item.name}`;
-              sendClientEvent({ type: "gear_drop", payload: { dropCommand } });
-              sellRow.remove();
-            });
-
-            sellRow.appendChild(nameSpan);
-            sellRow.appendChild(sellBtn);
-            sellRow.appendChild(dropBtn);
-            gearAdvisorSellList.appendChild(sellRow);
-          }
-        } else {
-          gearAdvisorSellList.classList.add("gear-advisor__sell--hidden");
-        }
+      case "compare_scan_result":
+        renderComparePanel(message.payload);
         break;
-      case "bazaar_scan_progress":
-        bazaarAdvisorStatus.textContent = message.payload.message;
-        break;
-      case "bazaar_scan_result": {
-        bazaarAdvisorStatus.textContent = "";
-        bazaarAdvisorCoins.textContent = `Монеты: ${message.payload.coins}`;
-        bazaarAdvisorTableBody.innerHTML = "";
-        for (const row of message.payload.rows) {
-          bazaarAdvisorTableBody.appendChild(renderBazaarAdvisorRow(row));
-        }
-        break;
-      }
       case "repair_state":
         repairBtn.disabled = message.payload.running;
         repairBtn.title = message.payload.running
@@ -3291,6 +3040,58 @@ function createSocket(): WebSocket {
       }
       case "vorozhe_route_result": {
         renderVorozheResult(message.payload);
+        break;
+      }
+      case "container_contents": {
+        renderContainerList(
+          message.payload.container === "bag" ? bagPanelList : chestPanelList,
+          message.payload.items,
+          message.payload.container,
+        );
+        break;
+      }
+      case "inventory_contents": {
+        renderInventoryList(inventoryPanelList, message.payload.items);
+        if (pendingEquippedAction === "equip") {
+          pendingEquippedAction = null;
+          const commands: string[] = [];
+          for (const item of message.payload.items) {
+            const slotMatch = /\*Ринли\s+\*([^*]+)\*+/i.exec(item.name);
+            if (!slotMatch) continue;
+            const slot = slotMatch[1]?.trim() ?? "";
+            const wearCmd = INVENTORY_WEAR_CMD[slot] ?? "над";
+            const cleanName = item.name.replace(/\*+[^*]*\*+/g, "").replace(/<[^>]+>/g, "").trim();
+            const keyword = cleanName.split(/\s+/)[0] ?? cleanName;
+            if (keyword) commands.push(`${wearCmd} ${keyword}`);
+          }
+          if (commands.length > 0) {
+            sendClientEvent({ type: "compare_apply", payload: { commands } });
+          }
+        }
+        break;
+      }
+      case "equipped_contents": {
+        const items = message.payload.items;
+        if (pendingEquippedAction === "scratch") {
+          pendingEquippedAction = null;
+          const commands: string[] = [];
+          for (const item of items) {
+            commands.push(`сня ${item.keyword}`);
+            commands.push(`нацарапать клан ${item.keyword} Ринли *${item.slot}*`);
+            commands.push(`${item.wearCmd} ${item.keyword}`);
+          }
+          sendClientEvent({ type: "compare_apply", payload: { commands } });
+        }
+        break;
+      }
+      case "chat_message": {
+        appendChatMessage(message.payload.text, message.payload.timestamp);
+        break;
+      }
+      case "chat_history": {
+        for (const msg of message.payload.messages) {
+          appendChatMessage(msg.text, msg.timestamp);
+        }
         break;
       }
     }
@@ -3628,15 +3429,35 @@ gatherSellButton.addEventListener("click", () => {
   sendClientEvent({ type: "gather_sell_bag" });
 });
 
+scratchClanBtn.addEventListener("click", () => {
+  pendingEquippedAction = "scratch";
+  sendClientEvent({ type: "equipped_scan" });
+});
+
+equipAllBtn.addEventListener("click", () => {
+  pendingEquippedAction = "equip";
+  sendClientEvent({ type: "send", payload: { command: "инвентарь" } });
+});
+
 debugLogButton.addEventListener("click", () => {
   sendClientEvent({ type: "debug_log_toggle" });
 });
 
-gearAdvisorButton.addEventListener("click", openGearAdvisorModal);
-gearAdvisorModalClose.addEventListener("click", closeGearAdvisorModal);
+document.querySelectorAll<HTMLButtonElement>(".container-panel__refresh").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const container = btn.dataset["container"] as "bag" | "chest" | undefined;
+    if (container === "bag") {
+      sendClientEvent({ type: "send", payload: { command: "осм торб" } });
+    } else if (container === "chest") {
+      sendClientEvent({ type: "send", payload: { command: "осм сунду" } });
+    } else {
+      sendClientEvent({ type: "send", payload: { command: "инв" } });
+    }
+  });
+});
 
-bazaarAdvisorButton.addEventListener("click", openBazaarAdvisorModal);
-bazaarAdvisorModalClose.addEventListener("click", closeBazaarAdvisorModal);
+compareButton.addEventListener("click", openCompareAdvisor);
+compareAdvisorClose.addEventListener("click", closeCompareAdvisor);
 
 vorozheButton.addEventListener("click", openVorozheModal);
 vorozheModalClose.addEventListener("click", closeVorozheModal);
@@ -3653,6 +3474,328 @@ itemDbTabs.addEventListener("click", (e) => {
 });
 
 itemDbSearch.addEventListener("input", applyItemDbFilter);
+
+// ─── Compare Advisor ──────────────────────────────────────────────────────────
+
+function openCompareAdvisor(): void {
+  compareAdvisorPanel.classList.remove("compare-advisor-panel--hidden");
+}
+
+function closeCompareAdvisor(): void {
+  compareAdvisorPanel.classList.add("compare-advisor-panel--hidden");
+}
+
+type CompareScanPayload = {
+  hasShop: boolean;
+  coins: number;
+  slots: Array<{
+    slot: string;
+    currentItemName: string | null;
+    currentScore: number;
+    currentCard: {
+      id: number;
+      name: string;
+      itemType: string;
+      ac: number;
+      armor: number;
+      damageAvg: number;
+      affects: string[];
+      properties: string[];
+      material: string;
+      wearSlots: string[];
+    } | null;
+    candidates: Array<{
+      itemId: number;
+      itemName: string;
+      price: number;
+      listNumber: number;
+      score: number;
+      source: "shop" | "bazaar" | "inventory";
+      hasGameData: boolean;
+      card: {
+        id: number;
+        name: string;
+        itemType: string;
+        ac: number;
+        armor: number;
+        damageAvg: number;
+        affects: string[];
+        properties: string[];
+        material: string;
+        wearSlots: string[];
+      };
+    }>;
+  }>;
+};
+
+function renderComparePanel(payload: CompareScanPayload): void {
+  openCompareAdvisor();
+  compareAdvisorCoins.textContent = payload.hasShop
+    ? `Монет: ${payload.coins}`
+    : `Монет: ${payload.coins} (магазина нет)`;
+
+  compareAdvisorTableBody.innerHTML = "";
+
+  for (const slot of payload.slots) {
+    if (slot.candidates.length === 0) continue;
+
+    // Current item row
+    const currentRow = document.createElement("tr");
+    currentRow.className = "compare-advisor__current-row";
+    const currentLabel = slot.currentItemName
+      ? `${slot.currentItemName} (${Math.round(slot.currentScore)} оч.)`
+      : "— пусто —";
+    currentRow.innerHTML = `
+      <td class="compare-advisor__slot-cell">${slot.slot}</td>
+      <td colspan="4" class="compare-advisor__current-item">${currentLabel}</td>
+      <td></td>
+    `;
+    compareAdvisorTableBody.appendChild(currentRow);
+
+    // Candidate rows
+    for (const c of slot.candidates) {
+      const sourceLabel =
+        c.source === "shop" ? `м:${c.listNumber}` :
+        c.source === "bazaar" ? `б:${c.listNumber}` : "инв";
+      const scoreDiff = Math.round(c.score - slot.currentScore);
+      const diffText = scoreDiff > 0 ? `+${scoreDiff}` : `${scoreDiff}`;
+      const diffClass = scoreDiff > 0 ? "compare-advisor__diff--better" : "compare-advisor__diff--worse";
+
+      const tr = document.createElement("tr");
+      tr.className = "compare-advisor__candidate-row";
+
+      const nameCell = document.createElement("td");
+      nameCell.className = "compare-advisor__name-cell";
+      nameCell.textContent = c.itemName;
+      if (!c.hasGameData) {
+        const charBtn = document.createElement("button");
+        charBtn.type = "button";
+        charBtn.className = "compare-advisor__char-btn button-secondary button-small";
+        charBtn.textContent = "хар";
+        charBtn.title = "Запросить характеристики из игры";
+        charBtn.addEventListener("click", () => {
+          sendClientEvent({ type: "send", payload: { command: `б.хар ${c.itemName}` } });
+        });
+        nameCell.appendChild(charBtn);
+      }
+
+      const priceCell = document.createElement("td");
+      priceCell.textContent = c.source === "inventory" ? "—" : `${c.price}`;
+
+      const sourceCell = document.createElement("td");
+      sourceCell.textContent = sourceLabel;
+
+      const scoreCell = document.createElement("td");
+      scoreCell.innerHTML = `${Math.round(c.score)} <span class="${diffClass}">(${diffText})</span>`;
+
+      const actionCell = document.createElement("td");
+      if (scoreDiff > 0) {
+        const applyBtn = document.createElement("button");
+        applyBtn.type = "button";
+        applyBtn.className = "compare-advisor__apply-btn button-secondary button-small";
+        applyBtn.textContent = "Взять";
+        applyBtn.addEventListener("click", () => {
+          const commands: string[] = [];
+          if (c.source === "shop") {
+            commands.push(`купить ${c.listNumber}`);
+          } else if (c.source === "bazaar") {
+            commands.push(`bazaar buy ${c.listNumber}`);
+          }
+          // equip step is handled via inventory_contents → compare_apply
+          sendClientEvent({ type: "compare_apply", payload: { commands } });
+        });
+        actionCell.appendChild(applyBtn);
+      }
+
+      tr.appendChild(document.createElement("td")); // slot (empty for candidate rows)
+      tr.appendChild(nameCell);
+      tr.appendChild(priceCell);
+      tr.appendChild(sourceCell);
+      tr.appendChild(scoreCell);
+      tr.appendChild(actionCell);
+      compareAdvisorTableBody.appendChild(tr);
+    }
+  }
+}
+
+// ─── Container / Inventory lists ──────────────────────────────────────────────
+
+function renderItemRow(
+  item: { name: string; count: number },
+  sellCommand: (kw: string, count: number) => string,
+  dropCommand: (kw: string, count: number) => string,
+): HTMLTableRowElement {
+  const keyword = item.name.split(/\s+/)[0] ?? item.name;
+  const tr = document.createElement("tr");
+
+  const tdSell = document.createElement("td");
+  tdSell.className = "container-panel__sell-cell";
+  const sellBtn = document.createElement("button");
+  sellBtn.type = "button";
+  sellBtn.className = "container-panel__sell-btn";
+  sellBtn.textContent = "П";
+  sellBtn.title = "Продать";
+  sellBtn.addEventListener("click", () => {
+    sendClientEvent({ type: "send", payload: { command: sellCommand(keyword, item.count) } });
+  });
+  tdSell.appendChild(sellBtn);
+
+  const tdDrop = document.createElement("td");
+  tdDrop.className = "container-panel__sell-cell";
+  const dropBtn = document.createElement("button");
+  dropBtn.type = "button";
+  dropBtn.className = "container-panel__sell-btn";
+  dropBtn.textContent = "В";
+  dropBtn.title = "Выбросить";
+  dropBtn.addEventListener("click", () => {
+    sendClientEvent({ type: "send", payload: { command: dropCommand(keyword, item.count) } });
+  });
+  tdDrop.appendChild(dropBtn);
+
+  const tdCount = document.createElement("td");
+  tdCount.className = "container-panel__count";
+  tdCount.textContent = item.count > 1 ? `×${item.count}` : "";
+
+  const tdName = document.createElement("td");
+  tdName.className = "container-panel__name";
+  tdName.textContent = item.name;
+
+  tr.appendChild(tdSell);
+  tr.appendChild(tdDrop);
+  tr.appendChild(tdCount);
+  tr.appendChild(tdName);
+  return tr;
+}
+
+function sortItems<T extends { name: string; count: number }>(items: T[]): T[] {
+  return [...items].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "ru"));
+}
+
+function renderContainerList(
+  tbody: HTMLTableSectionElement,
+  items: Array<{ name: string; count: number }>,
+  container: string,
+): void {
+  tbody.innerHTML = "";
+  const containerKw = container === "bag" ? "торб" : "сунду";
+  const isChest = container === "chest";
+  for (const item of sortItems(items)) {
+    tbody.appendChild(renderItemRow(
+      item,
+      (kw) => isChest ? `базар выставить ${kw} 200` : `продать ${kw}`,
+      (kw, count) => count > 1 ? `бросить все.${kw} ${containerKw}` : `бросить ${kw}`,
+    ));
+  }
+}
+
+function renderInventoryList(
+  tbody: HTMLTableSectionElement,
+  items: Array<{ name: string; count: number }>,
+): void {
+  tbody.innerHTML = "";
+  for (const item of sortItems(items)) {
+    tbody.appendChild(renderItemRow(
+      item,
+      (kw) => `продать ${kw}`,
+      (kw, count) => count > 1 ? `бросить все.${kw}` : `бросить ${kw}`,
+    ));
+  }
+}
+
+// ─── Vorozhe modal ────────────────────────────────────────────────────────────
+
+function maybeRequestVorozheRoute(): void {
+  if (!vorozheFrom || !vorozheTo) return;
+  sendClientEvent({ type: "vorozhe_route_find", payload: { from: vorozheFrom, to: vorozheTo } });
+}
+
+function openVorozheModal(): void {
+  vorozheModal.classList.remove("farm-modal--hidden");
+}
+
+function closeVorozheModal(): void {
+  vorozheModal.classList.add("farm-modal--hidden");
+}
+
+function renderVorozheResult(payload: {
+  from: string;
+  to: string;
+  found: boolean;
+  steps: Array<{ from: string; to: string; items: string[] }>;
+  totalItems: Record<string, number>;
+}): void {
+  vorozheResult.classList.remove("vorozhe-modal__result--hidden");
+
+  if (!payload.found || payload.steps.length === 0) {
+    vorozheNoRoute.classList.remove("vorozhe-modal__no-route--hidden");
+    vorozheNoRoute.textContent =
+      payload.from === payload.to ? "Вы уже в этом городе" : "Маршрут не найден";
+    vorozheRouteTable.classList.add("vorozhe-modal__table--hidden");
+    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
+    return;
+  }
+
+  vorozheNoRoute.classList.add("vorozhe-modal__no-route--hidden");
+  vorozheRouteTable.classList.remove("vorozhe-modal__table--hidden");
+  vorozheTotal.classList.remove("vorozhe-modal__total--hidden");
+
+  vorozheRouteTbody.innerHTML = "";
+  for (const step of payload.steps) {
+    const tr = document.createElement("tr");
+    const tdFrom = document.createElement("td");
+    tdFrom.textContent = step.from;
+    const tdTo = document.createElement("td");
+    tdTo.textContent = step.to;
+    const tdItems = document.createElement("td");
+    for (const item of step.items) {
+      const badge = document.createElement("span");
+      badge.className = "vorozhe-item-badge";
+      badge.textContent = item;
+      tdItems.appendChild(badge);
+    }
+    tr.appendChild(tdFrom);
+    tr.appendChild(tdTo);
+    tr.appendChild(tdItems);
+    vorozheRouteTbody.appendChild(tr);
+  }
+
+  const totalEntries = Object.entries(payload.totalItems);
+  if (totalEntries.length > 0) {
+    vorozheTotal.textContent = `Итого нужно: ${totalEntries.map(([item, count]) => `${item} ×${count}`).join(", ")}`;
+  } else {
+    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
+  }
+}
+
+function initVorozheModal(): void {
+  VOROZHE_CITIES.forEach((city) => {
+    const fromBtn = document.createElement("button");
+    fromBtn.type = "button";
+    fromBtn.className = "vorozhe-city-btn";
+    fromBtn.textContent = city;
+    fromBtn.addEventListener("click", () => {
+      vorozheFrom = city;
+      vororozheFromButtons.forEach((b) => b.classList.remove("vorozhe-city-btn--active"));
+      fromBtn.classList.add("vorozhe-city-btn--active");
+      maybeRequestVorozheRoute();
+    });
+    vorozheFromButtons.appendChild(fromBtn);
+    vororozheFromButtons.push(fromBtn);
+
+    const toBtn = document.createElement("button");
+    toBtn.type = "button";
+    toBtn.className = "vorozhe-city-btn";
+    toBtn.textContent = city;
+    toBtn.addEventListener("click", () => {
+      vorozheTo = city;
+      vorozheToButtonsList.forEach((b) => b.classList.remove("vorozhe-city-btn--active"));
+      toBtn.classList.add("vorozhe-city-btn--active");
+      maybeRequestVorozheRoute();
+    });
+    vorozheToButtons.appendChild(toBtn);
+    vorozheToButtonsList.push(toBtn);
+  });
+}
 
 function doWikiSearch(): void {
   const query = itemDbWikiInput.value.trim();
@@ -3714,22 +3857,24 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !itemDetailModal.classList.contains("farm-modal--hidden")) {
     closeItemDetailModal();
   }
-  if (e.key === "Escape" && !gearAdvisorPanel.classList.contains("gear-advisor-panel--hidden")) {
-    closeGearAdvisorModal();
-  }
-  if (e.key === "Escape" && !bazaarAdvisorPanel.classList.contains("gear-advisor-panel--hidden")) {
-    closeBazaarAdvisorModal();
-  }
   if (e.key === "Escape" && !mapContextMenu.classList.contains("map-context-menu--hidden")) {
     closeMapContextMenu();
   }
   if (e.key === "Escape" && !autoCmdPopup.classList.contains("alias-popup--hidden")) {
     closeAutoCmdPopup();
   }
+  if (e.key === "Escape" && !compareAdvisorPanel.classList.contains("compare-advisor-panel--hidden")) {
+    closeCompareAdvisor();
+  }
+  if (e.key === "Escape" && !vorozheModal.classList.contains("farm-modal--hidden")) {
+    closeVorozheModal();
+  }
 });
 
 mapTabMap.addEventListener("click", () => switchMapTab("map"));
-mapTabNav.addEventListener("click", () => switchMapTab("nav"));
+
+containerTabInventory.addEventListener("click", () => switchContainerTab("inventory"));
+containerTabNav.addEventListener("click", () => switchContainerTab("nav"));
 
 aliasPopupSave.addEventListener("click", () => {
   const alias = aliasPopupInput.value.trim();
@@ -3846,6 +3991,8 @@ const DEFAULT_HOTKEYS: HotkeyEntry[] = [
   { key: "KeyZ",           command: "карта",   label: "Я" },
   { key: "KeyX",           command: "огл",     label: "Ч" },
   { key: "KeyA",           command: "освеж тр", label: "Ф" },
+  { key: "KeyQ",           command: "взя все.тр;;взя все все.тр;;бро все.тр", label: "Й" },
+  { key: "Digit5",         command: "взя возвр склад1;;зачит возвр", label: "5" },
 ];
 
 function loadHotkeys(): HotkeyEntry[] {
@@ -3895,7 +4042,9 @@ document.addEventListener("keydown", (e) => {
 
   e.preventDefault();
 
-  sendClientEvent({ type: "send", payload: { command: cmd.trim() } });
+  for (const part of cmd.split(";;").map((s) => s.trim()).filter(Boolean)) {
+    sendClientEvent({ type: "send", payload: { command: part } });
+  }
 });
 
 // ── Hotkey modal ───────────────────────────────────────────────────────────────
@@ -4078,17 +4227,39 @@ updateActionButtons();
 const PANEL_SPLIT_KEY = "panel-split-map-fr";
 const PANEL_SPLIT_MIN_FR = 0.15;
 const PANEL_SPLIT_MAX_FR = 0.75;
+const CONTAINER_SPLIT_KEY = "panel-split-container-px";
+const CONTAINER_SPLIT_MIN_PX = 100;
+const CONTAINER_SPLIT_MAX_PX = 500;
+const CONTAINER_SPLIT_DEFAULT_PX = 160;
 
 const shellEl = document.querySelector<HTMLElement>("main.shell");
 const panelSplitterEl = document.getElementById("panel-splitter");
+const containerSplitterEl = document.getElementById("container-splitter");
+
+let currentContainerPx = CONTAINER_SPLIT_DEFAULT_PX;
 
 function applyPanelSplit(mapFr: number): void {
   if (!shellEl) return;
   const clamped = Math.max(PANEL_SPLIT_MIN_FR, Math.min(PANEL_SPLIT_MAX_FR, mapFr));
-  shellEl.style.gridTemplateColumns = `56px ${1 - clamped}fr 6px ${clamped}fr`;
+  shellEl.style.gridTemplateColumns = `56px ${1 - clamped}fr 6px ${clamped}fr 6px ${currentContainerPx}px`;
+}
+
+function applyContainerSplit(px: number): void {
+  if (!shellEl) return;
+  const clamped = Math.max(CONTAINER_SPLIT_MIN_PX, Math.min(CONTAINER_SPLIT_MAX_PX, px));
+  currentContainerPx = clamped;
+  const match = shellEl.style.gridTemplateColumns.match(/^(56px\s+[\d.]+fr\s+6px\s+[\d.]+fr)\s+6px\s+[\d.]+px$/);
+  const base = match ? match[1] : `56px ${1 - 0.35}fr 6px ${0.35}fr`;
+  shellEl.style.gridTemplateColumns = `${base} 6px ${clamped}px`;
 }
 
 function loadPanelSplit(): void {
+  const storedContainer = localStorage.getItem(CONTAINER_SPLIT_KEY);
+  if (storedContainer !== null) {
+    const px = parseFloat(storedContainer);
+    if (!isNaN(px)) currentContainerPx = Math.max(CONTAINER_SPLIT_MIN_PX, Math.min(CONTAINER_SPLIT_MAX_PX, px));
+  }
+
   const stored = localStorage.getItem(PANEL_SPLIT_KEY);
   if (stored !== null) {
     const fr = parseFloat(stored);
@@ -4115,8 +4286,8 @@ if (panelSplitterEl !== null && shellEl !== null) {
   panelSplitterEl.addEventListener("pointermove", (e: PointerEvent) => {
     if (!dragging) return;
     const shellRect = shellEl.getBoundingClientRect();
-    const gaps = 3 * 8;
-    const available = shellRect.width - 56 - gaps;
+    const gaps = 5 * 8;
+    const available = shellRect.width - 56 - currentContainerPx - gaps;
     const offsetX = e.clientX - shellRect.left - 56 - gaps / 2;
     applyPanelSplit(Math.max(0, 1 - offsetX / available));
   });
@@ -4126,12 +4297,41 @@ if (panelSplitterEl !== null && shellEl !== null) {
     dragging = false;
     panelSplitterEl!.classList.remove("panel-splitter--dragging");
     panelSplitterEl!.releasePointerCapture(e.pointerId);
-    const match = shellEl!.style.gridTemplateColumns.match(/\s([\d.]+)fr\s*$/);
+    const match = shellEl!.style.gridTemplateColumns.match(/56px\s+[\d.]+fr\s+6px\s+([\d.]+)fr/);
     if (match) localStorage.setItem(PANEL_SPLIT_KEY, match[1]);
   }
 
   panelSplitterEl.addEventListener("pointerup", stopSplitterDrag);
   panelSplitterEl.addEventListener("pointercancel", stopSplitterDrag);
+}
+
+if (containerSplitterEl !== null && shellEl !== null) {
+  let dragging = false;
+
+  containerSplitterEl.addEventListener("pointerdown", (e: PointerEvent) => {
+    e.preventDefault();
+    dragging = true;
+    containerSplitterEl.classList.add("panel-splitter--dragging");
+    containerSplitterEl.setPointerCapture(e.pointerId);
+  });
+
+  containerSplitterEl.addEventListener("pointermove", (e: PointerEvent) => {
+    if (!dragging) return;
+    const shellRect = shellEl.getBoundingClientRect();
+    const px = shellRect.right - e.clientX - 8;
+    applyContainerSplit(px);
+  });
+
+  function stopContainerDrag(e: PointerEvent): void {
+    if (!dragging) return;
+    dragging = false;
+    containerSplitterEl!.classList.remove("panel-splitter--dragging");
+    containerSplitterEl!.releasePointerCapture(e.pointerId);
+    localStorage.setItem(CONTAINER_SPLIT_KEY, String(currentContainerPx));
+  }
+
+  containerSplitterEl.addEventListener("pointerup", stopContainerDrag);
+  containerSplitterEl.addEventListener("pointercancel", stopContainerDrag);
 }
 
 void loadDefaults()
