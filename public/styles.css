@@ -100,10 +100,10 @@ body {
 .shell {
   flex: 1;
   min-height: 0;
-  width: min(1680px, calc(100vw - 32px));
+  width: min(1920px, calc(100vw - 32px));
   margin: 16px auto;
   display: grid;
-  grid-template-columns: 56px 1fr 6px minmax(280px, 1fr);
+  grid-template-columns: 56px 1fr 6px minmax(280px, 1fr) 6px 160px;
   grid-template-rows: 1fr auto;
   column-gap: 8px;
   row-gap: 8px;
@@ -122,6 +122,16 @@ body {
 #panel-map {
   grid-column: 4;
   grid-row: 1;
+}
+
+#container-splitter {
+  grid-column: 5;
+  grid-row: 1 / 3;
+}
+
+#container-panels {
+  grid-column: 6;
+  grid-row: 1 / 3;
 }
 
 .panel--actions {
@@ -1672,56 +1682,6 @@ button:hover {
   color: var(--accent-strong);
 }
 
-/* ── Gear Advisor modal ──────────────────────────────────────────────────────── */
-
-.gear-advisor__status { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 8px; min-height: 1.2em; }
-.gear-advisor__coins { color: var(--accent); font-size: 0.85rem; margin: 0 0 12px; }
-.gear-advisor__table-wrap { overflow-x: auto; }
-.gear-advisor__table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
-.gear-advisor__table th,
-.gear-advisor__table td { padding: 3px 7px; text-align: left; border-bottom: 1px solid var(--panel-border); }
-.gear-advisor__table th { color: var(--text-muted); font-weight: 600; }
-.gear-advisor__cell { color: var(--text); }
-.gear-advisor__row--keep .gear-advisor__cell:last-child { color: var(--text-muted); }
-.gear-advisor__row--buy .gear-advisor__cell:last-child { color: var(--accent-strong); }
-.gear-advisor__row--buy-cant .gear-advisor__cell:last-child { color: var(--danger); }
-.gear-advisor__row--equip .gear-advisor__cell:last-child { color: var(--accent); }
-.gear-advisor__sell-section { margin-top: 12px; border-top: 1px solid var(--panel-border); padding-top: 10px; }
-.gear-advisor__sell--hidden { display: none; }
-.gear-advisor__sell-title { font-size: 13px; font-weight: 600; color: var(--text-muted); margin: 0 0 8px; }
-.gear-advisor__sell-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-.gear-advisor__sell-name { flex: 1; font-size: 13px; }
-.gear-advisor__sell-btn { flex-shrink: 0; }
-
-.gear-advisor-panel {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  background: var(--panel);
-  border-radius: inherit;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.gear-advisor-panel--hidden { display: none; }
-.gear-advisor-panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px 8px;
-  border-bottom: 1px solid var(--panel-border);
-  flex-shrink: 0;
-}
-.gear-advisor-panel__title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-}
-.gear-advisor-panel__body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 14px;
-}
 
 .item-detail-modal__content {
   max-width: 500px;
@@ -2047,7 +2007,7 @@ button:hover {
 }
 
 .global-map-modal__zone-input {
-  width: 110px;
+  width: 150px;
   font-size: 12px;
   padding: 3px 7px;
   height: 26px;
@@ -2091,13 +2051,26 @@ button:hover {
   stroke: var(--accent, #67d7a7);
   stroke-width: 1.5;
   stroke-dasharray: 6 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   opacity: 0.6;
 }
 
 .global-map-portal-line--active {
   stroke: #ffffff;
   stroke-width: 2.5;
-  stroke-dasharray: none;
+  stroke-dasharray: unset;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 1;
+}
+
+.global-map-portal-line--path {
+  stroke: #f5a623;
+  stroke-width: 2.5;
+  stroke-dasharray: unset;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   opacity: 1;
 }
 
@@ -2139,6 +2112,11 @@ button:hover {
   background: rgba(103, 215, 167, 0.18);
   border-color: var(--accent, #67d7a7);
   box-shadow: 0 0 10px rgba(103, 215, 167, 0.3);
+}
+
+.zone-tile--dimmed {
+  opacity: 0.15;
+  pointer-events: none;
 }
 
 .zone-tile--current:hover {
@@ -2220,4 +2198,329 @@ button:hover {
 .zone-rename-popup__actions {
   display: flex;
   gap: 6px;
+}
+
+/* ── Container panels (торба / сундук) ──────────────────────────────────── */
+
+.container-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  overflow: hidden;
+}
+
+.container-panel {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.container-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.container-panel__title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.container-panel__refresh {
+  padding: 1px 5px;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.container-panel__refresh:hover {
+  opacity: 1;
+}
+
+.container-panel__scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.container-panel__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.container-panel__table tr:hover td {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.container-panel__sell-cell {
+  width: 20px;
+  padding: 1px 2px 1px 4px;
+}
+
+.container-panel__sell-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.25);
+  border-radius: 2px;
+  transition: color 0.1s, background 0.1s;
+}
+
+.container-panel__sell-btn:hover {
+  color: var(--accent);
+  background: rgba(103, 215, 167, 0.12);
+}
+
+.container-panel__count {
+  width: 28px;
+  text-align: right;
+  padding: 2px 4px 2px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.35);
+  white-space: nowrap;
+}
+
+.container-panel__name {
+  padding: 2px 6px 2px 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.container-panel__empty {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.25) !important;
+  font-style: italic;
+  text-align: center;
+}
+
+.compare-advisor-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--panel);
+  border-radius: inherit;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.compare-advisor-panel--hidden { display: none; }
+.compare-advisor-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--panel-border);
+  flex-shrink: 0;
+}
+.compare-advisor-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.compare-advisor-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+.compare-advisor__status {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 4px;
+  min-height: 16px;
+}
+.compare-advisor__coins {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+.compare-advisor__table-wrap {
+  overflow-x: auto;
+}
+.compare-advisor__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.compare-advisor__table thead th {
+  padding: 4px 6px;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--panel-border);
+  white-space: nowrap;
+}
+.compare-advisor__cell {
+  padding: 3px 6px;
+  vertical-align: middle;
+  color: var(--text);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.compare-advisor__cell--slot {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  width: 90px;
+  vertical-align: top;
+  padding-top: 5px;
+}
+.compare-advisor__cell--current-name {
+  font-style: italic;
+  color: rgba(255,255,255,0.5);
+}
+.compare-advisor__cell--price,
+.compare-advisor__cell--num,
+.compare-advisor__cell--score {
+  text-align: right;
+  white-space: nowrap;
+  width: 60px;
+}
+.compare-advisor__cell--btns {
+  white-space: nowrap;
+  width: 1px;
+}
+.compare-advisor__row--current td {
+  background: rgba(255,255,255,0.03);
+}
+.compare-advisor__row--candidate:hover td {
+  background: rgba(255,255,255,0.05);
+}
+.compare-advisor__action-btn {
+  margin-left: 4px;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+.compare-advisor__item-name {
+  position: relative;
+  cursor: default;
+}
+.compare-advisor__tooltip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 100;
+  background: #1a2230;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre;
+  min-width: 180px;
+  max-width: 320px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  pointer-events: none;
+}
+.compare-advisor__tooltip--above {
+  top: auto;
+  bottom: 100%;
+}
+.compare-advisor__tooltip--visible {
+  display: block;
+}
+
+/* ── Container panels tabs (Инвентарь / Навигация) ─────────────────────── */
+
+.container-panels__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 4px 0;
+  flex-shrink: 0;
+}
+
+.container-panels__panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  gap: 6px;
+}
+
+.container-panels__panel--hidden {
+  display: none;
+}
+
+/* ── Navigation panel ───────────────────────────────────────────────────── */
+
+.nav-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0;
+}
+
+.nav-section {
+  padding: 4px 0;
+}
+
+.nav-section__title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: rgba(255, 255, 255, 0.35);
+  padding: 4px 8px 4px;
+}
+
+.nav-zone-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-zone-list__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.nav-zone-list__item:last-child {
+  border-bottom: none;
+}
+
+.nav-zone-list__name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-zone-list__go {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
 }

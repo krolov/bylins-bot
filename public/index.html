@@ -44,17 +44,26 @@
         <button id="buy-food-btn" type="button" class="action-btn" title="Купить еду">🍞<span id="buy-food-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
         <button id="fill-flask-btn" type="button" class="action-btn" title="Наполнить флягу">💧<span id="fill-flask-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
         <button id="repair-btn" type="button" class="action-btn" title="Починить снаряжение">🔨</button>
-        <button id="gear-advisor-button" type="button" class="action-btn" title="Советник по снаряжению">🗡️</button>
-        <button id="bazaar-advisor-button" type="button" class="action-btn" title="Советник по базару">🏪</button>
+        <button id="compare-button" type="button" class="action-btn" title="Сравнятор v2">⚖️</button>
         <div class="panel--actions__divider"></div>
         <button id="survival-settings-button" type="button" class="action-btn" title="Питание">🍖</button>
         <button id="triggers-button" type="button" class="action-btn" title="Триггеры">⚡</button>
-        <button id="auto-spells-button" type="button" class="action-btn" title="Авто-заклинания">✨</button>
-        <button id="sneak-button" type="button" class="action-btn" title="Авто-подкрадывание">🥷</button>
         <button id="hotkeys-button" type="button" class="action-btn" title="Хоткеи">⌨️</button>
         <button id="item-db-button" type="button" class="action-btn" title="База предметов">📦</button>
         <div class="panel--actions__divider"></div>
         <button id="map-recording-button" type="button" class="action-btn" title="Запись карты: вкл">🗺️</button>
+        <button id="global-map-button" type="button" class="action-btn" title="Глобальная карта мира">🌍</button>
+        <div class="panel--actions__divider"></div>
+        <button id="farm-settings-button" type="button" class="action-btn" title="Настройки фарма текущей зоны">⚙️</button>
+        <button id="gather-toggle-button" type="button" class="action-btn" title="Автосбор ресурсов">🌿</button>
+        <button id="gather-sell-button" type="button" class="action-btn" title="Выставить на базар из торбы">💰</button>
+        <div class="panel--actions__divider"></div>
+        <button id="scratch-clan-btn" type="button" class="action-btn" title="Нацарапать клан на весь экип">🔏</button>
+        <button id="equip-all-btn" type="button" class="action-btn" title="Одеть всё из инвентаря по слотам">👗</button>
+        <div class="panel--actions__divider"></div>
+        <button id="vorozhe-button" type="button" class="action-btn" title="Маршрут через ворожей">🧙</button>
+        <div class="panel--actions__divider"></div>
+        <button id="debug-log-button" type="button" class="action-btn" title="Дебаг лог: выкл">🪲</button>
       </aside>
 
       <section id="panel-output" class="panel panel--output">
@@ -76,7 +85,6 @@
         <div class="terminal-toolbar map-toolbar">
           <div class="map-tabs">
             <button id="map-tab-map" type="button" class="map-tab map-tab--active">Карта</button>
-            <button id="map-tab-nav" type="button" class="map-tab">Навигация</button>
           </div>
           <div class="map-z-controls">
             <button id="z-level-down" type="button" class="button-secondary button-small">−</button>
@@ -90,49 +98,93 @@
           <div id="map-canvas" class="map-canvas"></div>
         </div>
 
-        <div id="map-panel-nav" class="map-tab-panel map-tab-panel--hidden">
-          <div id="nav-status" class="nav-status nav-status--hidden"></div>
-          <ul id="alias-list" class="alias-list"></ul>
-          <p id="alias-list-empty" class="alias-list-empty">Алиасы не заданы. Кликните по комнате на карте.</p>
-        </div>
-
-        <div id="gear-advisor-panel" class="gear-advisor-panel gear-advisor-panel--hidden">
-          <div class="gear-advisor-panel__header">
-            <span class="gear-advisor-panel__title">Советник по снаряжению</span>
-            <button id="gear-advisor-modal-close" type="button" class="button-secondary button-small" aria-label="Закрыть">✕</button>
+        <div id="compare-advisor-panel" class="compare-advisor-panel compare-advisor-panel--hidden">
+          <div class="compare-advisor-panel__header">
+            <span class="compare-advisor-panel__title" id="compare-advisor-title">Сравнятор v2</span>
+            <button id="compare-advisor-close" type="button" class="button-secondary button-small" aria-label="Закрыть">✕</button>
           </div>
-          <div class="gear-advisor-panel__body">
-            <p id="gear-advisor-status" class="gear-advisor__status"></p>
-            <p id="gear-advisor-coins" class="gear-advisor__coins"></p>
-            <div class="gear-advisor__table-wrap">
-              <table class="gear-advisor__table">
-                <thead><tr><th>Слот</th><th>Решение</th><th>Сейчас</th></tr></thead>
-                <tbody id="gear-advisor-table-body"></tbody>
-              </table>
-            </div>
-            <div id="gear-advisor-sell-list" class="gear-advisor__sell-section gear-advisor__sell--hidden">
-              <h4 class="gear-advisor__sell-title">Ненужные предметы</h4>
-            </div>
-          </div>
-        </div>
-
-        <div id="bazaar-advisor-panel" class="gear-advisor-panel gear-advisor-panel--hidden">
-          <div class="gear-advisor-panel__header">
-            <span class="gear-advisor-panel__title">Советник по базару</span>
-            <button id="bazaar-advisor-modal-close" type="button" class="button-secondary button-small" aria-label="Закрыть">✕</button>
-          </div>
-          <div class="gear-advisor-panel__body">
-            <p id="bazaar-advisor-status" class="gear-advisor__status"></p>
-            <p id="bazaar-advisor-coins" class="gear-advisor__coins"></p>
-            <div class="gear-advisor__table-wrap">
-              <table class="gear-advisor__table">
-                <thead><tr><th>Слот</th><th>Решение</th><th>Сейчас</th></tr></thead>
-                <tbody id="bazaar-advisor-table-body"></tbody>
+          <div class="compare-advisor-panel__body">
+            <p id="compare-advisor-status" class="compare-advisor__status"></p>
+            <p id="compare-advisor-coins" class="compare-advisor__coins"></p>
+            <div class="compare-advisor__table-wrap">
+              <table class="compare-advisor__table">
+                <thead>
+                  <tr>
+                    <th>Слот</th>
+                    <th>Сейчас / Кандидат</th>
+                    <th>Цена</th>
+                    <th>№</th>
+                    <th>Очки</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="compare-advisor-table-body"></tbody>
               </table>
             </div>
           </div>
         </div>
       </section>
+
+      <div id="container-splitter" class="panel-splitter" title="Тащите для изменения размера"></div>
+
+      <div class="container-panels" id="container-panels">
+        <div class="container-panels__tabs">
+          <button id="container-tab-inventory" type="button" class="map-tab map-tab--active">Инвентарь</button>
+          <button id="container-tab-nav" type="button" class="map-tab">Навигация</button>
+        </div>
+
+        <div id="container-panel-inventory" class="container-panels__panel">
+        <div class="container-panel" id="bag-panel">
+          <div class="container-panel__header">
+            <span class="container-panel__title">Торба</span>
+            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="bag" title="Обновить">↺</button>
+          </div>
+          <div class="container-panel__scroll">
+            <table class="container-panel__table">
+              <tbody id="bag-panel-list"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="container-panel" id="chest-panel">
+          <div class="container-panel__header">
+            <span class="container-panel__title">Сундук</span>
+            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="chest" title="Обновить">↺</button>
+          </div>
+          <div class="container-panel__scroll">
+            <table class="container-panel__table">
+              <tbody id="chest-panel-list"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="container-panel" id="inventory-panel">
+          <div class="container-panel__header">
+            <span class="container-panel__title">Инвентарь</span>
+            <button type="button" class="container-panel__refresh container-panel__refresh--inventory button-secondary button-small" title="Обновить">↺</button>
+          </div>
+          <div class="container-panel__scroll">
+            <table class="container-panel__table">
+              <tbody id="inventory-panel-list"></tbody>
+            </table>
+          </div>
+        </div>
+        </div>
+
+        <div id="container-panel-nav" class="container-panels__panel container-panels__panel--hidden">
+          <div id="nav-status" class="nav-status nav-status--hidden"></div>
+          <div id="nav-panel" class="nav-panel">
+            <div id="nav-zone-aliases" class="nav-section">
+              <div class="nav-section__title" id="nav-zone-aliases-title">Текущая зона</div>
+              <ul id="nav-alias-list" class="alias-list"></ul>
+              <p id="nav-alias-list-empty" class="alias-list-empty">Нет алиасов в текущей зоне.</p>
+            </div>
+            <div id="nav-neighbor-zones" class="nav-section">
+              <div class="nav-section__title">Соседние зоны</div>
+              <ul id="nav-zone-list" class="nav-zone-list"></ul>
+              <p id="nav-zone-list-empty" class="alias-list-empty">Нет посещённых соседних зон.</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div id="chat-panel" class="chat-panel panel">
         <div class="chat-panel__header">
@@ -189,166 +241,56 @@
           </div>
 
           <div class="farm-modal__body">
-            <div class="farm-modal__col">
-              <div class="farm-modal__field">
-                <label for="farm-modal-targets" class="farm-modal__label">
-                  Цели фарма
-                  <span class="farm-modal__hint">по одной на строку или через запятую</span>
-                </label>
-                <textarea
-                  id="farm-modal-targets"
-                  class="farm-modal__textarea"
-                  placeholder="букашка&#10;комар&#10;мышь"
-                  rows="4"
-                  autocomplete="off"
-                  spellcheck="false"
-                ></textarea>
-              </div>
-
-              <div class="farm-modal__field">
-                <label for="farm-modal-heal" class="farm-modal__label">
-                  Команды лечения
-                  <span class="farm-modal__hint">отправляются когда HP падает ниже порога</span>
-                </label>
-                <textarea
-                  id="farm-modal-heal"
-                  class="farm-modal__textarea"
-                  placeholder="исцелить себя&#10;выпить зелье"
-                  rows="3"
-                  autocomplete="off"
-                  spellcheck="false"
-                ></textarea>
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                <label for="farm-modal-heal-threshold" class="farm-modal__label">Порог HP для лечения (%)</label>
-                <input
-                  id="farm-modal-heal-threshold"
-                  type="number"
-                  min="0"
-                  max="100"
-                  class="farm-modal__number-input topbar__input"
-                  value="50"
-                />
-              </div>
-
-              <div class="farm-modal__field">
-                <label for="farm-modal-flee-command" class="farm-modal__label">
-                  Команда побега
-                  <span class="farm-modal__hint">отправляется при падении HP ниже порога</span>
-                </label>
-                <input
-                  id="farm-modal-flee-command"
-                  type="text"
-                  class="farm-modal__input topbar__input"
-                  placeholder="беж"
-                />
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                <label for="farm-modal-flee-threshold" class="farm-modal__label">Порог HP для побега (%)</label>
-                <input
-                  id="farm-modal-flee-threshold"
-                  type="number"
-                  min="0"
-                  max="100"
-                  class="farm-modal__number-input topbar__input"
-                  value="0"
-                />
-              </div>
-
-              <div class="farm-modal__field">
-                <label for="farm-modal-loot" class="farm-modal__label">
-                  Что подбирать
-                  <span class="farm-modal__hint">ключевые слова для команды взять, по одному на строку</span>
-                </label>
-                <textarea
-                  id="farm-modal-loot"
-                  class="farm-modal__textarea"
-                  placeholder="бобр&#10;труп выдры&#10;шкурка"
-                  rows="3"
-                  autocomplete="off"
-                  spellcheck="false"
-                ></textarea>
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--section-header">
-                <span class="farm-modal__label">Атака</span>
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                <label for="farm-modal-use-stab" class="farm-modal__label">Заколоть</label>
-                <input id="farm-modal-use-stab" type="checkbox" checked />
-              </div>
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-attack-command" class="farm-modal__label">Глагол атаки</label>
+              <input
+                id="farm-modal-attack-command"
+                type="text"
+                class="farm-modal__text-input topbar__input"
+                placeholder="заколоть"
+                autocomplete="off"
+                spellcheck="false"
+              >
             </div>
-
-            <div class="farm-modal__col">
-              <div class="farm-modal__field farm-modal__field--section-header">
-                <span class="farm-modal__label">Периодическое действие</span>
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                <label for="farm-modal-periodic-enabled" class="farm-modal__label">Включить</label>
-                <input id="farm-modal-periodic-enabled" type="checkbox" />
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                <label for="farm-modal-periodic-alias1" class="farm-modal__label">Куда идти (алиас 1)</label>
-                <input
-                  id="farm-modal-periodic-alias1"
-                  type="text"
-                  class="topbar__input"
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-              </div>
-
-              <div class="farm-modal__field">
-                <label for="farm-modal-periodic-command" class="farm-modal__label">
-                  Команды
-                  <span class="farm-modal__hint">по одной на строку</span>
-                </label>
-                <textarea
-                  id="farm-modal-periodic-command"
-                  class="farm-modal__textarea"
-                  rows="3"
-                  autocomplete="off"
-                  spellcheck="false"
-                ></textarea>
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                <label for="farm-modal-periodic-command-delay" class="farm-modal__label">Задержка между командами (мс)</label>
-                <input
-                  id="farm-modal-periodic-command-delay"
-                  type="number"
-                  min="0"
-                  class="farm-modal__number-input topbar__input"
-                  value="0"
-                />
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                <label for="farm-modal-periodic-alias2" class="farm-modal__label">Куда вернуться (алиас 2)</label>
-                <input
-                  id="farm-modal-periodic-alias2"
-                  type="text"
-                  class="topbar__input"
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-              </div>
-
-              <div class="farm-modal__field farm-modal__field--inline">
-                 <label for="farm-modal-periodic-interval" class="farm-modal__label">Интервал (мин)</label>
-                 <input
-                   id="farm-modal-periodic-interval"
-                   type="number"
-                   min="1"
-                   class="farm-modal__number-input topbar__input"
-                   value="30"
-                 />
-               </div>
+            <div class="farm-modal__field farm-modal__field--section-header">
+              <span class="farm-modal__label">Свежевание</span>
+            </div>
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-skinning-enabled" class="farm-modal__label">Свежевать после убийства</label>
+              <input id="farm-modal-skinning-enabled" type="checkbox">
+            </div>
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-skinning-verb" class="farm-modal__label">Глагол свежевания</label>
+              <input
+                id="farm-modal-skinning-verb"
+                type="text"
+                class="farm-modal__text-input topbar__input"
+                placeholder="освеж"
+                autocomplete="off"
+                spellcheck="false"
+              >
+            </div>
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-loot-meat" class="farm-modal__label">Команда подбора мяса</label>
+              <input
+                id="farm-modal-loot-meat"
+                type="text"
+                class="farm-modal__text-input topbar__input"
+                placeholder="пол все.мяс торб"
+                autocomplete="off"
+                spellcheck="false"
+              >
+            </div>
+            <div class="farm-modal__field farm-modal__field--inline">
+              <label for="farm-modal-loot-hide" class="farm-modal__label">Команда подбора шкуры</label>
+              <input
+                id="farm-modal-loot-hide"
+                type="text"
+                class="farm-modal__text-input topbar__input"
+                placeholder="пол все.шкур торб"
+                autocomplete="off"
+                spellcheck="false"
+              >
             </div>
           </div>
 
@@ -519,7 +461,11 @@
                <label for="trigger-light" class="farm-modal__label">Колдовать свет (авто)</label>
                <input id="trigger-light" type="checkbox" />
              </div>
-          </div>
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="trigger-follow-leader" class="farm-modal__label">Выполнять команды лидеров (гг/личка)</label>
+               <input id="trigger-follow-leader" type="checkbox" />
+             </div>
+           </div>
 
           <div class="farm-modal__footer">
             <button id="triggers-modal-cancel" type="button" class="button-secondary button-small">Закрыть</button>
@@ -580,7 +526,7 @@
       </div>
     </main>
 
-    <script type="module" src="/client.js?v=3"></script>
+    <script type="module" src="/client.js?v=4"></script>
 
       <div id="hotkeys-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="hotkeys-modal-title">
         <div class="farm-modal__backdrop"></div>
@@ -591,7 +537,7 @@
           </div>
 
           <div class="farm-modal__body">
-            <p class="hotkeys-modal__hint">Нажмите на поле клавиши, чтобы назначить. Хоткеи срабатывают когда фокус не в поле ввода.</p>
+            <p class="hotkeys-modal__hint">Нажмите на поле клавиши, чтобы назначить. Поддерживаются одиночные клавиши, а также сочетания с Opt (Alt) и Ctrl. Хоткеи срабатывают когда фокус не в поле ввода.</p>
             <table class="hotkeys-modal__table">
               <thead>
                 <tr>
@@ -612,93 +558,76 @@
         </div>
       </div>
 
-      <div id="auto-spells-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="auto-spells-modal-title">
+      <div id="global-map-modal" class="global-map-modal global-map-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="global-map-modal-title">
+        <div class="global-map-modal__backdrop"></div>
+        <div class="global-map-modal__content">
+          <div class="global-map-modal__header">
+            <span id="global-map-modal-title" class="global-map-modal__title">🌍 Карта мира</span>
+            <input id="global-map-search" type="search" class="topbar__input global-map-modal__zone-input" placeholder="Поиск зоны..." autocomplete="off">
+            <div class="global-map-modal__controls">
+              <button id="global-map-zoom-out" type="button" class="button-secondary button-small">−</button>
+              <span id="global-map-zoom-label" class="global-map-modal__zoom-label">100%</span>
+              <button id="global-map-zoom-in" type="button" class="button-secondary button-small">+</button>
+              <button id="global-map-modal-close" type="button" class="button-secondary button-small" aria-label="Закрыть">✕</button>
+            </div>
+          </div>
+          <div id="global-map-canvas" class="map-canvas global-map-modal__canvas"></div>
+        </div>
+      </div>
+
+      <div id="vorozhe-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="vorozhe-modal-title">
         <div class="farm-modal__backdrop"></div>
-        <div class="farm-modal__content">
+        <div class="farm-modal__content farm-modal__content--wide">
           <div class="farm-modal__header">
-            <span id="auto-spells-modal-title" class="farm-modal__title">Авто-заклинания</span>
-            <button id="auto-spells-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
+            <span id="vorozhe-modal-title" class="farm-modal__title">Маршрут через ворожей</span>
+            <button id="vorozhe-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
           </div>
 
-          <div class="farm-modal__body">
-            <p class="farm-modal__hint">Бот периодически проверяет активные аффекты командой <code>афф</code> и перечитывает пропавшие заклинания.</p>
+          <div class="farm-modal__body vorozhe-modal__body">
+            <div class="vorozhe-modal__selectors">
+              <div class="vorozhe-modal__selector-group">
+                <div class="vorozhe-modal__selector-label">Откуда</div>
+                <div id="vorozhe-from-buttons" class="vorozhe-modal__city-buttons"></div>
+              </div>
+              <div class="vorozhe-modal__selector-group">
+                <div class="vorozhe-modal__selector-label">Куда</div>
+                <div id="vorozhe-to-buttons" class="vorozhe-modal__city-buttons"></div>
+              </div>
+            </div>
 
-            <table class="hotkeys-modal__table" id="auto-spells-table">
-              <thead>
-                <tr>
-                  <th class="hotkeys-modal__th">Аффект</th>
-                  <th class="hotkeys-modal__th">Команда заклинания</th>
-                  <th class="hotkeys-modal__th">Вкл</th>
-                  <th class="hotkeys-modal__th"></th>
-                </tr>
-              </thead>
-              <tbody id="auto-spells-table-body"></tbody>
-            </table>
-            <button id="auto-spells-add-row" type="button" class="button-secondary button-small hotkeys-modal__add">+ Добавить</button>
-
-            <div class="farm-modal__field farm-modal__field--inline" style="margin-top:12px">
-              <label for="auto-spells-interval" class="farm-modal__label">Интервал проверки (сек)</label>
-              <input
-                id="auto-spells-interval"
-                type="number"
-                min="10"
-                max="3600"
-                class="farm-modal__number-input topbar__input"
-                value="60"
-              />
+            <div id="vorozhe-result" class="vorozhe-modal__result vorozhe-modal__result--hidden">
+              <div id="vorozhe-no-route" class="vorozhe-modal__no-route vorozhe-modal__no-route--hidden">Маршрут не найден</div>
+              <table id="vorozhe-route-table" class="vorozhe-modal__table vorozhe-modal__table--hidden">
+                <thead>
+                  <tr>
+                    <th>Откуда</th>
+                    <th>Куда</th>
+                    <th>Предметы</th>
+                  </tr>
+                </thead>
+                <tbody id="vorozhe-route-tbody"></tbody>
+              </table>
+              <div id="vorozhe-total" class="vorozhe-modal__total vorozhe-modal__total--hidden"></div>
             </div>
           </div>
 
           <div class="farm-modal__footer">
-            <button id="auto-spells-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
-            <button id="auto-spells-modal-save" type="button" class="button-small">Сохранить</button>
+            <button id="vorozhe-modal-cancel" type="button" class="button-secondary button-small">Закрыть</button>
           </div>
         </div>
       </div>
 
-      <div id="sneak-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="sneak-modal-title">
-        <div class="farm-modal__backdrop"></div>
-        <div class="farm-modal__content">
-          <div class="farm-modal__header">
-            <span id="sneak-modal-title" class="farm-modal__title">Авто-подкрадывание</span>
-            <button id="sneak-modal-close" type="button" class="farm-modal__close button-secondary button-small" aria-label="Закрыть">✕</button>
-          </div>
-
-          <div class="farm-modal__body">
-            <p class="farm-modal__hint">Бот проверяет аффект подкрадывания командой <code>афф</code> и перечитывает его вне боя. Сразу после каждого боя — принудительная проверка.</p>
-
-            <table class="hotkeys-modal__table" id="sneak-table">
-              <thead>
-                <tr>
-                  <th class="hotkeys-modal__th">Аффект</th>
-                  <th class="hotkeys-modal__th">Команда</th>
-                  <th class="hotkeys-modal__th">Вкл</th>
-                  <th class="hotkeys-modal__th"></th>
-                </tr>
-              </thead>
-              <tbody id="sneak-table-body"></tbody>
-            </table>
-            <button id="sneak-add-row" type="button" class="button-secondary button-small hotkeys-modal__add">+ Добавить</button>
-
-            <div class="farm-modal__field farm-modal__field--inline" style="margin-top:12px">
-              <label for="sneak-interval" class="farm-modal__label">Интервал проверки (сек)</label>
-              <input
-                id="sneak-interval"
-                type="number"
-                min="5"
-                max="3600"
-                class="farm-modal__number-input topbar__input"
-                value="20"
-              />
-            </div>
-          </div>
-
-          <div class="farm-modal__footer">
-            <button id="sneak-modal-cancel" type="button" class="button-secondary button-small">Отмена</button>
-            <button id="sneak-modal-save" type="button" class="button-small">Сохранить</button>
-          </div>
-        </div>
-      </div>
+  <div id="zone-rename-popup" class="zone-rename-popup zone-rename-popup--hidden" role="dialog" aria-modal="false">
+    <div class="zone-rename-popup__header">
+      <span id="zone-rename-title" class="zone-rename-popup__title">Зона 100</span>
+      <button id="zone-rename-close" type="button" class="button-secondary button-small" aria-label="Закрыть">✕</button>
+    </div>
+    <input id="zone-rename-input" type="text" class="topbar__input zone-rename-popup__input" placeholder="Название зоны" autocomplete="off" />
+    <div class="zone-rename-popup__actions">
+      <button id="zone-rename-save" type="button" class="button-small">Сохранить</button>
+      <button id="zone-rename-delete" type="button" class="button-secondary button-small">Удалить</button>
+    </div>
+  </div>
 
   </body>
 </html>
