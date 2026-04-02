@@ -39,12 +39,27 @@ const LIGHT_EQUIPPED_REGEXP = /^<для освещения>\s+светящийс
 // Заклинание света ушло в резы
 const LIGHT_MEMORIZING_REGEXP = /Вы занесли заклинание "[^"]*создать свет[^"]*" в свои резы/i;
 
+// Follow-leader: лидеры клана, чьи команды выполняются
+const FOLLOW_LEADER_NAMES = new Set([
+  "Магуша", "Аделя", "Куруш", "Нимрок", "Цисса", "Экзар", "Берест",
+]);
+
+// гг-канал: «Имя дружине: 'текст'» или «Имя сообщил группе : 'текст'»
+const FOLLOW_GG_REGEXP = /^(\S+) (?:дружине|сообщил[аи]? группе) : '(.+?)'\.?$/;
+
+// гд-канал: «Имя клану: 'текст'»
+const FOLLOW_GD_REGEXP = /^(\S+) клану: '(.+)'$/;
+
+// личка с восклицательным знаком: «Имя сказал вам : '!команда'»
+const FOLLOW_TELL_REGEXP = /^(\S+) сказал вам : '!(.+)'$/;
+
 export interface TriggerState {
   dodge: boolean;
   standUp: boolean;
   rearm: boolean;
   curse: boolean;
   light: boolean;
+  followLeader: boolean;
 }
 
 interface TriggerDependencies {
@@ -52,6 +67,7 @@ interface TriggerDependencies {
   onStateChange(state: TriggerState): void;
   onLog(message: string): void;
   isInCombat(): boolean;
+  getCharacterName(): string;
 }
 
 export function createTriggers(deps: TriggerDependencies) {
@@ -61,6 +77,7 @@ export function createTriggers(deps: TriggerDependencies) {
     rearm: true,
     curse: false,
     light: false,
+    followLeader: true,
   };
 
   let dodgeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -129,6 +146,10 @@ export function createTriggers(deps: TriggerDependencies) {
 
     if (enabled.light) {
       handleLightLogic(stripped);
+    }
+
+    if (enabled.followLeader) {
+      handleFollowLeaderLogic(stripped);
     }
   }
 
@@ -252,6 +273,39 @@ export function createTriggers(deps: TriggerDependencies) {
         lightMemorizing = false;
         lightPending = false;
         deps.onLog("[triggers] Зауч:0 — заклинание света готово");
+      }
+    }
+  }
+
+  function handleFollowLeaderLogic(stripped: string): void {
+    const charName = deps.getCharacterName();
+    for (const line of stripped.split("\n")) {
+      const ggMatch = FOLLOW_GG_REGEXP.exec(line) ?? FOLLOW_GD_REGEXP.exec(line);
+      if (ggMatch) {
+        const [, sender, text] = ggMatch;
+        deps.onLog(`[triggers] follow-leader match: sender="${sender}" text="${text}" charName="${charName}" inNames=${FOLLOW_LEADER_NAMES.has(sender)} startsWith=${text.startsWith(`${charName} `)}`);
+        if (FOLLOW_LEADER_NAMES.has(sender)) {
+          let command: string | null = null;
+          if (text.startsWith("!")) {
+            // !команда — для всей группы
+            command = text.slice(1).trim();
+          } else if (text.startsWith(`${charName} `)) {
+            // Ринли команда — адресовано конкретно нам
+            command = text.slice(charName.length + 1).trim();
+          }
+          if (command) {
+            deps.onLog(`[triggers] follow-leader: ${sender}: ${command}`);
+            deps.sendCommand(command);
+          }
+        }
+        continue;
+      }
+
+      const tellMatch = FOLLOW_TELL_REGEXP.exec(line);
+      if (tellMatch) {
+        const [, sender, command] = tellMatch;
+        deps.onLog(`[triggers] follow-leader tell from ${sender}: ${command}`);
+        deps.sendCommand(command);
       }
     }
   }

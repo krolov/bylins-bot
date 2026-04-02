@@ -448,13 +448,38 @@ export function parseInspectItems(inspectText: string): Array<{ name: string; co
     }
     const match = ITEM_LINE_REGEXP.exec(line);
     if (!match) continue;
-    const name = match[1]?.trim();
+    const name = match[1]?.replace(/<[^>]+>/g, "").trim();
     if (!name) continue;
     const countRaw = match[2];
     const count = countRaw ? Number.parseInt(countRaw, 10) : 1;
     items.push({ name, count: Number.isFinite(count) && count > 0 ? count : 1 });
   }
 
+  return items;
+}
+
+const CONTAINER_KEYWORDS_REGEXP = /торб|сунд/i;
+
+export function parseInventoryItems(inventoryText: string): Array<{ name: string; count: number }> {
+  const normalized = stripAnsi(inventoryText).replace(/\r/g, "");
+  const lines = normalized.split("\n");
+  const headerIndex = lines.findIndex((line) => /Вы несете/i.test(line));
+  if (headerIndex < 0) return [];
+
+  const items: Array<{ name: string; count: number }> = [];
+  for (let i = headerIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i]?.trim() ?? "";
+    if (line.length === 0) continue;
+    if (PROMPT_LINE_REGEXP.test(line) || /Вых:/i.test(line)) break;
+    if (CONTAINER_KEYWORDS_REGEXP.test(line)) continue;
+    const match = ITEM_LINE_REGEXP.exec(line);
+    if (!match) continue;
+    const name = match[1]?.replace(/<[^>]+>/g, "").trim();
+    if (!name) continue;
+    const countRaw = match[2];
+    const count = countRaw ? Number.parseInt(countRaw, 10) : 1;
+    items.push({ name, count: Number.isFinite(count) && count > 0 ? count : 1 });
+  }
   return items;
 }
 
