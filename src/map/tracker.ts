@@ -1,6 +1,7 @@
 import type { Direction, MapEdge, ParsedEvent, ParsedRoom, TrackerState } from "./types";
 
 const PENDING_MOVE_TTL_MS = 10_000;
+const MIN_TRACKED_VNUM = 1000;
 
 const COMMAND_TO_DIRECTION: Record<string, Direction> = {
   n: "north",
@@ -81,6 +82,10 @@ export function processParsedEvents(state: TrackerState, events: ParsedEvent[]):
         state.currentRoomId = null;
         break;
       case "room": {
+        if (event.room.vnum < MIN_TRACKED_VNUM) {
+          state.pendingMove = null;
+          break;
+        }
         rooms.push(event.room);
 
         if (state.pendingMove && !hasPendingMoveExpired(state.pendingMove.createdAt)) {
