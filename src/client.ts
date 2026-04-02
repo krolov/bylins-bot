@@ -463,6 +463,7 @@ const globalMapCanvas = requireElement<HTMLDivElement>("#global-map-canvas");
 const globalMapZoomIn = requireElement<HTMLButtonElement>("#global-map-zoom-in");
 const globalMapZoomOut = requireElement<HTMLButtonElement>("#global-map-zoom-out");
 const globalMapZoomLabel = requireElement<HTMLSpanElement>("#global-map-zoom-label");
+const globalMapSearch = requireElement<HTMLInputElement>("#global-map-search");
 const itemDbModal = requireElement<HTMLDivElement>("#item-db-modal");
 const itemDbModalBackdrop = requireElement<HTMLDivElement>("#item-db-modal .farm-modal__backdrop");
 const itemDbModalClose = requireElement<HTMLButtonElement>("#item-db-modal-close");
@@ -1194,6 +1195,7 @@ let latestMapSnapshot: MapSnapshotPayload = {
 };
 let globalMapZoom = 0.6;
 let globalMapOpen = false;
+let globalMapSearchQuery = "";
 let mapRecordingEnabled = true;
 let pendingEquippedAction: "scratch" | "equip" | null = null;
 
@@ -2447,6 +2449,10 @@ function renderZoneMap(snapshot: MapSnapshotPayload): void {
       });
     }
   }
+
+  if (globalMapSearchQuery !== "") {
+    applyGlobalMapSearch();
+  }
 }
 
 function updateGlobalMapZoomLabel(): void {
@@ -2459,14 +2465,29 @@ function openGlobalMap(): void {
   renderZoneMap(latestMapSnapshot);
 }
 
+function applyGlobalMapSearch(): void {
+  const query = globalMapSearch.value.trim().toLowerCase();
+  globalMapSearchQuery = query;
+  const tiles = Array.from(globalMapCanvas.querySelectorAll<HTMLElement>(".zone-tile"));
+  for (const tile of tiles) {
+    const zoneId = tile.getAttribute("data-zone-id") ?? "";
+    const zoneName = (zoneNames.get(Number(zoneId)) ?? "").toLowerCase();
+    const matches = query === "" || zoneId.includes(query) || zoneName.includes(query);
+    tile.classList.toggle("zone-tile--dimmed", !matches);
+  }
+}
+
 function closeGlobalMap(): void {
   globalMapOpen = false;
   globalMapModal.classList.add("global-map-modal--hidden");
   closeZoneRenamePopup();
+  globalMapSearch.value = "";
+  globalMapSearchQuery = "";
 }
 
 globalMapButton.addEventListener("click", openGlobalMap);
 globalMapModalClose.addEventListener("click", closeGlobalMap);
+globalMapSearch.addEventListener("input", applyGlobalMapSearch);
 
 globalMapModal.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
