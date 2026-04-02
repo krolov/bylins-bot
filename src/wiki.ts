@@ -918,7 +918,7 @@ export function mergeItemSources(
 }
 
 type WikiSearchStore = {
-  upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void>;
+  upsertItem(name: string, itemType: string, data: Record<string, unknown>, hasWikiData: boolean, hasGameData: boolean): Promise<void>;
 };
 
 type WikiSearchResult =
@@ -941,9 +941,9 @@ export async function searchAndCacheWikiItem(
   const gear = parseGearItemCard(html, first.id);
   const wiki = parseWikiItemCard(html, first.id);
   if (gear) {
-    await store.upsertItem(gear.name, gear.itemType, gearItemCardToData(gear));
+    await store.upsertItem(gear.name, gear.itemType, gearItemCardToData(gear), true, false);
   } else if (wiki) {
-    await store.upsertItem(wiki.name, wiki.itemType, { id: wiki.id, name: wiki.name });
+    await store.upsertItem(wiki.name, wiki.itemType, { id: wiki.id, name: wiki.name }, true, false);
   }
   return {
     found: true,

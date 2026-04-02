@@ -357,11 +357,35 @@ server.registerTool(
 
 const METAL_MATERIALS = new Set(["ЖЕЛЕЗО", "БРОНЗА", "СТАЛЬ", "БУЛАТ", "СЕРЕБРО", "ЗОЛОТО", "МЕДЬ", "ОЛОВО"]);
 
-const TATY_GOOD_PROPS = new Set([
-  "ловкость", "ускорение", "доблесть", "инициатива",
-  "восст.энергии", "восст.жизни", "стойкость", "макс.жизнь", "защита.от.тяжелых.ран",
-]);
+const TATY_AFFECT_SCORE: Record<string, number> = {
+  "ловкость":               60,
+  "ускорение":              15,
+  "доблесть":               15,
+  "инициатива":             15,
+  "восст.энергии":          12,
+  "восст.жизни":            12,
+  "стойкость":              12,
+  "макс.жизнь":             12,
+  "защита.от.тяжелых.ран":  12,
+  "телосложение":            6,
+};
+const TATY_PROP_SCORE: Record<string, number> = {
+  "ловкость":               40,
+  "ускорение":              10,
+  "доблесть":               10,
+  "инициатива":             10,
+  "восст.энергии":           8,
+  "восст.жизни":             8,
+  "стойкость":               8,
+  "макс.жизнь":              5,
+  "защита.от.тяжелых.ран":   8,
+  "телосложение":            4,
+};
 const TATY_BAD_PROPS = new Set(["попадание", "воля"]);
+
+// Количество ремортов текущего персонажа — захардкожено.
+// Предметы с remorts > PLAYER_REMORTS недоступны и исключаются из анализа.
+const PLAYER_REMORTS = 4;
 
 interface GearItem {
   id: number;
@@ -379,6 +403,7 @@ interface GearItem {
   isShiny: boolean;
   affects: string[];
   properties: string[];
+  remorts: number; // требуемое количество ремортов (0 = без требований)
 }
 
 function parseGearItem(html: string, id: number): GearItem | null {
@@ -435,12 +460,15 @@ function parseGearItem(html: string, id: number): GearItem | null {
     properties.push(`${pm[1]} ${pm[2]} на ${pm[3]}`);
   }
 
+  const remortsM = /[Рр]еморт[ыов]*\s*:\s*(\d+)/i.exec(t);
+  const remorts = remortsM ? parseInt(remortsM[1]) : 0;
+
   return {
     id, name, itemType, ac, armor, wearSlots,
     weaponClass, damageAvg,
     canRight: /правую руку/i.test(t),
     canLeft: /левую руку/i.test(t),
-    material, isMetal, isShiny, affects, properties,
+    material, isMetal, isShiny, affects, properties, remorts,
   };
 }
 
@@ -461,6 +489,7 @@ function dbCardToGearItem(c: DbGearItemCard): GearItem {
     isShiny: c.isShiny,
     affects: c.affects,
     properties: c.properties,
+    remorts: c.remorts ?? 0,
   };
 }
 
@@ -469,12 +498,13 @@ function armorScore(item: GearItem): number {
   if (item.isMetal || item.isShiny) return -1000;
   let score = item.ac * 2 + item.armor * 3;
   for (const a of item.affects) {
-    if (TATY_GOOD_PROPS.has(a)) score += 15;
+    const bonus = TATY_AFFECT_SCORE[a];
+    if (bonus !== undefined) score += bonus;
     if (TATY_BAD_PROPS.has(a)) score -= 10;
   }
   for (const p of item.properties) {
-    for (const g of TATY_GOOD_PROPS) {
-      if (p.includes(g)) score += p.includes("улучшает") ? 10 : -10;
+    for (const [key, bonus] of Object.entries(TATY_PROP_SCORE)) {
+      if (p.includes(key)) score += p.includes("улучшает") ? bonus : -bonus;
     }
     for (const b of TATY_BAD_PROPS) {
       if (p.includes(b) && p.includes("улучшает")) score -= 5;
@@ -574,7 +604,18 @@ server.registerTool(
 
     const pickBest = (candidates: GearItem[], scoreFn: (i: GearItem) => number, slot: string, wearCmd: string) => {
       if (!candidates.length) return;
-      const scored = candidates.map((i) => ({ i, s: scoreFn(i) })).sort((a, b) => b.s - a.s);
+
+      const available: GearItem[] = [];
+      for (const i of candidates) {
+        if (i.remorts > PLAYER_REMORTS) {
+          skip.push({ name: i.name, reason: `требует ${i.remorts} ремортов (у вас ${PLAYER_REMORTS})` });
+        } else {
+          available.push(i);
+        }
+      }
+
+      if (!available.length) return;
+      const scored = available.map((i) => ({ i, s: scoreFn(i) })).sort((a, b) => b.s - a.s);
       const best = scored[0];
       if (best.s > -1000) {
         const parts: string[] = [];
@@ -583,9 +624,10 @@ server.registerTool(
         } else {
           parts.push(`AC ${best.i.ac}, броня ${best.i.armor}`);
           if (best.i.affects.length) parts.push(`аффекты: ${best.i.affects.join(", ")}`);
-          const goodProps = best.i.properties.filter((p) => [...TATY_GOOD_PROPS].some((g) => p.includes(g) && p.includes("улучшает")));
+          const goodProps = best.i.properties.filter((p) => Object.keys(TATY_PROP_SCORE).some((g) => p.includes(g) && p.includes("улучшает")));
           if (goodProps.length) parts.push(goodProps.join(", "));
         }
+        if (best.i.remorts > 0) parts.push(`реморты: ${best.i.remorts}`);
         recs.push({ slot, item: best.i, desc: parts.join(", ") });
         buy.push(best.i);
         for (const { i } of scored.slice(1)) {

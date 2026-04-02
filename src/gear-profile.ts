@@ -28,7 +28,27 @@ export const TATY_PROFILE: GearProfile = {
   armorWeight: 2,
 
   armorAffects: [
-    { affect: "ловкость", affectScore: 30, propertyScorePerPoint: 20 },
+    { affect: "невидимость",      affectScore: 100, propertyScorePerPoint: 0  },
+    { affect: "освящение",        affectScore: 100, propertyScorePerPoint: 0  },
+    { affect: "полет",            affectScore: 100, propertyScorePerPoint: 0  },
+    { affect: "тьма",             affectScore: 100, propertyScorePerPoint: 0  },
+    { affect: "доблесть",         affectScore:  20, propertyScorePerPoint: 0  },
+    { affect: "дыхание.водой",    affectScore:  20, propertyScorePerPoint: 0  },
+    { affect: "мигание",          affectScore:  20, propertyScorePerPoint: 0  },
+    { affect: "настороженность",  affectScore:  20, propertyScorePerPoint: 0  },
+    { affect: "опр.жизни",        affectScore:  20, propertyScorePerPoint: 0  },
+    { affect: "опр.невидимости",  affectScore:  20, propertyScorePerPoint: 0  },
+    { affect: "ускорение",        affectScore:  20, propertyScorePerPoint: 0  },
+    { affect: "ловкость",         affectScore:   0, propertyScorePerPoint: 20 },
+    { affect: "телосложение",     affectScore:   0, propertyScorePerPoint: 10 },
+    { affect: "защита",           affectScore:   0, propertyScorePerPoint: 5  },
+    { affect: "броня",            affectScore:   0, propertyScorePerPoint: 3  },
+    { affect: "попадание",        affectScore:   0, propertyScorePerPoint: 2  },
+    { affect: "повреждение",      affectScore:   0, propertyScorePerPoint: 2  },
+    { affect: "реакция",          affectScore:   0, propertyScorePerPoint: 2  },
+    { affect: "здоровье",         affectScore:   0, propertyScorePerPoint: 2  },
+    { affect: "макс.жизнь",       affectScore:   0, propertyScorePerPoint: 2  },
+    { affect: "инициатива",       affectScore:   0, propertyScorePerPoint: 1  },
   ],
 
   rejectMetal: true,
@@ -42,7 +62,7 @@ export const TATY_PROFILE: GearProfile = {
 
   weaponAffects: [
     { affect: "ловкость",    affectScore: 0, propertyScorePerPoint: 20 },
-    { affect: "повреждение", affectScore: 0, propertyScorePerPoint: 15 },
+    { affect: "повреждение", affectScore: 0, propertyScorePerPoint: 5  },
   ],
 };
 
