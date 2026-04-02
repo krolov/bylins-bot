@@ -24,7 +24,6 @@ export function extractTargetName(line: string, targetValues: Farm2Config["targe
 export function parseMobsFromRoomDescription(
   lines: string[],
   targetValues: Farm2Config["targetValues"],
-  onLog: (message: string) => void,
 ): Map<string, string> {
   const result = new Map<string, string>();
 
@@ -33,7 +32,6 @@ export function parseMobsFromRoomDescription(
     const target = extractTargetName(stripped, targetValues);
     if (target !== null) {
       result.set(stripped.toLowerCase(), stripped);
-      onLog(`[farm2/room] обнаружена цель: "${stripped}" (ключ: "${target}")`);
     }
   }
 

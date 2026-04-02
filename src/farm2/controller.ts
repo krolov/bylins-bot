@@ -33,6 +33,7 @@ export function createFarm2Controller(deps: Farm2ControllerDependencies) {
         currentRoomId: number | null;
         mobsInRoom: string[];
         combatMobNames: string[];
+        corpseCount: number;
       },
     ): void {
       handleMudText(state, deps, text, options);

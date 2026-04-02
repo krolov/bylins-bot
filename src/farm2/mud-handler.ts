@@ -6,7 +6,23 @@ import { stripAnsi, getZoneId } from "./room.ts";
 import { settingsToConfig } from "./config.ts";
 import { publishState, markRoomVisited, disable } from "./state.ts";
 import { scheduleTick, runTick } from "./tick.ts";
+import { createLogger } from "./logger.ts";
 import type { Farm2State, Farm2ControllerDependencies } from "./types.ts";
+
+function sendSkinningSalvo(state: Farm2State, deps: Farm2ControllerDependencies): void {
+  if (!state.config.skinningSalvoEnabled) {
+    return;
+  }
+  const count = state.lastRoomCorpseCount;
+  if (count <= 0) {
+    return;
+  }
+  for (let i = count; i >= 1; i--) {
+    deps.sendCommand(`${state.config.skinningSkinVerb} ${i}.тр`);
+  }
+  deps.sendCommand(state.config.lootMeatCommand);
+  deps.sendCommand(state.config.lootHideCommand);
+}
 
 export function handleMudText(
   state: Farm2State,
@@ -18,8 +34,10 @@ export function handleMudText(
     currentRoomId: number | null;
     mobsInRoom: string[];
     combatMobNames: string[];
+    corpseCount: number;
   },
 ): void {
+  const logger = createLogger(deps);
   const normalized = stripAnsi(text).replace(/\r/g, "");
   const lines = normalized
     .split("\n")
@@ -27,6 +45,10 @@ export function handleMudText(
     .filter((line) => line.length > 0);
 
   const schedule = (delayMs: number) => scheduleTick(state, () => runTick(state, deps), delayMs);
+
+  if (options.roomDescriptionReceived) {
+    state.lastRoomCorpseCount = options.corpseCount;
+  }
 
   if (options.roomChanged || (options.roomDescriptionReceived && state.pendingRoomScanAfterKill)) {
     const prevTargetKeys = new Set(state.currentVisibleTargets.keys());
@@ -38,6 +60,11 @@ export function handleMudText(
       state.currentVisibleTargets.size !== prevTargetKeys.size ||
       [...state.currentVisibleTargets.keys()].some((k) => !prevTargetKeys.has(k));
 
+    logger.debug(
+      `handleMudText: roomChanged=${options.roomChanged} scanAfterKill=${state.pendingRoomScanAfterKill} ` +
+      `mobsInRoom=[${options.mobsInRoom.join(", ")}] visibleTargets=[${[...state.currentVisibleTargets.keys()].join(", ")}] mobListChanged=${mobListChanged}`,
+    );
+
     if (options.roomChanged || mobListChanged) {
       state.probeCombatNames = [];
       state.probeIndex = 0;
@@ -48,6 +75,15 @@ export function handleMudText(
       state.isDark = false;
     }
     state.pendingRoomScanAfterKill = false;
+
+    if (
+      state.enabled &&
+      options.roomDescriptionReceived &&
+      options.corpseCount > 0 &&
+      options.mobsInRoom.length === 0
+    ) {
+      sendSkinningSalvo(state, deps);
+    }
   }
 
   if (deps.combatState.getInCombat()) {
@@ -64,6 +100,8 @@ export function handleMudText(
     state.nextActionAt = 0;
     if (state.enabled && !state.pendingRoomScanAfterKill) {
       state.pendingRoomScanAfterKill = true;
+      state.pendingRoomScanSetAt = Date.now();
+      sendSkinningSalvo(state, deps);
       deps.reinitRoom();
     }
   }
@@ -71,6 +109,8 @@ export function handleMudText(
   for (const line of lines) {
     if (!options.roomChanged && MOB_DEATH_REGEXP.test(line) && state.enabled && !state.pendingRoomScanAfterKill) {
       state.pendingRoomScanAfterKill = true;
+      state.pendingRoomScanSetAt = Date.now();
+      sendSkinningSalvo(state, deps);
       deps.reinitRoom();
       break;
     }
@@ -84,15 +124,14 @@ export function handleMudText(
       state.zoneId = zoneId;
       state.pendingActivation = false;
       markRoomVisited(state, options.currentRoomId);
-      void deps.getZoneSettings(zoneId).then((zoneSettings) => {
+      void Promise.all([
+        deps.getZoneSettings(zoneId),
+        deps.getMobCombatNamesByZone(zoneId),
+      ]).then(([zoneSettings, mobNames]) => {
         if (zoneSettings) {
-          state.config = settingsToConfig(zoneSettings);
-          deps.onLog(`[farm2] Zone ${zoneId} settings loaded (attack: ${state.config.attackCommand}).`);
-        } else {
-          deps.onLog(`[farm2] Zone ${zoneId} settings not found, using defaults.`);
+          state.config = settingsToConfig(zoneSettings, mobNames.map((n) => n.toLowerCase()));
         }
         publishState(state, deps);
-        deps.onLog(`[farm2] Enabled for zone ${zoneId}.`);
         deps.reinitRoom();
         state.pendingRoomScanAfterKill = true;
       });
@@ -104,7 +143,7 @@ export function handleMudText(
       state.zoneId !== null &&
       getZoneId(options.currentRoomId) !== state.zoneId
     ) {
-      disable(state, deps, `[farm2] Stopped: left zone ${state.zoneId}.`);
+      disable(state, deps);
       return;
     }
 
@@ -121,7 +160,7 @@ export function handleSessionClosed(
   reason: string,
 ): void {
   if (state.enabled) {
-    disable(state, deps, `[farm2] Stopped: ${reason}`);
+    disable(state, deps);
   } else {
     state.timer.clear();
   }
