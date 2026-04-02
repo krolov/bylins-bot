@@ -5,23 +5,20 @@ export function defaultConfig(): Farm2Config {
   return {
     attackCommand: "заколоть",
     targetValues: [],
-    healCommands: [],
-    healThresholdPercent: 50,
-    fleeCommand: "",
-    fleeThresholdPercent: 0,
+    skinningSalvoEnabled: false,
+    skinningSkinVerb: "освеж",
+    lootMeatCommand: "пол все.мяс торб",
+    lootHideCommand: "пол все.шкур торб",
   };
 }
 
-export function settingsToConfig(s: FarmZoneSettings): Farm2Config {
+export function settingsToConfig(s: FarmZoneSettings, targetValues: string[]): Farm2Config {
   return {
-    attackCommand: "заколоть",
-    targetValues: s.targets
-      .split(",")
-      .map((v) => v.trim().toLowerCase())
-      .filter((v) => v.length > 0),
-    healCommands: [],
-    healThresholdPercent: 50,
-    fleeCommand: "",
-    fleeThresholdPercent: 0,
+    attackCommand: s.attackCommand,
+    targetValues,
+    skinningSalvoEnabled: s.skinningSalvoEnabled,
+    skinningSkinVerb: s.skinningSkinVerb,
+    lootMeatCommand: s.lootMeatCommand,
+    lootHideCommand: s.lootHideCommand,
   };
 }

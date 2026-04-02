@@ -35,10 +35,6 @@ export interface Farm2StateSnapshot {
   pendingActivation: boolean;
   attackCommand: string;
   targetValues: string[];
-  healCommands: string[];
-  healThresholdPercent: number;
-  fleeCommand: string;
-  fleeThresholdPercent: number;
 }
 
 export interface Farm2ControllerDependencies {
@@ -52,18 +48,20 @@ export interface Farm2ControllerDependencies {
   getZoneSettings(zoneId: number): Promise<FarmZoneSettings | null>;
   getMobCombatNamesByZone(zoneId: number): Promise<string[]>;
   getCombatNameByRoomName(roomName: string): Promise<string | null>;
+  isRoomNameBlacklisted(roomName: string): Promise<boolean>;
   linkMobRoomAndCombatName(roomName: string, combatName: string, vnum: number | null): Promise<void>;
   onStateChange(state: Farm2StateSnapshot): void;
   onLog(message: string): void;
+  onDebugLog(message: string): void;
 }
 
 export interface Farm2Config {
   attackCommand: string;
   targetValues: string[];
-  healCommands: string[];
-  healThresholdPercent: number;
-  fleeCommand: string;
-  fleeThresholdPercent: number;
+  skinningSalvoEnabled: boolean;
+  skinningSkinVerb: string;
+  lootMeatCommand: string;
+  lootHideCommand: string;
 }
 
 export interface Farm2Stats {
@@ -93,4 +91,7 @@ export interface Farm2State {
   probeIndex: number;
   probeSingleRoomName: string | null;
   probeLastAttemptAt: number;
+  pendingRoomScanSetAt: number;
+  lastRoomCorpseCount: number;
+  attackSentAt: number;
 }

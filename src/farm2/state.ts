@@ -25,6 +25,9 @@ export function createInitialState(config: Farm2Config): Farm2State {
     probeIndex: 0,
     probeSingleRoomName: null,
     probeLastAttemptAt: 0,
+    pendingRoomScanSetAt: 0,
+    lastRoomCorpseCount: 0,
+    attackSentAt: 0,
   };
 }
 
@@ -35,10 +38,6 @@ export function getStateSnapshot(state: Farm2State): Farm2StateSnapshot {
     pendingActivation: state.pendingActivation,
     attackCommand: state.config.attackCommand,
     targetValues: [...state.config.targetValues],
-    healCommands: [...state.config.healCommands],
-    healThresholdPercent: state.config.healThresholdPercent,
-    fleeCommand: state.config.fleeCommand,
-    fleeThresholdPercent: state.config.fleeThresholdPercent,
   };
 }
 
@@ -69,12 +68,14 @@ export function resetTrackingState(state: Farm2State): void {
   state.probeIndex = 0;
   state.probeSingleRoomName = null;
   state.probeLastAttemptAt = 0;
+  state.pendingRoomScanSetAt = 0;
+  state.lastRoomCorpseCount = 0;
+  state.attackSentAt = 0;
 }
 
 export function disable(
   state: Farm2State,
-  deps: Pick<Farm2ControllerDependencies, "onStateChange" | "onLog">,
-  reason?: string,
+  deps: Pick<Farm2ControllerDependencies, "onStateChange">,
 ): void {
   state.timer.clear();
   state.enabled = false;
@@ -82,10 +83,6 @@ export function disable(
   state.pendingActivation = false;
   resetTrackingState(state);
   publishState(state, deps);
-
-  if (reason) {
-    deps.onLog(reason);
-  }
 }
 
 export async function enable(
@@ -105,7 +102,6 @@ export async function enable(
     state.zoneId = null;
     state.pendingActivation = true;
     publishState(state, deps);
-    deps.onLog("[farm2] Waiting for current room...");
     deps.reinitRoom();
     scheduleFn(DEFAULT_RETRY_DELAY_MS);
     return;
@@ -115,17 +111,16 @@ export async function enable(
   state.zoneId = zoneId;
   state.pendingActivation = false;
 
-  const zoneSettings = await deps.getZoneSettings(zoneId);
+  const [zoneSettings, mobNames] = await Promise.all([
+    deps.getZoneSettings(zoneId),
+    deps.getMobCombatNamesByZone(zoneId),
+  ]);
   if (zoneSettings) {
-    state.config = settingsToConfig(zoneSettings);
-    deps.onLog(`[farm2] Zone ${zoneId} settings loaded (attack: ${state.config.attackCommand}).`);
-  } else {
-    deps.onLog(`[farm2] Zone ${zoneId} settings not found, using defaults.`);
+    state.config = settingsToConfig(zoneSettings, mobNames.map((n) => n.toLowerCase()));
   }
 
   markRoomVisited(state, currentRoomId);
   publishState(state, deps);
-  deps.onLog(`[farm2] Enabled for zone ${zoneId}.`);
   deps.reinitRoom();
   scheduleFn(DEFAULT_RETRY_DELAY_MS);
 }
@@ -141,5 +136,5 @@ export function setEnabled(
     return;
   }
 
-  disable(state, deps, "[farm2] Disabled.");
+  disable(state, deps);
 }
