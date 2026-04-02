@@ -131,6 +131,7 @@
         <div class="container-panels__tabs">
           <button id="container-tab-inventory" type="button" class="map-tab map-tab--active">Инвентарь</button>
           <button id="container-tab-nav" type="button" class="map-tab">Навигация</button>
+          <button id="container-tab-script" type="button" class="map-tab">Скрипт</button>
         </div>
 
         <div id="container-panel-inventory" class="container-panels__panel">
@@ -181,6 +182,19 @@
               <div class="nav-section__title">Соседние зоны</div>
               <ul id="nav-zone-list" class="nav-zone-list"></ul>
               <p id="nav-zone-list-empty" class="alias-list-empty">Нет посещённых соседних зон.</p>
+            </div>
+          </div>
+        </div>
+
+        <div id="container-panel-script" class="container-panels__panel container-panels__panel--hidden">
+          <div class="container-panel script-panel">
+            <div class="container-panel__header script-panel__header">
+              <span class="container-panel__title" id="script-panel-title">Скрипт</span>
+              <button id="script-toggle-btn" type="button" class="button-secondary button-small">Стоп</button>
+            </div>
+            <div id="script-status-line" class="script-status-line script-status-line--hidden"></div>
+            <div class="container-panel__scroll">
+              <ul id="script-steps-list" class="script-steps-list"></ul>
             </div>
           </div>
         </div>
@@ -526,7 +540,7 @@
       </div>
     </main>
 
-    <script type="module" src="/client.js?v=4"></script>
+    <script type="module" src="/client.js?v=5"></script>
 
       <div id="hotkeys-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="hotkeys-modal-title">
         <div class="farm-modal__backdrop"></div>

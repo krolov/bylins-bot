@@ -14,8 +14,11 @@ import type { Direction } from "./map/types.ts";
 import { createTriggers } from "./triggers.ts";
 import { runCompareScan } from "./compare-scan/index.ts";
 import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache, searchAndCacheWikiItem } from "./wiki.ts";
+import { createContainerTracker } from "./container-tracker.ts";
+import { createItemIdentifier } from "./item-identify.ts";
 import { createRepairController } from "./repair-script.ts";
 import { createGatherController } from "./gather-script.ts";
+import { createZoneScriptController } from "./zone-scripts/index.ts";
 import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, TriggerState, MapAlias, MapSnapshot, GameItem } from "./events.type.ts";
 import { normalizeFarmZoneSettings, normalizeSurvivalSettings } from "./settings-normalizers.ts";
 import { createMudConnection } from "./mud-connection.ts";
@@ -53,11 +56,9 @@ const mudConnection = createMudConnection({
   sanitizeLogText: (text) => sanitizeLogText(text),
   updateSessionStatus: (state, message) => updateSessionStatus(state, message),
   onMudText: (text, ws) => {
-    feedContainerTriggerBuffer(text);
-    feedEquippedScanBuffer(text);
-    if (pendingContainerInspectResolve !== null) {
-      resolvePendingContainerInspect(text);
-    }
+    containerTracker.feedText(text);
+    containerTracker.feedEquippedScan(text);
+    containerTracker.feedPendingInspect(text);
     for (const handler of mudTextHandlers) handler(text);
     rememberOutput(text);
     broadcastServerEvent({ type: "output", payload: { text } });
@@ -83,9 +84,10 @@ const mudConnection = createMudConnection({
     combatState.reset();
     clearSurvivalTickTimer();
     survivalTickRunning = false;
-    clearPendingContainerInspect();
     mudTextHandlers.clear();
     survivalController.reset();
+    containerTracker.reset();
+    for (const hook of sessionTeardownHooks) hook();
   },
   trackOutgoingCommand: (command) => trackOutgoingCommand(trackerState, command),
   lineEnding: runtimeConfig.lineEnding,
@@ -237,6 +239,25 @@ const gatherController = createGatherController({
   },
 });
 
+const containerTracker = createContainerTracker({
+  onContainerContents: (container, items) => {
+    broadcastServerEvent({ type: "container_contents", payload: { container, items } });
+  },
+  onInventoryContents: (items) => {
+    broadcastServerEvent({ type: "inventory_contents", payload: { items } });
+  },
+  onEquippedContents: (items) => {
+    broadcastServerEvent({ type: "equipped_contents", payload: { items } });
+  },
+});
+
+const itemIdentifier = createItemIdentifier({
+  getItemByName: (name) => mapStore.getItemByName(name),
+  upsertItem: (name, itemType, data, hasWikiData, hasGameData) =>
+    mapStore.upsertItem(name, itemType, data, hasWikiData, hasGameData),
+  wikiProxies: runtimeConfig.wikiProxies,
+});
+
 mkdirSync(LOG_DIR, { recursive: true });
 appendFileSync(LOG_FILE, "");
 
@@ -276,6 +297,47 @@ const navigationState: NavigationState = {
 type RoomChangedListener = (vnum: number) => void;
 const roomChangedListeners = new Set<RoomChangedListener>();
 const mudTextHandlers = new Set<(text: string) => void>();
+const sessionTeardownHooks = new Set<() => void>();
+
+function onceMudText(pattern: RegExp, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      mudTextHandlers.delete(handler);
+      reject(new Error(`wait_text timeout: ${pattern.source}`));
+    }, timeoutMs);
+    const handler = (text: string) => {
+      if (done) return;
+      if (pattern.test(text)) {
+        done = true;
+        clearTimeout(timer);
+        mudTextHandlers.delete(handler);
+        resolve();
+      }
+    };
+    mudTextHandlers.add(handler);
+  });
+}
+
+const zoneScriptController = createZoneScriptController({
+  getCurrentRoomId: () => trackerState.currentRoomId,
+  isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
+  navigateTo: (targetVnum) => startNavigation(null, targetVnum),
+  sendCommand: (command) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "zone-script");
+  },
+  onMudTextOnce: (pattern, timeoutMs) => onceMudText(pattern, timeoutMs),
+  onStateChange: (scriptState) => {
+    broadcastServerEvent({ type: "zone_script_state", payload: scriptState });
+  },
+  onLog: (message) => {
+    logEvent(null, "session", message);
+  },
+});
+sessionTeardownHooks.add(() => zoneScriptController.handleSessionClosed());
 
 function onceRoomChanged(timeoutMs: number): Promise<number | null> {
   return new Promise((resolve) => {
@@ -310,214 +372,10 @@ let statsHpMax = 0;
 let statsEnergy = 0;
 let statsEnergyMax = 0;
 
-// ── Container/inventory trigger buffer ───────────────────────────────────────
-// Accumulates MUD text chunks and flushes on each MUD prompt.
-// Triggers: "Заполнен"/"Пуст" → container_contents, "Вы несете" → inventory_contents
-const CONTAINER_TRIGGER_BUFFER_MAX = 8192;
-let containerTriggerBuffer = "";
-
-function flushContainerTriggerBuffer(): void {
-  const buf = containerTriggerBuffer;
-  containerTriggerBuffer = "";
-  const stripped = buf.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
-
-  if (/Заполнен|Пуст/i.test(stripped)) {
-    const isBag = /торб/i.test(stripped);
-    const isChest = /сунд/i.test(stripped);
-    if (isBag) {
-      const items = parseInspectItems(stripped);
-      broadcastServerEvent({ type: "container_contents", payload: { container: "bag", items } });
-    }
-    if (isChest) {
-      const items = parseInspectItems(stripped);
-      broadcastServerEvent({ type: "container_contents", payload: { container: "chest", items } });
-    }
-  }
-
-  if (/Вы несете/i.test(stripped)) {
-    const items = parseInventoryItems(stripped);
-    broadcastServerEvent({ type: "inventory_contents", payload: { items } });
-  }
-}
-
-function feedContainerTriggerBuffer(text: string): void {
-  containerTriggerBuffer += text;
-  if (containerTriggerBuffer.length > CONTAINER_TRIGGER_BUFFER_MAX) {
-    containerTriggerBuffer = containerTriggerBuffer.slice(-CONTAINER_TRIGGER_BUFFER_MAX);
-  }
-  const stripped = text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
-  if (/\d+H\s+\d+M\b/i.test(stripped)) {
-    flushContainerTriggerBuffer();
-  }
-}
-
-const EQUIPPED_SLOT_REGEXP = /^<([^>]+)>\s+(.+?)\s+<[а-яё ]+>$/i;
-const EQUIPPED_WEAR_CMD: Record<string, string> = {
-  "правый указательный палец": "над",
-  "левый указательный палец": "над",
-  "на шее": "над",
-  "на груди": "над",
-  "на теле": "над",
-  "на голове": "над",
-  "на ногах": "над",
-  "на ступнях": "над",
-  "на кистях": "над",
-  "на руках": "над",
-  "на плечах": "над",
-  "на поясе": "над",
-  "на правом запястье": "над",
-  "на левом запястье": "над",
-  "в правой руке": "воор",
-  "в левой руке": "держ",
-};
-
-function parseEquippedItems(text: string): Array<{ slot: string; name: string; keyword: string; wearCmd: string }> {
-  const stripped = text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
-  const lines = stripped.split("\n");
-  const startIndex = lines.findIndex((l) => /На вас надето/i.test(l));
-  if (startIndex < 0) return [];
-  const result: Array<{ slot: string; name: string; keyword: string; wearCmd: string }> = [];
-  for (let i = startIndex + 1; i < lines.length; i += 1) {
-    const line = lines[i]?.trim() ?? "";
-    if (!line || /\d+H\s+\d+M\b/i.test(line) || /Вых:/i.test(line)) break;
-    const match = EQUIPPED_SLOT_REGEXP.exec(line);
-    if (!match) continue;
-    const slot = match[1]?.trim() ?? "";
-    const fullName = match[2]?.trim() ?? "";
-    const cleanName = fullName.replace(/\*+[^*]*\*+/g, "").trim();
-    const keyword = cleanName.split(/\s+/).slice(0, 2).join(".");
-    const wearCmd = EQUIPPED_WEAR_CMD[slot] ?? "над";
-    result.push({ slot, name: cleanName, keyword, wearCmd });
-  }
-  return result;
-}
-
-let equippedScanBuffer = "";
-let equippedScanPending = false;
-
-function feedEquippedScanBuffer(text: string): void {
-  if (!equippedScanPending) return;
-  equippedScanBuffer += text;
-  const stripped = text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
-  if (/\d+H\s+\d+M\b/i.test(stripped)) {
-    equippedScanPending = false;
-    const items = parseEquippedItems(equippedScanBuffer);
-    equippedScanBuffer = "";
-    broadcastServerEvent({ type: "equipped_contents", payload: { items } });
-  }
-}
-let pendingContainerInspectResolve: ((text: string) => void) | null = null;
-let pendingContainerInspectTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingContainerInspectBuffer = "";
-
-let containerInspectQueueRunning = false;
-const containerInspectQueue: Array<() => Promise<void>> = [];
-
-function runContainerInspectQueue(): void {
-  if (containerInspectQueueRunning || containerInspectQueue.length === 0) return;
-  containerInspectQueueRunning = true;
-  const next = containerInspectQueue.shift()!;
-  void next().finally(() => {
-    containerInspectQueueRunning = false;
-    runContainerInspectQueue();
-  });
-}
-
-function enqueueContainerInspect(task: () => Promise<void>): void {
-  containerInspectQueue.push(task);
-  runContainerInspectQueue();
-}
-
 let survivalTickTimer: ReturnType<typeof setTimeout> | null = null;
 
 let survivalTickRunning = false;
 
-function clearPendingContainerInspect(): void {
-  if (pendingContainerInspectTimer !== null) {
-    clearTimeout(pendingContainerInspectTimer);
-    pendingContainerInspectTimer = null;
-  }
-  pendingContainerInspectResolve = null;
-  pendingContainerInspectBuffer = "";
-}
-
-function resolvePendingContainerInspect(text: string): void {
-  if (pendingContainerInspectResolve === null) return;
-  pendingContainerInspectBuffer += text;
-  const stripped = pendingContainerInspectBuffer.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
-  if (!/\d+H\s+\d+M\b/i.test(stripped)) return;
-  const resolve = pendingContainerInspectResolve;
-  clearPendingContainerInspect();
-  resolve(stripped);
-}
-
-function waitForContainerInspectResult(timeoutMs = 3000): Promise<string> {
-  clearPendingContainerInspect();
-  return new Promise((resolve) => {
-    pendingContainerInspectResolve = resolve;
-    pendingContainerInspectTimer = setTimeout(() => {
-      const buf = pendingContainerInspectBuffer;
-      clearPendingContainerInspect();
-      resolve(buf);
-    }, timeoutMs);
-  });
-}
-
-// ── Item identify parser ──────────────────────────────────────────────────────
-// Collects MUD text chunks into a rolling buffer to detect multi-line identify
-// blocks ("Вы узнали следующее:") and persist them to game_items.
-const ITEM_IDENTIFY_START = /Вы узнали следующее:/;
-const ITEM_BUFFER_MAX = 4096;
-let itemBuffer = "";
-
-async function handleItemIdentifyBuffer(chunk: string): Promise<void> {
-  itemBuffer += chunk;
-  if (itemBuffer.length > ITEM_BUFFER_MAX) {
-    itemBuffer = itemBuffer.slice(-ITEM_BUFFER_MAX);
-  }
-
-  if (!ITEM_IDENTIFY_START.test(itemBuffer)) return;
-
-  const startIdx = itemBuffer.search(ITEM_IDENTIFY_START);
-  const afterStart = itemBuffer.slice(startIdx);
-
-  const endMatch = /\n(?=\S*\d+H\s|\S*Вых:|\s*$)/.exec(afterStart.slice(afterStart.indexOf("\n") + 1));
-  if (!endMatch && itemBuffer.length < ITEM_BUFFER_MAX) return;
-
-  const block = endMatch
-    ? afterStart.slice(0, afterStart.indexOf("\n") + 1 + endMatch.index + 1)
-    : afterStart;
-
-  itemBuffer = itemBuffer.slice(startIdx + block.length);
-
-  const mudParsed = parseMudIdentifyBlock(block);
-  if (!mudParsed) return;
-
-  const nameLower = mudParsed.name.toLowerCase();
-
-  const existing = await mapStore.getItemByName(nameLower);
-  const baseCard = existing
-    ? gearItemCardFromCache(existing.name, existing.itemType, existing.data as Record<string, unknown>)
-    : null;
-
-  let wikiCard = null;
-  try {
-    const proxy = runtimeConfig.wikiProxies[0];
-    const searchHtml = await fetchWiki({ q: mudParsed.name }, proxy);
-    const results = parseSearchResults(searchHtml);
-    const hit = results.find(r => r.name.toLowerCase() === nameLower) ?? results[0] ?? null;
-    if (hit) {
-      const cardHtml = await fetchWiki({ id: String(hit.id) }, proxy);
-      wikiCard = parseGearItemCard(cardHtml, hit.id);
-    }
-  } catch {
-  }
-
-  const merged = mergeItemSources(baseCard, wikiCard, mudParsed.partial, mudParsed.name, mudParsed.itemType);
-  if (!merged) return;
-
-  await mapStore.upsertItem(nameLower, mudParsed.itemType, gearItemCardToData(merged), wikiCard !== null, true);
-}
 // ─────────────────────────────────────────────────────────────────────────────
 
 function parseAndBroadcastStats(text: string): void {
@@ -634,6 +492,11 @@ function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "gather_state",
     payload: gatherController.getState(),
+  });
+
+  sendServerEvent(ws, {
+    type: "zone_script_state",
+    payload: zoneScriptController.getState(),
   });
 
   sendServerEvent(ws, {
@@ -964,7 +827,7 @@ async function inspectContainer(ws: BunServerWebSocket | null, container: string
   if (!sharedSession.tcpSocket || !sharedSession.connected) {
     return "";
   }
-  const result = waitForContainerInspectResult(2000);
+  const result = containerTracker.waitForInspectResult(2000);
   mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, `осм ${container}`, "inspect-container");
   return result;
 }
@@ -973,7 +836,7 @@ async function inspectInventory(ws: BunServerWebSocket | null): Promise<string> 
   if (!sharedSession.tcpSocket || !sharedSession.connected) {
     return "";
   }
-  const result = waitForContainerInspectResult(2000);
+  const result = containerTracker.waitForInspectResult(2000);
   mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, "инв", "inspect-inventory");
   return result;
 }
@@ -1022,7 +885,7 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     scheduleSurvivalTick(150);
   }
 
-  void handleItemIdentifyBuffer(text).catch((error: unknown) => {
+  void itemIdentifier.handleChunk(text).catch((error: unknown) => {
     logEvent(ws, "error", error instanceof Error ? `Item parser error: ${error.message}` : "Item parser error.");
   });
   const events = feedText(parserState, text);
@@ -1316,6 +1179,13 @@ const server = Bun.serve({
           farm2Controller.setEnabled(enabled);
           break;
         }
+        case "zone_script_toggle": {
+          const enabled = event.payload?.enabled === true;
+          const zoneId = typeof event.payload?.zoneId === "number" ? event.payload.zoneId : undefined;
+          logEvent(ws, "browser-in", "zone_script_toggle", { enabled, zoneId });
+          zoneScriptController.setEnabled(enabled, zoneId);
+          break;
+        }
         case "alias_set": {
           const vnum = event.payload?.vnum;
           const alias = event.payload?.alias?.trim();
@@ -1485,8 +1355,7 @@ const server = Bun.serve({
         case "equipped_scan": {
           logEvent(ws, "browser-in", "equipped_scan");
           if (sharedSession.tcpSocket && sharedSession.connected) {
-            equippedScanBuffer = "";
-            equippedScanPending = true;
+            containerTracker.startEquippedScan();
             mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, "equipment", "equipped-scan");
           }
           break;

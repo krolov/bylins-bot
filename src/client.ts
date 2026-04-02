@@ -288,6 +288,17 @@ type ServerEvent =
       payload: {
         messages: Array<{ text: string; timestamp: number }>;
       };
+    }
+  | {
+      type: "zone_script_state";
+      payload: {
+        enabled: boolean;
+        zoneId: number | null;
+        zoneName: string | null;
+        currentStepIndex: number | null;
+        steps: Array<{ index: number; label: string; status: string; error?: string }>;
+        errorMessage: string | null;
+      };
     };
 
 type ClientEvent =
@@ -335,7 +346,8 @@ type ClientEvent =
   | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
   | { type: "inspect_container"; payload: { container: "bag" | "chest" } }
   | { type: "inspect_inventory" }
-| { type: "equipped_scan" };
+| { type: "equipped_scan" }
+| { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } };
 
 import type { SurvivalSettings } from "./events.type.ts";
 
@@ -379,8 +391,14 @@ const mapTabMap = requireElement<HTMLButtonElement>("#map-tab-map");
 const mapPanelMap = requireElement<HTMLDivElement>("#map-panel-map");
 const containerTabInventory = requireElement<HTMLButtonElement>("#container-tab-inventory");
 const containerTabNav = requireElement<HTMLButtonElement>("#container-tab-nav");
+const containerTabScript = requireElement<HTMLButtonElement>("#container-tab-script");
 const containerPanelInventory = requireElement<HTMLDivElement>("#container-panel-inventory");
 const containerPanelNav = requireElement<HTMLDivElement>("#container-panel-nav");
+const containerPanelScript = requireElement<HTMLDivElement>("#container-panel-script");
+const scriptStepsList = requireElement<HTMLUListElement>("#script-steps-list");
+const scriptPanelTitle = requireElement<HTMLSpanElement>("#script-panel-title");
+const scriptStatusLine = requireElement<HTMLDivElement>("#script-status-line");
+const scriptToggleBtn = requireElement<HTMLButtonElement>("#script-toggle-btn");
 const navAliasList = requireElement<HTMLUListElement>("#nav-alias-list");
 const navAliasListEmpty = requireElement<HTMLParagraphElement>("#nav-alias-list-empty");
 const navZoneList = requireElement<HTMLUListElement>("#nav-zone-list");
@@ -976,11 +994,13 @@ function switchMapTab(tab: "map"): void {
   mapPanelMap.classList.toggle("map-tab-panel--hidden", tab !== "map");
 }
 
-function switchContainerTab(tab: "inventory" | "nav"): void {
+function switchContainerTab(tab: "inventory" | "nav" | "script"): void {
   containerTabInventory.classList.toggle("map-tab--active", tab === "inventory");
   containerTabNav.classList.toggle("map-tab--active", tab === "nav");
+  containerTabScript.classList.toggle("map-tab--active", tab === "script");
   containerPanelInventory.classList.toggle("container-panels__panel--hidden", tab !== "inventory");
   containerPanelNav.classList.toggle("container-panels__panel--hidden", tab !== "nav");
+  containerPanelScript.classList.toggle("container-panels__panel--hidden", tab !== "script");
 }
 
 function openAliasPopup(vnum: number, existingAlias: string | undefined, roomName: string): void {
@@ -1220,6 +1240,7 @@ const INVENTORY_WEAR_CMD: Record<string, string> = {
 let farm2Enabled = false;
 let farm2ZoneId: number | null = null;
 let farm2PendingActivation = false;
+let zoneScriptState: ServerEvent & { type: "zone_script_state" } | null = null;
 let trackerCurrentVnum: number | null = null;
 let currentStats: FarmRuntimeStats = {
   hp: 0,
@@ -2872,6 +2893,53 @@ function renderFarmButton(): void {
   farmToggleButton.classList.toggle("button-toggle-active", farm2Enabled);
 }
 
+const SCRIPT_STEP_ICONS: Record<string, string> = {
+  pending: "○",
+  active: "▶",
+  done: "✓",
+  error: "✗",
+  skipped: "–",
+};
+
+function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; steps: Array<{ index: number; label: string; status: string; error?: string }>; errorMessage: string | null }): void {
+  scriptPanelTitle.textContent = state.zoneName ? `Скрипт: ${state.zoneName}` : "Скрипт";
+
+  if (state.errorMessage) {
+    scriptStatusLine.textContent = state.errorMessage;
+    scriptStatusLine.classList.remove("script-status-line--hidden");
+  } else {
+    scriptStatusLine.classList.add("script-status-line--hidden");
+  }
+
+  scriptToggleBtn.textContent = state.enabled ? "Стоп" : "Старт 258";
+
+  scriptStepsList.innerHTML = "";
+  for (const step of state.steps) {
+    const li = document.createElement("li");
+    li.className = `script-step script-step--${step.status}`;
+
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "script-step__icon";
+    iconSpan.textContent = SCRIPT_STEP_ICONS[step.status] ?? "○";
+
+    const labelSpan = document.createElement("span");
+    labelSpan.className = "script-step__label";
+    labelSpan.textContent = step.label;
+
+    li.appendChild(iconSpan);
+    li.appendChild(labelSpan);
+
+    if (step.error) {
+      const errorSpan = document.createElement("span");
+      errorSpan.className = "script-step__error";
+      errorSpan.textContent = step.error;
+      li.appendChild(errorSpan);
+    }
+
+    scriptStepsList.appendChild(li);
+  }
+}
+
 function renderMapRecordingButton(): void {
   mapRecordingButton.textContent = mapRecordingEnabled ? "🗺️" : "⏸️";
   mapRecordingButton.title = mapRecordingEnabled ? "Запись карты: вкл" : "Запись карты: выкл";
@@ -2917,8 +2985,8 @@ function createSocket(): WebSocket {
     reconnectDelay = 1000;
     setStatus("Connected");
     flushPendingQueue();
-    sendClientEvent({ type: "send", payload: { command: "осм торб" } });
-    sendClientEvent({ type: "send", payload: { command: "осм сунду" } });
+    sendClientEvent({ type: "send", payload: { command: "осм склад1" } });
+    sendClientEvent({ type: "send", payload: { command: "осм склад2" } });
     sendClientEvent({ type: "send", payload: { command: "инв" } });
   });
 
@@ -2959,6 +3027,13 @@ function createSocket(): WebSocket {
         farm2ZoneId = message.payload.zoneId;
         farm2PendingActivation = message.payload.pendingActivation;
         renderFarmButton();
+        break;
+      case "zone_script_state":
+        zoneScriptState = message;
+        renderScriptSteps(message.payload);
+        if (message.payload.enabled) {
+          switchContainerTab("script");
+        }
         break;
       case "stats_update":
         currentStats = message.payload;
@@ -3468,9 +3543,9 @@ document.querySelectorAll<HTMLButtonElement>(".container-panel__refresh").forEac
   btn.addEventListener("click", () => {
     const container = btn.dataset["container"] as "bag" | "chest" | undefined;
     if (container === "bag") {
-      sendClientEvent({ type: "send", payload: { command: "осм торб" } });
+      sendClientEvent({ type: "send", payload: { command: "осм склад1" } });
     } else if (container === "chest") {
-      sendClientEvent({ type: "send", payload: { command: "осм сунду" } });
+      sendClientEvent({ type: "send", payload: { command: "осм склад2" } });
     } else {
       sendClientEvent({ type: "send", payload: { command: "инв" } });
     }
@@ -3500,6 +3575,9 @@ itemDbSearch.addEventListener("input", applyItemDbFilter);
 
 function openCompareAdvisor(): void {
   compareAdvisorPanel.classList.remove("compare-advisor-panel--hidden");
+  compareAdvisorStatus.textContent = "Сканирование...";
+  compareAdvisorTableBody.innerHTML = "";
+  sendClientEvent({ type: "compare_scan_start" });
 }
 
 function closeCompareAdvisor(): void {
@@ -3549,8 +3627,38 @@ type CompareScanPayload = {
   }>;
 };
 
+function buildTooltip(card: CompareScanPayload["slots"][0]["candidates"][0]["card"] | null): string {
+  if (!card) return "";
+  const lines: string[] = [];
+  if (card.itemType) lines.push(`Тип: ${card.itemType}`);
+  if (card.material) lines.push(`Материал: ${card.material}`);
+  if (card.ac) lines.push(`Защита: ${card.ac}`);
+  if (card.armor) lines.push(`Броня: ${card.armor}`);
+  if (card.damageAvg) lines.push(`Урон (avg): ${card.damageAvg}`);
+  if (card.affects.length > 0) lines.push("", ...card.affects.map((a) => `+ ${a}`));
+  if (card.properties.length > 0) lines.push("", ...card.properties.map((p) => `• ${p}`));
+  return lines.join("\n");
+}
+
+function attachTooltip(el: HTMLElement, text: string): void {
+  if (!text) return;
+  const tip = document.createElement("div");
+  tip.className = "compare-advisor__tooltip";
+  tip.textContent = text;
+  el.appendChild(tip);
+  el.addEventListener("mouseenter", () => {
+    const rect = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    tip.classList.toggle("compare-advisor__tooltip--above", spaceBelow < 160);
+    tip.classList.add("compare-advisor__tooltip--visible");
+  });
+  el.addEventListener("mouseleave", () => {
+    tip.classList.remove("compare-advisor__tooltip--visible");
+  });
+}
+
 function renderComparePanel(payload: CompareScanPayload): void {
-  openCompareAdvisor();
+  compareAdvisorPanel.classList.remove("compare-advisor-panel--hidden");
   compareAdvisorCoins.textContent = payload.hasShop
     ? `Монет: ${payload.coins}`
     : `Монет: ${payload.coins} (магазина нет)`;
@@ -3563,14 +3671,22 @@ function renderComparePanel(payload: CompareScanPayload): void {
     // Current item row
     const currentRow = document.createElement("tr");
     currentRow.className = "compare-advisor__current-row";
-    const currentLabel = slot.currentItemName
+
+    const slotTd = document.createElement("td");
+    slotTd.className = "compare-advisor__slot-cell";
+    slotTd.textContent = slot.slot;
+
+    const currentNameTd = document.createElement("td");
+    currentNameTd.className = "compare-advisor__current-item compare-advisor__item-name";
+    currentNameTd.colSpan = 4;
+    currentNameTd.textContent = slot.currentItemName
       ? `${slot.currentItemName} (${Math.round(slot.currentScore)} оч.)`
       : "— пусто —";
-    currentRow.innerHTML = `
-      <td class="compare-advisor__slot-cell">${slot.slot}</td>
-      <td colspan="4" class="compare-advisor__current-item">${currentLabel}</td>
-      <td></td>
-    `;
+    if (slot.currentCard) attachTooltip(currentNameTd, buildTooltip(slot.currentCard));
+
+    currentRow.appendChild(slotTd);
+    currentRow.appendChild(currentNameTd);
+    currentRow.appendChild(document.createElement("td"));
     compareAdvisorTableBody.appendChild(currentRow);
 
     // Candidate rows
@@ -3586,19 +3702,10 @@ function renderComparePanel(payload: CompareScanPayload): void {
       tr.className = "compare-advisor__candidate-row";
 
       const nameCell = document.createElement("td");
-      nameCell.className = "compare-advisor__name-cell";
+      nameCell.className = "compare-advisor__name-cell compare-advisor__item-name compare-advisor__name-cell--indent";
+      nameCell.colSpan = 2;
       nameCell.textContent = c.itemName;
-      if (!c.hasGameData) {
-        const charBtn = document.createElement("button");
-        charBtn.type = "button";
-        charBtn.className = "compare-advisor__char-btn button-secondary button-small";
-        charBtn.textContent = "хар";
-        charBtn.title = "Запросить характеристики из игры";
-        charBtn.addEventListener("click", () => {
-          sendClientEvent({ type: "send", payload: { command: `б.хар ${c.itemName}` } });
-        });
-        nameCell.appendChild(charBtn);
-      }
+      attachTooltip(nameCell, buildTooltip(c.card));
 
       const priceCell = document.createElement("td");
       priceCell.textContent = c.source === "inventory" ? "—" : `${c.price}`;
@@ -3610,25 +3717,34 @@ function renderComparePanel(payload: CompareScanPayload): void {
       scoreCell.innerHTML = `${Math.round(c.score)} <span class="${diffClass}">(${diffText})</span>`;
 
       const actionCell = document.createElement("td");
-      if (scoreDiff > 0) {
+      if (!c.hasGameData) {
+        const charBtn = document.createElement("button");
+        charBtn.type = "button";
+        charBtn.className = "compare-advisor__char-btn button-secondary button-small";
+        charBtn.textContent = "хар";
+        charBtn.title = "Запросить характеристики из игры";
+        charBtn.addEventListener("click", () => {
+          const charCmd = c.source === "bazaar"
+            ? `базар характ ${c.listNumber}`
+            : `характ ${c.listNumber}`;
+          sendClientEvent({ type: "send", payload: { command: charCmd } });
+        });
+        actionCell.appendChild(charBtn);
+      }
+      if (c.source !== "inventory") {
         const applyBtn = document.createElement("button");
         applyBtn.type = "button";
         applyBtn.className = "compare-advisor__apply-btn button-secondary button-small";
         applyBtn.textContent = "Взять";
         applyBtn.addEventListener("click", () => {
           const commands: string[] = [];
-          if (c.source === "shop") {
-            commands.push(`купить ${c.listNumber}`);
-          } else if (c.source === "bazaar") {
-            commands.push(`bazaar buy ${c.listNumber}`);
-          }
-          // equip step is handled via inventory_contents → compare_apply
+          if (c.source === "shop") commands.push(`купить ${c.listNumber}`);
+          else if (c.source === "bazaar") commands.push(`bazaar buy ${c.listNumber}`);
           sendClientEvent({ type: "compare_apply", payload: { commands } });
         });
         actionCell.appendChild(applyBtn);
       }
 
-      tr.appendChild(document.createElement("td")); // slot (empty for candidate rows)
       tr.appendChild(nameCell);
       tr.appendChild(priceCell);
       tr.appendChild(sourceCell);
@@ -3657,7 +3773,10 @@ function renderItemRow(
   sellBtn.textContent = "П";
   sellBtn.title = "Продать";
   sellBtn.addEventListener("click", () => {
-    sendClientEvent({ type: "send", payload: { command: sellCommand(keyword, item.count) } });
+    const cmd = sellCommand(keyword, item.count);
+    for (const part of cmd.split(";;").map((s) => s.trim()).filter(Boolean)) {
+      sendClientEvent({ type: "send", payload: { command: part } });
+    }
   });
   tdSell.appendChild(sellBtn);
 
@@ -3703,7 +3822,7 @@ function renderContainerList(
   for (const item of sortItems(items)) {
     tbody.appendChild(renderItemRow(
       item,
-      (kw) => isChest ? `базар выставить ${kw} 200` : `продать ${kw}`,
+      (kw) => isChest ? `базар выставить ${kw} 200` : `взя ${kw} склад1;;продать ${kw}`,
       (kw, count) => count > 1 ? `бросить все.${kw} ${containerKw}` : `бросить ${kw}`,
     ));
   }
@@ -3896,6 +4015,15 @@ mapTabMap.addEventListener("click", () => switchMapTab("map"));
 
 containerTabInventory.addEventListener("click", () => switchContainerTab("inventory"));
 containerTabNav.addEventListener("click", () => switchContainerTab("nav"));
+containerTabScript.addEventListener("click", () => switchContainerTab("script"));
+
+scriptToggleBtn.addEventListener("click", () => {
+  if (zoneScriptState?.payload.enabled) {
+    sendClientEvent({ type: "zone_script_toggle", payload: { enabled: false } });
+  } else {
+    sendClientEvent({ type: "zone_script_toggle", payload: { enabled: true, zoneId: 258 } });
+  }
+});
 
 aliasPopupSave.addEventListener("click", () => {
   const alias = aliasPopupInput.value.trim();

@@ -20,7 +20,7 @@ export const thiefConfig: CharacterConfig = {
     { material: "ОЛОВО",   score: -1000 },
   ],
 
-  damageAvgWeight: 10,
+  damageAvgWeight: 20,
 
   rightWeaponClasses: ["проникающее оружие"],
   leftWeaponClasses: ["иное оружие"],
@@ -30,7 +30,7 @@ export const thiefConfig: CharacterConfig = {
 
   affects: [
     { affect: "невидимость",     score: 100 },
-    { affect: "освящение",       score: 100 },
+    { affect: "освящение",       score:  30 },
     { affect: "полет",           score: 100 },
      { affect: "тьма",            score:  30 },
     { affect: "доблесть",        score:  20 },

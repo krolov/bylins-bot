@@ -4,6 +4,7 @@ import type { Farm2StateSnapshot } from "./farm2/index.ts";
 import type { TriggerState } from "./triggers.ts";
 import type { GatherState } from "./gather-script.ts";
 import type { CompareScanResult, CompareSlotResult, CompareCandidate } from "./compare-scan/index.ts";
+import type { ZoneScriptStateSnapshot } from "./zone-scripts/index.ts";
 
 export interface WsData {
   sessionId: string;
@@ -53,6 +54,7 @@ export type ClientEvent =
   | { type: "vorozhe_route_find"; payload?: { from?: string; to?: string } }
   | { type: "gather_toggle"; payload?: { enabled?: boolean } }
   | { type: "gather_sell_bag" }
+  | { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
   | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
   | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
   | { type: "inspect_container"; payload: { container: "bag" | "chest" } }
@@ -191,6 +193,7 @@ export type ServerEvent =
       };
     }
   | { type: "gather_state"; payload: GatherState }
+  | { type: "zone_script_state"; payload: ZoneScriptStateSnapshot }
   | { type: "debug_log_state"; payload: { enabled: boolean } }
   | {
       type: "container_contents";
@@ -231,6 +234,7 @@ export type {
   GameItem,
 } from "./map/store.ts";
 export type { Farm2StateSnapshot } from "./farm2/index.ts";
+export type { ZoneScriptStateSnapshot } from "./zone-scripts/index.ts";
 export type { TriggerState } from "./triggers.ts";
 export type { MapAlias, MapSnapshot } from "./map/types.ts";
 export type { GatherState } from "./gather-script.ts";
