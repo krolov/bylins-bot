@@ -1,16 +1,11 @@
 import type { DatabaseClient } from "../db";
 import type { MapAlias, MapEdge, MapNode, MapSnapshot } from "./types";
 export interface FarmZoneSettings {
-  targets: string;
-  healCommands: string;
-  healThreshold: number;
-  fleeCommand: string;
-  fleeThreshold: number;
-  periodicActionEnabled: boolean;
-  periodicActionGotoAlias1: string;
-  periodicActionCommand: string;
-  periodicActionCommandDelayMs: number;
-  periodicActionGotoAlias2: string;
+  attackCommand: string;
+  skinningSalvoEnabled: boolean;
+  skinningSkinVerb: string;
+  lootMeatCommand: string;
+  lootHideCommand: string;
 }
 
 export interface SurvivalSettings {
@@ -34,6 +29,8 @@ export interface GameItem {
   name: string;
   itemType: string;
   data: Record<string, unknown>;
+  hasWikiData: boolean;
+  hasGameData: boolean;
   firstSeen: Date;
   lastSeen: Date;
 }
@@ -64,13 +61,13 @@ export interface MapStore {
   deleteAlias(vnum: number): Promise<void>;
   getAliases(): Promise<MapAlias[]>;
   resolveAliasAll(alias: string): Promise<number[]>;
-  getFarmSettings(zoneId: number): Promise<FarmZoneSettings | null>;
-  setFarmSettings(zoneId: number, settings: FarmZoneSettings): Promise<void>;
+  getFarmSettings(profileId: string, zoneId: number): Promise<FarmZoneSettings | null>;
+  setFarmSettings(profileId: string, zoneId: number, settings: FarmZoneSettings): Promise<void>;
   getSurvivalSettings(): Promise<SurvivalSettings | null>;
   setSurvivalSettings(settings: SurvivalSettings): Promise<void>;
   getTriggerSettings(profileId: string): Promise<TriggerSettings | null>;
   setTriggerSettings(profileId: string, settings: TriggerSettings): Promise<void>;
-  upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void>;
+  upsertItem(name: string, itemType: string, data: Record<string, unknown>, hasWikiData: boolean, hasGameData: boolean): Promise<void>;
   getItemByName(name: string): Promise<GameItem | null>;
   getItems(): Promise<GameItem[]>;
   getZoneNames(): Promise<Array<[number, string]>>;
@@ -85,6 +82,9 @@ export interface MapStore {
   getMobNames(): Promise<MobName[]>;
   getMobCombatNamesByZone(zoneId: number): Promise<string[]>;
   getCombatNameByRoomName(roomName: string): Promise<string | null>;
+  isRoomNameBlacklisted(roomName: string): Promise<boolean>;
+  saveChatMessage(text: string, timestamp: number): Promise<void>;
+  getRecentChatMessages(): Promise<Array<{ text: string; timestamp: number }>>;
 }
 
 interface RoomRow {
@@ -116,6 +116,8 @@ interface ItemRow {
   name: string;
   item_type: string;
   data: Record<string, unknown>;
+  has_wiki_data: boolean;
+  has_game_data: boolean;
   first_seen: Date;
   last_seen: Date;
 }
@@ -156,6 +158,62 @@ export function createMapStore(database: DatabaseClient): MapStore {
           zone_id INT PRIMARY KEY,
           name TEXT NOT NULL
         )
+      `;
+
+      await database`
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.table_constraints
+            WHERE table_name = 'farm_zone_settings'
+              AND constraint_type = 'PRIMARY KEY'
+              AND constraint_name = 'farm_zone_settings_pkey'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'farm_zone_settings'
+              AND column_name = 'profile_id'
+          ) THEN
+            DROP TABLE farm_zone_settings;
+          END IF;
+        END $$
+      `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS farm_zone_settings (
+          profile_id TEXT NOT NULL,
+          zone_id    INT NOT NULL,
+          settings   JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (profile_id, zone_id)
+        )
+      `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id        BIGSERIAL PRIMARY KEY,
+          text      TEXT NOT NULL,
+          ts        BIGINT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS game_items (
+          name       TEXT PRIMARY KEY,
+          item_type  TEXT NOT NULL,
+          data       JSONB NOT NULL,
+          has_wiki_data BOOLEAN NOT NULL DEFAULT FALSE,
+          has_game_data BOOLEAN NOT NULL DEFAULT FALSE,
+          first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          last_seen  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      await database`
+        ALTER TABLE game_items ADD COLUMN IF NOT EXISTS has_wiki_data BOOLEAN NOT NULL DEFAULT FALSE
+      `;
+
+      await database`
+        ALTER TABLE game_items ADD COLUMN IF NOT EXISTS has_game_data BOOLEAN NOT NULL DEFAULT FALSE
       `;
     },
 
@@ -291,9 +349,9 @@ export function createMapStore(database: DatabaseClient): MapStore {
       return rows.map((row: AliasRow) => row.vnum);
     },
 
-    async getFarmSettings(zoneId: number): Promise<FarmZoneSettings | null> {
+    async getFarmSettings(profileId: string, zoneId: number): Promise<FarmZoneSettings | null> {
       const rows = await database<FarmSettingsRow[]>`
-        SELECT settings FROM farm_zone_settings WHERE zone_id = ${zoneId}
+        SELECT settings FROM farm_zone_settings WHERE profile_id = ${profileId} AND zone_id = ${zoneId}
       `;
       const raw = rows[0]?.settings ?? null;
       if (raw === null) return null;
@@ -301,12 +359,12 @@ export function createMapStore(database: DatabaseClient): MapStore {
       return raw;
     },
 
-    async setFarmSettings(zoneId: number, settings: FarmZoneSettings): Promise<void> {
+    async setFarmSettings(profileId: string, zoneId: number, settings: FarmZoneSettings): Promise<void> {
       const settingsJson = JSON.stringify(settings);
       await database`
-        INSERT INTO farm_zone_settings (zone_id, settings, updated_at)
-        VALUES (${zoneId}, ${settingsJson}::jsonb, NOW())
-        ON CONFLICT (zone_id)
+        INSERT INTO farm_zone_settings (profile_id, zone_id, settings, updated_at)
+        VALUES (${profileId}, ${zoneId}, ${settingsJson}::jsonb, NOW())
+        ON CONFLICT (profile_id, zone_id)
         DO UPDATE SET
           settings = EXCLUDED.settings,
           updated_at = NOW()
@@ -357,22 +415,24 @@ export function createMapStore(database: DatabaseClient): MapStore {
       `;
     },
 
-    async upsertItem(name: string, itemType: string, data: Record<string, unknown>): Promise<void> {
+    async upsertItem(name: string, itemType: string, data: Record<string, unknown>, hasWikiData: boolean, hasGameData: boolean): Promise<void> {
       const dataJson = JSON.stringify(data);
       await database`
-        INSERT INTO game_items (name, item_type, data, first_seen, last_seen)
-        VALUES (${name}, ${itemType}, ${dataJson}::jsonb, NOW(), NOW())
+        INSERT INTO game_items (name, item_type, data, has_wiki_data, has_game_data, first_seen, last_seen)
+        VALUES (${name}, ${itemType}, ${dataJson}::jsonb, ${hasWikiData}, ${hasGameData}, NOW(), NOW())
         ON CONFLICT (name)
         DO UPDATE SET
           item_type = EXCLUDED.item_type,
           data = EXCLUDED.data,
+          has_wiki_data = EXCLUDED.has_wiki_data OR game_items.has_wiki_data,
+          has_game_data = EXCLUDED.has_game_data OR game_items.has_game_data,
           last_seen = NOW()
       `;
     },
 
     async getItemByName(name: string): Promise<GameItem | null> {
       const rows = await database<ItemRow[]>`
-        SELECT name, item_type, data, first_seen, last_seen
+        SELECT name, item_type, data, has_wiki_data, has_game_data, first_seen, last_seen
         FROM game_items
         WHERE name = ${name}
         LIMIT 1
@@ -383,6 +443,8 @@ export function createMapStore(database: DatabaseClient): MapStore {
         name: row.name,
         itemType: row.item_type,
         data: parseItemData(row.data),
+        hasWikiData: row.has_wiki_data,
+        hasGameData: row.has_game_data,
         firstSeen: row.first_seen,
         lastSeen: row.last_seen,
       };
@@ -390,7 +452,7 @@ export function createMapStore(database: DatabaseClient): MapStore {
 
     async getItems(): Promise<GameItem[]> {
       const rows = await database<ItemRow[]>`
-        SELECT name, item_type, data, first_seen, last_seen
+        SELECT name, item_type, data, has_wiki_data, has_game_data, first_seen, last_seen
         FROM game_items
         ORDER BY name ASC
       `;
@@ -398,6 +460,8 @@ export function createMapStore(database: DatabaseClient): MapStore {
         name: row.name,
         itemType: row.item_type,
         data: parseItemData(row.data),
+        hasWikiData: row.has_wiki_data,
+        hasGameData: row.has_game_data,
         firstSeen: row.first_seen,
         lastSeen: row.last_seen,
       }));
@@ -522,9 +586,34 @@ export function createMapStore(database: DatabaseClient): MapStore {
         FROM mob_names
         WHERE room_name = ${roomName}
           AND combat_name IS NOT NULL
+          AND blacklisted = FALSE
         LIMIT 1
       `;
       return rows[0]?.combat_name ?? null;
+    },
+
+    async isRoomNameBlacklisted(roomName: string): Promise<boolean> {
+      const rows = await database<{ blacklisted: boolean }[]>`
+        SELECT blacklisted
+        FROM mob_names
+        WHERE room_name = ${roomName}
+          AND blacklisted = TRUE
+        LIMIT 1
+      `;
+      return rows.length > 0;
+    },
+
+    async saveChatMessage(text: string, timestamp: number): Promise<void> {
+      await database`
+        INSERT INTO chat_messages (text, ts) VALUES (${text}, ${timestamp})
+      `;
+    },
+
+    async getRecentChatMessages(): Promise<Array<{ text: string; timestamp: number }>> {
+      const rows = await database<{ text: string; ts: string }[]>`
+        SELECT text, ts FROM chat_messages ORDER BY ts ASC
+      `;
+      return rows.map((r) => ({ text: r.text, timestamp: Number(r.ts) }));
     },
   };
 }

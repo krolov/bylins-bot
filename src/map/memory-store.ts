@@ -90,11 +90,11 @@ export function createMemoryMapStore(): MapStore {
       return result;
     },
 
-    async getFarmSettings(_zoneId: number) {
+    async getFarmSettings(_profileId: string, _zoneId: number) {
       return null;
     },
 
-    async setFarmSettings(_zoneId: number, _settings: unknown): Promise<void> {},
+    async setFarmSettings(_profileId: string, _zoneId: number, _settings: unknown): Promise<void> {},
 
     async getSurvivalSettings() {
       return null;
@@ -158,6 +158,16 @@ export function createMemoryMapStore(): MapStore {
 
     async getCombatNameByRoomName(_roomName: string): Promise<string | null> {
       return null;
+    },
+
+    async isRoomNameBlacklisted(_roomName: string): Promise<boolean> {
+      return false;
+    },
+
+    async saveChatMessage(_text: string, _timestamp: number): Promise<void> {},
+
+    async getRecentChatMessages(): Promise<Array<{ text: string; timestamp: number }>> {
+      return [];
     },
   };
 }
