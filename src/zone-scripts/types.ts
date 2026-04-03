@@ -2,6 +2,11 @@
 // Zone Script — shared types
 // ---------------------------------------------------------------------------
 
+import type { Direction, MapSnapshot } from "../map/types.ts";
+import type { MobResolverDeps } from "../mob-resolver.ts";
+import type { CombatState } from "../combat-state.ts";
+import type { MoveResult, StealthMoveResult } from "../map/mover.ts";
+
 /**
  * A single step in a zone script. Each step is a discriminated union so the
  * executor can switch on `kind` and handle it appropriately.
@@ -49,6 +54,48 @@ export type ScriptStep =
       command: string;
       targetVnum: number;
       timeoutMs?: number;
+    }
+  | {
+      /**
+       * Farm (sweep) a zone: navigate to entryVnum, roam all rooms, attack mobs
+       * from targetValues. Completes when no combat has occurred for idleTimeoutMs.
+       *
+       * combatMode controls how movement and attacks work:
+       *   - "normal" (default): move via plain direction commands, attack via "заколоть".
+       *   - "stealth": move via "краст <dir>", attack via "закол", flee via retreatCommands
+       *     on combat start, then return to the combat room once safe.
+       */
+      kind: "farm_zone";
+      label: string;
+      entryVnum: number;
+      /** Concrete room vnums to sweep (e.g. [28001, 28002, ...]). */
+      roomVnums?: number[];
+      /**
+       * Ordered route to follow in sequence, cycling back to index 0 when the
+       * end is reached. When provided, overrides roomVnums-based BFS navigation.
+       * After fleeing combat the bot returns to the previous vnum in the route
+       * and then continues forward from that position.
+       */
+      routeVnums?: number[];
+      targetValues: string[];
+      /** Ms of no-combat idle before considering the zone cleared. Default 60 000. */
+      idleTimeoutMs?: number;
+    }
+  | {
+      /**
+       * Farm a zone along a fixed ordered route (routeVnums), always moving via
+       * "краст <dir>" (stealth), attacking all targetValues simultaneously via
+       * "закол", looting on the death phrase, and fleeing on combat start.
+       * Completes when no combat has occurred for idleTimeoutMs.
+       */
+      kind: "farm_zone2";
+      label: string;
+      entryVnum: number;
+      /** Ordered route to cycle through. Required — must be non-empty. */
+      routeVnums: number[];
+      targetValues: string[];
+      /** Ms of no-combat idle before considering the zone cleared. Default 60 000. */
+      idleTimeoutMs?: number;
     };
 
 // ---------------------------------------------------------------------------
@@ -105,8 +152,19 @@ export interface ZoneScriptDeps {
    * Returns a cleanup function that cancels the listener.
    */
   onMudTextOnce(pattern: RegExp, timeoutMs: number): Promise<void>;
+  onceRoomChanged(timeoutMs: number): Promise<number | null>;
+  refreshCurrentRoom(timeoutMs: number): Promise<number | null>;
   /** Called whenever script state changes — broadcast to browser. */
   onStateChange(state: ZoneScriptStateSnapshot): void;
   /** Logging (English only). */
   onLog(message: string): void;
+  // ── farm_zone deps ──────────────────────────────────────────────────────
+  getSnapshot(currentVnum: number | null): Promise<MapSnapshot>;
+  move(direction: Direction): Promise<MoveResult>;
+  stealthMove(direction: Direction): Promise<StealthMoveResult>;
+  combatState: CombatState;
+  getVisibleTargets(): Map<string, string>;
+  reinitRoom(): void;
+  mobResolver: MobResolverDeps;
+  isStealthProfile(): boolean;
 }

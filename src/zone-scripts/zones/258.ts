@@ -101,9 +101,10 @@ export const zone258Steps: ScriptStep[] = [
     timeoutMs: 10_000,
   },
   {
-    kind: "navigate",
-    label: "Спуститься к дубу (25837)",
-    targetVnum: 25837,
+    kind: "wait_text",
+    label: "Ждать появления духа леса",
+    pattern: /Желтоглазый дух леса/i,
+    timeoutMs: 30_000,
   },
   {
     kind: "command_and_wait",
@@ -121,7 +122,7 @@ export const zone258Steps: ScriptStep[] = [
   },
   {
     kind: "navigate",
-    label: "Идти к дубу (25837)",
+    label: "Спуститься к дубу (25837)",
     targetVnum: 25837,
   },
   {

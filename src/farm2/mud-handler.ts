@@ -7,6 +7,7 @@ import { settingsToConfig } from "./config.ts";
 import { publishState, markRoomVisited, disable } from "./state.ts";
 import { scheduleTick, runTick } from "./tick.ts";
 import { createLogger } from "./logger.ts";
+import { resetMobProbeState } from "../mob-resolver.ts";
 import type { Farm2State, Farm2ControllerDependencies } from "./types.ts";
 
 function sendSkinningSalvo(state: Farm2State, deps: Farm2ControllerDependencies): void {
@@ -66,10 +67,7 @@ export function handleMudText(
     );
 
     if (options.roomChanged || mobListChanged) {
-      state.probeCombatNames = [];
-      state.probeIndex = 0;
-      state.probeSingleRoomName = null;
-      state.probeLastAttemptAt = 0;
+      resetMobProbeState(state.probe);
     }
     if (options.roomChanged) {
       state.isDark = false;
@@ -87,11 +85,11 @@ export function handleMudText(
   }
 
   if (deps.combatState.getInCombat()) {
-    if (state.probeSingleRoomName !== null && options.combatMobNames.length > 0) {
+    if (state.probe.singleRoomName !== null && options.combatMobNames.length > 0) {
       const combatName = options.combatMobNames[0];
-      const roomName = state.probeSingleRoomName;
+      const roomName = state.probe.singleRoomName;
       const vnum = options.currentRoomId;
-      state.probeSingleRoomName = null;
+      state.probe.singleRoomName = null;
       void deps.linkMobRoomAndCombatName(roomName, combatName, vnum).catch(() => {});
     }
   }

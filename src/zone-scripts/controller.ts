@@ -1,5 +1,7 @@
 import type { ScriptStep, StepState, StepStatus, ZoneScriptDeps, ZoneScriptStateSnapshot } from "./types.ts";
 import { ZONE_258_ID, ZONE_258_NAME, zone258Steps } from "./zones/258.ts";
+import { ZONE_280_ID, ZONE_280_NAME, zone280Steps } from "./zones/280.ts";
+import { executeFarmZoneStep2 } from "./farm-zone-executor2.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const COMMAND_DELAY_MS = 800;
@@ -12,6 +14,7 @@ interface ZoneScript {
 
 const ZONE_SCRIPTS: ZoneScript[] = [
   { zoneId: ZONE_258_ID, zoneName: ZONE_258_NAME, steps: zone258Steps },
+  { zoneId: ZONE_280_ID, zoneName: ZONE_280_NAME, steps: zone280Steps },
 ];
 
 interface RunnerState {
@@ -115,6 +118,20 @@ async function executeStep(
         arrivedPromise,
         sleep(timeout, signal).then(() => { throw new Error(`special_move timeout: ${step.command}`); }),
       ]);
+      break;
+    }
+
+    case "farm_zone2": {
+      await executeFarmZoneStep2(
+        {
+          entryVnum: step.entryVnum,
+          routeVnums: step.routeVnums,
+          targetValues: step.targetValues,
+          idleTimeoutMs: step.idleTimeoutMs,
+        },
+        deps,
+        signal,
+      );
       break;
     }
   }

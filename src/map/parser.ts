@@ -4,10 +4,12 @@ const ANSI_SEQUENCE_REGEXP = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const ROOM_HEADER_REGEXP = /^(.+?)\s+\[(\d{3,})\]\s*$/;
 const EXITS_LINE_REGEXP = /^\[\s*(?:exits?|выходы?)\s*:\s*(.*?)\s*\]\s*$/i;
 const MOVEMENT_BLOCKED_REGEXP = /Вы не сможете туда пройти|Вам сюда нельзя|Нет такого выхода|Вы не можете идти/i;
+const FLEE_REGEXP = /Вы быстро убежали с поля битвы|ПАНИКА ОВЛАДЕЛА ВАМИ|Ни за что! Вы сражаетесь за свою жизнь/i;
 const DARK_ROOM_REGEXP = /^Слишком темно\b/i;
 const MOVEMENT_REGEXP = /Вы\s+(?:поплелись|пошли|побежали|полетели|поехали|поскакали|побрели|поплыли)(?:\s+следом\s+за\s+\S+)?\s+(?:на\s+)?(север|юг|восток|запад|вверх|вниз)\.?/i;
 
 const MOB_ANSI_BLOCK_REGEXP = /\u001b\[1;31m([\s\S]*?)\u001b\[(?:0;0|0)m/g;
+const PROMPT_MANA_ANSI_REGEXP = /\u001b\[1;31m\d+M\u001b\[0;37m/g;
 const TARGET_PREFIX_REGEXP = /^\([^)]*\)\s*/;
 
 const ITEM_ANSI_BLOCK_REGEXP = /\u001b\[1;33m([\s\S]*?)\u001b\[(?:0;0|0)m/g;
@@ -55,12 +57,7 @@ export function feedText(state: ParserState, text: string): ParsedEvent[] {
   extractMobsFromRaw(rawChunk, state.pendingMobs);
   state.pendingCorpseCount += extractCorpseCountFromRaw(rawChunk);
 
-  // Find the last newline in raw chunk to preserve partial line
-  const lastNewlineInRaw = rawChunk.lastIndexOf("\n");
-  const rawTail = lastNewlineInRaw >= 0 ? rawChunk.slice(lastNewlineInRaw + 1) : rawChunk;
-  // If the tail ends with a MUD prompt (ANSI reset + "> "), the prompt is complete — safe to clear.
-  // Without this, partial prompts accumulate across chunks and bleed into mob extraction.
-  state.rawLineBuffer = /\u001b\[0(?:;37)?m\s*>\s*$/.test(rawTail) ? "" : rawTail;
+  state.rawLineBuffer = extractUnfinishedAnsiTail(rawChunk);
 
   const normalized = `${state.lineBuffer}${stripAnsi(text).replace(/\r/g, "")}`;
   const lines = normalized.split("\n");
@@ -94,7 +91,7 @@ export function feedText(state: ParserState, text: string): ParsedEvent[] {
       continue;
     }
 
-    if (MOVEMENT_BLOCKED_REGEXP.test(line)) {
+    if (MOVEMENT_BLOCKED_REGEXP.test(line) || FLEE_REGEXP.test(line)) {
       events.push({ kind: "movement_blocked" });
       continue;
     }
@@ -123,15 +120,32 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_SEQUENCE_REGEXP, "");
 }
 
+function extractUnfinishedAnsiTail(rawText: string): string {
+  const lastMobStart = rawText.lastIndexOf("\u001b[1;31m");
+  const lastItemStart = rawText.lastIndexOf("\u001b[1;33m");
+  const lastStart = Math.max(lastMobStart, lastItemStart);
+  if (lastStart === -1) {
+    return "";
+  }
+
+  const tail = rawText.slice(lastStart);
+  if (/\u001b\[(?:0;0|0)m/.test(tail)) {
+    return "";
+  }
+
+  return tail;
+}
+
 function sanitizeRoomName(name: string): string {
   return name.replace(ROOM_NAME_STATUS_PREFIX_REGEXP, "").trim();
 }
 
 function extractMobsFromRaw(rawText: string, mobs: string[]): void {
+  const sanitizedRawText = rawText.replace(PROMPT_MANA_ANSI_REGEXP, "");
   MOB_ANSI_BLOCK_REGEXP.lastIndex = 0;
   let blockMatch: RegExpExecArray | null;
 
-  while ((blockMatch = MOB_ANSI_BLOCK_REGEXP.exec(rawText)) !== null) {
+  while ((blockMatch = MOB_ANSI_BLOCK_REGEXP.exec(sanitizedRawText)) !== null) {
     const blockContent = blockMatch[1];
     const blockLines = blockContent
       .split(/\r?\n/)

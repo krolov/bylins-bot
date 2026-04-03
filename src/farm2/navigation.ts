@@ -1,5 +1,4 @@
 import { OPPOSITE_DIRECTION } from "./types.ts";
-import { getZoneId } from "./room.ts";
 import type { Direction, MapSnapshot } from "./types.ts";
 
 export function pickVisibleTarget(visibleTargets: Map<string, string>, targetValues: string[]): string | null {
@@ -23,11 +22,12 @@ export function pickVisibleTarget(visibleTargets: Map<string, string>, targetVal
 export function chooseNextDirection(
   snapshot: MapSnapshot,
   currentRoomId: number,
-  zoneId: number,
+  roomVnums: number[],
   roomVisitOrder: Map<number, number>,
   lastMoveFromRoomId: number | null,
 ): Direction | null {
-  const zoneNodes = snapshot.nodes.filter((node) => getZoneId(node.vnum) === zoneId);
+  const vnumSet = new Set(roomVnums);
+  const zoneNodes = snapshot.nodes.filter((node) => vnumSet.has(node.vnum));
   const nodeByVnum = new Map(zoneNodes.map((node) => [node.vnum, node]));
 
   if (!nodeByVnum.has(currentRoomId)) {
@@ -52,7 +52,7 @@ export function chooseNextDirection(
   };
 
   for (const edge of snapshot.edges) {
-    if (edge.isPortal || getZoneId(edge.fromVnum) !== zoneId || getZoneId(edge.toVnum) !== zoneId) {
+    if (edge.isPortal || !vnumSet.has(edge.fromVnum) || !vnumSet.has(edge.toVnum)) {
       continue;
     }
 

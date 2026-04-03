@@ -23,6 +23,8 @@ export interface TriggerSettings {
   dodge: boolean;
   standUp: boolean;
   rearm: boolean;
+  assist?: boolean;
+  assistTanks?: string[];
 }
 
 export interface GameItem {

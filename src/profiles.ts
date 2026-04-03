@@ -9,6 +9,8 @@ export interface CharacterProfile {
   commandDelayMs: number;
   /** Использовать этот профиль как основной для расчёта снаряжения */
   gearProfile: boolean;
+  /** Использовать стелс-режим боя (краст + закол + беж). Для татей. */
+  stealthCombat?: boolean;
 }
 
 export const profiles: CharacterProfile[] = [
@@ -32,6 +34,7 @@ export const profiles: CharacterProfile[] = [
     startupCommands: ["5", "ринли", "respect1"],
     commandDelayMs: 150,
     gearProfile: false,
+    stealthCombat: true,
   },
 ];
 

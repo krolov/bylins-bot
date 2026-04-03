@@ -2,6 +2,7 @@ import { DEFAULT_RETRY_DELAY_MS } from "./types.ts";
 import { defaultConfig, settingsToConfig } from "./config.ts";
 import { getZoneId } from "./room.ts";
 import { createTickTimer } from "../utils/timer.ts";
+import { createMobProbeState, resetMobProbeState } from "../mob-resolver.ts";
 import type { Farm2State, Farm2StateSnapshot, Farm2ControllerDependencies, Farm2Config } from "./types.ts";
 
 export function createInitialState(config: Farm2Config): Farm2State {
@@ -21,10 +22,7 @@ export function createInitialState(config: Farm2Config): Farm2State {
     isDark: false,
     config,
     stats: { hp: 0, hpMax: 0, energy: 0, energyMax: 0 },
-    probeCombatNames: [],
-    probeIndex: 0,
-    probeSingleRoomName: null,
-    probeLastAttemptAt: 0,
+    probe: createMobProbeState(),
     pendingRoomScanSetAt: 0,
     lastRoomCorpseCount: 0,
     attackSentAt: 0,
@@ -64,10 +62,7 @@ export function resetTrackingState(state: Farm2State): void {
   state.lastRecordedRoomId = null;
   state.lastMoveFromRoomId = null;
   state.isDark = false;
-  state.probeCombatNames = [];
-  state.probeIndex = 0;
-  state.probeSingleRoomName = null;
-  state.probeLastAttemptAt = 0;
+  resetMobProbeState(state.probe);
   state.pendingRoomScanSetAt = 0;
   state.lastRoomCorpseCount = 0;
   state.attackSentAt = 0;

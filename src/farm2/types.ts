@@ -3,8 +3,9 @@ import type { MoveResult } from "../map/mover.ts";
 import type { CombatState } from "../combat-state.ts";
 import type { FarmZoneSettings } from "../map/store.ts";
 import type { TickTimer } from "../utils/timer.ts";
+import type { MobProbeState } from "../mob-resolver.ts";
 
-export type { Direction, MapSnapshot, MoveResult, CombatState, FarmZoneSettings, TickTimer };
+export type { Direction, MapSnapshot, MoveResult, CombatState, FarmZoneSettings, TickTimer, MobProbeState };
 
 export const ANSI_SEQUENCE_REGEXP = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 export const ROOM_PROMPT_REGEXP = /Вых:[^>]*>/i;
@@ -18,7 +19,6 @@ export const MOB_DEATH_REGEXP = /мертв[аео]?,\s+(?:его|её|ее|ее
 export const DEFAULT_RETRY_DELAY_MS = 600;
 export const DARK_ROOM_RETRY_DELAY_MS = 2000;
 export const MOVE_TIMEOUT_RETRY_DELAY_MS = 2000;
-export const MOB_PROBE_DELAY_MS = 700;
 
 export const OPPOSITE_DIRECTION: Record<Direction, Direction> = {
   north: "south",
@@ -87,10 +87,7 @@ export interface Farm2State {
   isDark: boolean;
   config: Farm2Config;
   stats: Farm2Stats;
-  probeCombatNames: string[];
-  probeIndex: number;
-  probeSingleRoomName: string | null;
-  probeLastAttemptAt: number;
+  probe: MobProbeState;
   pendingRoomScanSetAt: number;
   lastRoomCorpseCount: number;
   attackSentAt: number;

@@ -55,8 +55,10 @@ export type ClientEvent =
   | { type: "gather_toggle"; payload?: { enabled?: boolean } }
   | { type: "gather_sell_bag" }
   | { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
+  | { type: "farming_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
   | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
   | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
+  | { type: "attack_nearest" }
   | { type: "inspect_container"; payload: { container: "bag" | "chest" } }
   | { type: "inspect_inventory" }
   | { type: "equipped_scan" };

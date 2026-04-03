@@ -15,6 +15,21 @@ const DISARM_LEFT_REGEXP = /выбил .+ из вашей левой руки/;
 // Зауч:0 означает «ничего не заучивается», Зауч:N:M — идёт заучивание
 const MEMORIZING_REGEXP = /Зауч:(\d+)(?::(\d+))?/;
 
+// Автоасист: строка "Х сражается с Y!" в описании комнаты или в бою
+const ASSIST_FIGHTING_REGEXP = /^(.+) сражается с (.+?)!?\s*$/;
+
+// Постбой: события окончания боя / выхода из хол да / слепоты
+const ASSIST_POSTCOMBAT_REGEXPS = [
+  /^Кровушка стынет в жилах от предсмертного крика/,
+  /^К вам вернулась способность двигаться\./,
+  /^Вы вновь можете видеть\./,
+  /^К вам вернулась способность видеть\./,
+  /^Вы отступили из битвы\./,
+];
+
+// Антиспам: после первого асиста игнорируем повторные триггеры N мс
+const ASSIST_COOLDOWN_MS = 2000;
+
 // Текст при успешном попадании проклятия на цель
 const CURSE_HIT_REGEXP = /Красное сияние вспыхнуло/;
 
@@ -60,6 +75,8 @@ export interface TriggerState {
   curse: boolean;
   light: boolean;
   followLeader: boolean;
+  assist: boolean;
+  assistTanks: string[];
 }
 
 interface TriggerDependencies {
@@ -78,6 +95,8 @@ export function createTriggers(deps: TriggerDependencies) {
     curse: false,
     light: false,
     followLeader: true,
+    assist: false,
+    assistTanks: [],
   };
 
   let dodgeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -93,6 +112,7 @@ export function createTriggers(deps: TriggerDependencies) {
   let lightMemorizing = false;
   let lightEquipped = false;
 
+  let assistLastFiredAt = 0;
   function scheduleDodge(delayMs: number): void {
     if (dodgeTimer) clearTimeout(dodgeTimer);
     dodgeTimer = setTimeout(() => {
@@ -150,6 +170,10 @@ export function createTriggers(deps: TriggerDependencies) {
 
     if (enabled.followLeader) {
       handleFollowLeaderLogic(stripped);
+    }
+
+    if (enabled.assist) {
+      handleAssistLogic(stripped);
     }
   }
 
@@ -277,6 +301,21 @@ export function createTriggers(deps: TriggerDependencies) {
     }
   }
 
+  function tryHandleLocalCommand(command: string): boolean {
+    const lower = command.trim().toLowerCase();
+    if (lower === "автобаш да") {
+      setEnabled({ assist: true });
+      deps.onLog("[triggers] assist: enabled via follow-leader");
+      return true;
+    }
+    if (lower === "автобаш нет") {
+      setEnabled({ assist: false });
+      deps.onLog("[triggers] assist: disabled via follow-leader");
+      return true;
+    }
+    return false;
+  }
+
   function handleFollowLeaderLogic(stripped: string): void {
     const charName = deps.getCharacterName();
     for (const line of stripped.split("\n")) {
@@ -295,7 +334,9 @@ export function createTriggers(deps: TriggerDependencies) {
           }
           if (command) {
             deps.onLog(`[triggers] follow-leader: ${sender}: ${command}`);
-            deps.sendCommand(command);
+            if (!tryHandleLocalCommand(command)) {
+              deps.sendCommand(command);
+            }
           }
         }
         continue;
@@ -305,8 +346,46 @@ export function createTriggers(deps: TriggerDependencies) {
       if (tellMatch) {
         const [, sender, command] = tellMatch;
         deps.onLog(`[triggers] follow-leader tell from ${sender}: ${command}`);
-        deps.sendCommand(command);
+        if (!tryHandleLocalCommand(command)) {
+          deps.sendCommand(command);
+        }
       }
+    }
+  }
+
+  function handleAssistLogic(stripped: string): void {
+    for (const line of stripped.split("\n")) {
+      for (const postcombatRegexp of ASSIST_POSTCOMBAT_REGEXPS) {
+        if (postcombatRegexp.test(line)) {
+          deps.onLog("[triggers] assist: postcombat trigger -> см");
+          deps.sendCommand("см");
+          return;
+        }
+      }
+
+      const match = ASSIST_FIGHTING_REGEXP.exec(line);
+      if (!match) continue;
+
+      const [, leftPart, mob] = match;
+      const leftLower = leftPart.toLowerCase();
+      const isTank = enabled.assistTanks.some((tank) => leftLower.includes(tank.toLowerCase()));
+      if (!isTank) continue;
+
+      const now = Date.now();
+      if (now - assistLastFiredAt < ASSIST_COOLDOWN_MS) {
+        deps.onLog(`[triggers] assist: cooldown active, skipping`);
+        continue;
+      }
+      assistLastFiredAt = now;
+
+      const mobKey = mob.trim().slice(0, 4);
+      deps.onLog(`[triggers] assist: tank detected, stabbing mob="${mobKey}"`);
+      deps.sendCommand("спрят");
+      deps.sendCommand(`закол ${mobKey}`);
+      deps.sendCommand(`закол 2.${mobKey}`);
+      deps.sendCommand(`закол 3.${mobKey}`);
+      deps.sendCommand("отступ");
+      return;
     }
   }
 
@@ -314,8 +393,15 @@ export function createTriggers(deps: TriggerDependencies) {
     let changed = false;
 
     for (const key of Object.keys(patch) as Array<keyof TriggerState>) {
-      if (key in enabled && enabled[key] !== patch[key]) {
-        (enabled[key] as boolean) = patch[key] as boolean;
+      if (!(key in enabled)) continue;
+      const patchVal = patch[key];
+      if (key === "assistTanks") {
+        if (Array.isArray(patchVal)) {
+          enabled.assistTanks = patchVal as string[];
+          changed = true;
+        }
+      } else if (enabled[key] !== patchVal) {
+        (enabled[key] as boolean) = patchVal as boolean;
         changed = true;
       }
     }

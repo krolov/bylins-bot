@@ -96,7 +96,7 @@ const sharedSession = mudConnection.session;
 let activeProfileId: string = readLastProfileId();
 const recentOutputChunks: string[] = [];
 
-const CHAT_FILTER_NAMES = ["Незнакомец", "Ворожея", "Кузнец", "Хитрый лавочник", "Здоровый дядька", "Владелец двора", "Раненый воин", "Травник", "Старец", "Пленник", "Девка для утех", "Леха Небокоптитель", "Боярин Вейдеров", "Старик", "Варяг", "Вальгрим", "Седовласый старик", "Пастух", "Краснодеревщик", "Староста"];
+const CHAT_FILTER_NAMES = ["Незнакомец", "Ворожея", "Кузнец", "Хитрый лавочник", "Здоровый дядька", "Владелец двора", "Раненый воин", "Травник", "Старец", "Пленник", "Девка для утех", "Леха Небокоптитель", "Боярин Вейдеров", "Старик", "Варяг", "Вальгрим", "Седовласый старик", "Пастух", "Краснодеревщик", "Староста", "Полуслепой немощный колдун", "Голодный зверюга", "Дружинник", "Желтоглазый дух леса", "Наворопник", "Нарочный", "Отшельник", "Боевой конь", "Ослик Иа", "Полосатый пчел", "Молодой цыган", "Юрий, сын Антонов", "страж лагеря", "Старейшина"];
 
 function isChatLine(text: string): boolean {
   if (CHAT_FILTER_NAMES.some((name) => text.includes(name))) return false;
@@ -137,6 +137,7 @@ let mapRecordingEnabled = true;
 let debugLogEnabled = false;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
+const currentRoomMobs = new Map<string, string>();
 const farm2Controller = createFarm2Controller({
   getCurrentRoomId: () => trackerState.currentRoomId,
   isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
@@ -296,6 +297,8 @@ const navigationState: NavigationState = {
 
 type RoomChangedListener = (vnum: number) => void;
 const roomChangedListeners = new Set<RoomChangedListener>();
+type RoomRefreshListener = (vnum: number | null) => void;
+const roomRefreshListeners = new Set<RoomRefreshListener>();
 const mudTextHandlers = new Set<(text: string) => void>();
 const sessionTeardownHooks = new Set<() => void>();
 
@@ -321,6 +324,34 @@ function onceMudText(pattern: RegExp, timeoutMs: number): Promise<void> {
   });
 }
 
+function refreshCurrentRoom(timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      roomRefreshListeners.delete(listener);
+      resolve(null);
+    }, timeoutMs);
+    const listener: RoomRefreshListener = (vnum) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      roomRefreshListeners.delete(listener);
+      resolve(vnum);
+    };
+    roomRefreshListeners.add(listener);
+    if (!sharedSession.tcpSocket || !sharedSession.connected) {
+      done = true;
+      clearTimeout(timer);
+      roomRefreshListeners.delete(listener);
+      resolve(null);
+      return;
+    }
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "zone-script");
+  });
+}
+
 const zoneScriptController = createZoneScriptController({
   getCurrentRoomId: () => trackerState.currentRoomId,
   isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
@@ -330,11 +361,35 @@ const zoneScriptController = createZoneScriptController({
     mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "zone-script");
   },
   onMudTextOnce: (pattern, timeoutMs) => onceMudText(pattern, timeoutMs),
+  onceRoomChanged: (timeoutMs) => onceRoomChanged(timeoutMs),
+  refreshCurrentRoom: (timeoutMs) => refreshCurrentRoom(timeoutMs),
   onStateChange: (scriptState) => {
     broadcastServerEvent({ type: "zone_script_state", payload: scriptState });
   },
   onLog: (message) => {
     logEvent(null, "session", message);
+  },
+  getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
+  move: (direction) => mover.move(direction, trackerState.currentRoomId),
+  stealthMove: (direction) => mover.stealthMove(direction, trackerState.currentRoomId),
+  combatState,
+  getVisibleTargets: () => new Map(currentRoomMobs),
+  reinitRoom: () => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "zone-script");
+  },
+  isStealthProfile: () => {
+    const profile = runtimeConfig.profiles.find((p) => p.id === activeProfileId);
+    return profile?.stealthCombat === true;
+  },
+  mobResolver: {
+    getMobCombatNamesByZone: (zoneId) => mapStore.getMobCombatNamesByZone(zoneId),
+    getCombatNameByRoomName: (roomName) => mapStore.getCombatNameByRoomName(roomName),
+    isRoomNameBlacklisted: (roomName) => mapStore.isRoomNameBlacklisted(roomName),
+    linkMobRoomAndCombatName: (roomName, combatName, vnum) => mapStore.saveMobRoomName(roomName, vnum, combatName),
+    onDebugLog: (message) => {
+      appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+    },
   },
 });
 sessionTeardownHooks.add(() => zoneScriptController.handleSessionClosed());
@@ -904,6 +959,26 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     }
   }
 
+  const roomEvent = events.find((event) => event.kind === "room");
+  if (roomEvent?.kind === "room") {
+    logEvent(null, "session", `[zone-debug] parsed room event vnum=${roomEvent.room.vnum} mobs=[${mobsInRoom.join(" | ")}]`);
+  }
+
+  if (events.some((e) => e.kind === "room")) {
+    currentRoomMobs.clear();
+    for (const name of mobsInRoom) {
+      currentRoomMobs.set(name.toLowerCase(), name);
+    }
+    logEvent(
+      null,
+      "session",
+      `[zone-debug] currentRoomMobs updated room=${trackerState.currentRoomId} values=[${[...currentRoomMobs.values()].join(" | ")}]`,
+    );
+    for (const listener of roomRefreshListeners) {
+      listener(trackerState.currentRoomId);
+    }
+  }
+
   const strippedText = text.replace(ANSI_ESCAPE_REGEXP, "");
   const vnumAtCombatSave = trackerState.currentRoomId;
   const combatMobNames: string[] = [];
@@ -959,7 +1034,17 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     currentVnum: trackerState.currentRoomId,
     previousVnum: previousRoomId,
     movementBlocked: result.movementBlocked,
+    roomDescriptionReceived: result.rooms.length > 0,
+    visibleMobNames: mobsInRoom,
   });
+
+  if (result.rooms.length > 0) {
+    logEvent(
+      null,
+      "session",
+      `[zone-debug] mover feedback current=${trackerState.currentRoomId} previous=${previousRoomId} roomDescriptionReceived=${result.rooms.length > 0} visibleMobNames=[${mobsInRoom.join(" | ")}]`,
+    );
+  }
 
   farm2Controller.handleMudText(text, {
     roomChanged: previousRoomId !== trackerState.currentRoomId,
@@ -1179,10 +1264,28 @@ const server = Bun.serve({
           farm2Controller.setEnabled(enabled);
           break;
         }
+        case "attack_nearest": {
+          logEvent(ws, "browser-in", "attack_nearest");
+          const currentRoomId = trackerState.currentRoomId;
+          if (currentRoomId !== null && sharedSession.tcpSocket && sharedSession.connected) {
+            const target = await farm2Controller.resolveAttackTarget(currentRoomId);
+            if (target !== null) {
+              mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `заколоть ${target}`, "attack-nearest");
+            }
+          }
+          break;
+        }
         case "zone_script_toggle": {
           const enabled = event.payload?.enabled === true;
           const zoneId = typeof event.payload?.zoneId === "number" ? event.payload.zoneId : undefined;
           logEvent(ws, "browser-in", "zone_script_toggle", { enabled, zoneId });
+          zoneScriptController.setEnabled(enabled, zoneId);
+          break;
+        }
+        case "farming_toggle": {
+          const enabled = event.payload?.enabled === true;
+          const zoneId = typeof event.payload?.zoneId === "number" ? event.payload.zoneId : 280;
+          logEvent(ws, "browser-in", "farming_toggle", { enabled, zoneId });
           zoneScriptController.setEnabled(enabled, zoneId);
           break;
         }
