@@ -183,6 +183,11 @@
               <ul id="nav-zone-list" class="nav-zone-list"></ul>
               <p id="nav-zone-list-empty" class="alias-list-empty">Нет посещённых соседних зон.</p>
             </div>
+            <div id="nav-far-zones" class="nav-section">
+              <div class="nav-section__title">Дальние зоны</div>
+              <ul id="nav-far-zones-list" class="nav-zone-list"></ul>
+              <p id="nav-far-zones-list-empty" class="alias-list-empty">Нет посещённых дальних зон.</p>
+            </div>
           </div>
         </div>
 
@@ -190,7 +195,7 @@
           <div class="container-panel script-panel">
             <div class="container-panel__header script-panel__header">
               <span class="container-panel__title" id="script-panel-title">Скрипт</span>
-              <button id="script-toggle-btn" type="button" class="button-secondary button-small">Стоп</button>
+                <button id="script-toggle-btn" type="button" class="button-secondary button-small">Нет скрипта</button>
             </div>
             <div id="script-status-line" class="script-status-line script-status-line--hidden"></div>
             <div class="container-panel__scroll">
@@ -478,6 +483,21 @@
              <div class="farm-modal__field farm-modal__field--inline">
                <label for="trigger-follow-leader" class="farm-modal__label">Выполнять команды лидеров (гг/личка)</label>
                <input id="trigger-follow-leader" type="checkbox" />
+             </div>
+
+             <hr class="farm-modal__divider" />
+
+             <div class="farm-modal__field farm-modal__field--inline">
+               <label for="trigger-assist" class="farm-modal__label">Автоасист (спрят+закол+отступ)</label>
+               <input id="trigger-assist" type="checkbox" />
+             </div>
+             <div class="farm-modal__field">
+               <label class="farm-modal__label">Танки (асистить когда бьют):</label>
+               <div id="assist-tanks-list" class="assist-tanks-list"></div>
+               <div class="assist-tanks-add">
+                 <input id="assist-tank-input" type="text" class="farm-modal__input" placeholder="Имя танка" maxlength="40" />
+                 <button id="assist-tank-add-btn" type="button" class="button-secondary button-small">Добавить</button>
+               </div>
              </div>
            </div>
 

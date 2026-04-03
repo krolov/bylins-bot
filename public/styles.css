@@ -1291,6 +1291,56 @@ button:hover {
   flex-shrink: 0;
 }
 
+.farm-modal__divider {
+  border: none;
+  border-top: 1px solid var(--panel-border);
+  margin: 4px 0;
+}
+
+.farm-modal__input {
+  flex: 1;
+  border: 1px solid var(--panel-border);
+  background: #0b1015;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.farm-modal__input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(103, 215, 167, 0.14);
+}
+
+.assist-tanks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+  min-height: 0;
+}
+
+.assist-tank-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.assist-tank-item__name {
+  flex: 1;
+}
+
+.assist-tanks-add {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .farm-modal__footer {
   display: flex;
   align-items: center;

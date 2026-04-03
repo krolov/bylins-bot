@@ -168,9 +168,9 @@ type ServerEvent =
       type: "survival_settings_data";
       payload: SurvivalSettings | null;
     }
-  | {
+   | {
        type: "triggers_state";
-        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean };
+        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean; assist: boolean; assistTanks: string[] };
     }
   | {
       type: "items_data";
@@ -327,7 +327,7 @@ type ClientEvent =
     }
   | {
       type: "triggers_toggle";
-      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean; light?: boolean; followLeader?: boolean };
+      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean; light?: boolean; followLeader?: boolean; assist?: boolean; assistTanks?: string[] };
     }
   | { type: "item_db_get" }
   | { type: "room_auto_command_set"; payload: { vnum: number; command: string } }
@@ -344,10 +344,12 @@ type ClientEvent =
   | { type: "gather_sell_bag" }
   | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
   | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
+  | { type: "attack_nearest" }
   | { type: "inspect_container"; payload: { container: "bag" | "chest" } }
   | { type: "inspect_inventory" }
 | { type: "equipped_scan" }
-| { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } };
+| { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
+| { type: "farming_toggle"; payload?: { enabled?: boolean; zoneId?: number } };
 
 import type { SurvivalSettings } from "./events.type.ts";
 
@@ -403,6 +405,8 @@ const navAliasList = requireElement<HTMLUListElement>("#nav-alias-list");
 const navAliasListEmpty = requireElement<HTMLParagraphElement>("#nav-alias-list-empty");
 const navZoneList = requireElement<HTMLUListElement>("#nav-zone-list");
 const navZoneListEmpty = requireElement<HTMLParagraphElement>("#nav-zone-list-empty");
+const navFarZonesList = requireElement<HTMLUListElement>("#nav-far-zones-list");
+const navFarZonesListEmpty = requireElement<HTMLParagraphElement>("#nav-far-zones-list-empty");
 const navZoneAliasesTitle = requireElement<HTMLDivElement>("#nav-zone-aliases-title");
 const navStatus = requireElement<HTMLDivElement>("#nav-status");
 const aliasPopup = requireElement<HTMLDivElement>("#alias-popup");
@@ -470,6 +474,10 @@ const triggerRearmCheckbox = requireElement<HTMLInputElement>("#trigger-rearm");
 const triggerCurseCheckbox = requireElement<HTMLInputElement>("#trigger-curse");
 const triggerLightCheckbox = requireElement<HTMLInputElement>("#trigger-light");
 const triggerFollowLeaderCheckbox = requireElement<HTMLInputElement>("#trigger-follow-leader");
+const triggerAssistCheckbox = requireElement<HTMLInputElement>("#trigger-assist");
+const assistTanksList = requireElement<HTMLDivElement>("#assist-tanks-list");
+const assistTankInput = requireElement<HTMLInputElement>("#assist-tank-input");
+const assistTankAddBtn = requireElement<HTMLButtonElement>("#assist-tank-add-btn");
 
 const itemDbButton = requireElement<HTMLButtonElement>("#item-db-button");
 
@@ -655,7 +663,31 @@ function closeSurvivalSettingsModal(): void {
   survivalSettingsModal.classList.add("farm-modal--hidden");
 }
 
-let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean } = { dodge: true, standUp: true, rearm: true, curse: false, light: false, followLeader: true };
+let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean; assist: boolean; assistTanks: string[] } = { dodge: true, standUp: true, rearm: true, curse: false, light: false, followLeader: true, assist: false, assistTanks: [] };
+
+function renderAssistTanks(tanks: string[]): void {
+  assistTanksList.innerHTML = "";
+  for (const tank of tanks) {
+    const item = document.createElement("div");
+    item.className = "assist-tank-item";
+    const name = document.createElement("span");
+    name.className = "assist-tank-item__name";
+    name.textContent = tank;
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "button-secondary button-small";
+    removeBtn.textContent = "✕";
+    removeBtn.addEventListener("click", () => {
+      const updated = currentTriggerState.assistTanks.filter((t) => t !== tank);
+      currentTriggerState = { ...currentTriggerState, assistTanks: updated };
+      sendClientEvent({ type: "triggers_toggle", payload: { assistTanks: updated } });
+      renderAssistTanks(updated);
+    });
+    item.appendChild(name);
+    item.appendChild(removeBtn);
+    assistTanksList.appendChild(item);
+  }
+}
 
 function openTriggersModal(): void {
   triggerDodgeCheckbox.checked = currentTriggerState.dodge;
@@ -664,6 +696,8 @@ function openTriggersModal(): void {
   triggerCurseCheckbox.checked = currentTriggerState.curse;
   triggerLightCheckbox.checked = currentTriggerState.light;
   triggerFollowLeaderCheckbox.checked = currentTriggerState.followLeader;
+  triggerAssistCheckbox.checked = currentTriggerState.assist;
+  renderAssistTanks(currentTriggerState.assistTanks);
   triggersModal.classList.remove("farm-modal--hidden");
 }
 
@@ -1122,10 +1156,43 @@ function renderNavPanel(): void {
     li.appendChild(goBtn);
     navZoneList.appendChild(li);
   }
+
+  const neighborZoneIdSet = new Set(neighborZones.map(z => z.zoneId));
+  const farZones = buildFarZones(currentZone, neighborZoneIdSet);
+
+  navFarZonesList.innerHTML = "";
+  navFarZonesListEmpty.classList.toggle("alias-list-empty--hidden", farZones.length > 0);
+
+  for (const zone of farZones) {
+    const li = document.createElement("li");
+    li.className = "nav-zone-list__item";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "nav-zone-list__name";
+    nameSpan.textContent = zoneNames.get(zone.zoneId) ?? `Зона ${zone.zoneId}xx`;
+
+    const goBtn = document.createElement("button");
+    goBtn.type = "button";
+    goBtn.className = "button-small nav-zone-list__go";
+    goBtn.textContent = "Идти";
+    goBtn.addEventListener("click", () => {
+      sendClientEvent({ type: "navigate_to", payload: { vnums: zone.entryVnums } });
+    });
+
+    li.appendChild(nameSpan);
+    li.appendChild(goBtn);
+    navFarZonesList.appendChild(li);
+  }
 }
 
 interface NeighborZone {
   zoneId: number;
+  entryVnums: number[];
+}
+
+interface FarZone {
+  zoneId: number;
+  hops: number;
   entryVnums: number[];
 }
 
@@ -1159,6 +1226,72 @@ function buildNeighborZones(currentZone: number | null): NeighborZone[] {
   }
 
   result.sort((a, b) => {
+    const nameA = zoneNames.get(a.zoneId) ?? "";
+    const nameB = zoneNames.get(b.zoneId) ?? "";
+    if (nameA && !nameB) return -1;
+    if (!nameA && nameB) return 1;
+    return nameA.localeCompare(nameB) || a.zoneId - b.zoneId;
+  });
+
+  return result;
+}
+
+function buildFarZones(currentZone: number | null, neighborZoneIds: Set<number>): FarZone[] {
+  if (currentZone === null || latestMapSnapshot.nodes.length === 0) return [];
+
+  // Build zone adjacency map from edges
+  const zoneAdj = new Map<number, Set<number>>();
+  for (const edge of latestMapSnapshot.edges) {
+    const fromZone = getZoneId(edge.fromVnum);
+    const toZone = getZoneId(edge.toVnum);
+    if (fromZone === toZone) continue;
+    if (!zoneAdj.has(fromZone)) zoneAdj.set(fromZone, new Set());
+    if (!zoneAdj.has(toZone)) zoneAdj.set(toZone, new Set());
+    zoneAdj.get(fromZone)!.add(toZone);
+    zoneAdj.get(toZone)!.add(fromZone);
+  }
+
+  // BFS from currentZone, collect zones at hops 2–4
+  const visited = new Set<number>([currentZone, ...neighborZoneIds]);
+  const queue: Array<{ zoneId: number; hops: number }> = [];
+
+  // Seed queue with neighbors (hop=1) as already-visited boundary
+  for (const nz of neighborZoneIds) {
+    queue.push({ zoneId: nz, hops: 1 });
+  }
+
+  const farZoneHops = new Map<number, number>(); // zoneId → hops
+
+  let head = 0;
+  while (head < queue.length) {
+    const { zoneId, hops } = queue[head++]!;
+    if (hops >= 4) continue;
+    const neighbors = zoneAdj.get(zoneId);
+    if (!neighbors) continue;
+    for (const nz of neighbors) {
+      if (visited.has(nz)) continue;
+      visited.add(nz);
+      farZoneHops.set(nz, hops + 1);
+      queue.push({ zoneId: nz, hops: hops + 1 });
+    }
+  }
+
+  const visitedVnums = new Set(
+    latestMapSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
+  );
+
+  const result: FarZone[] = [];
+  for (const [zoneId, hops] of farZoneHops) {
+    const zoneVnums = latestMapSnapshot.nodes
+      .filter(n => getZoneId(n.vnum) === zoneId && visitedVnums.has(n.vnum))
+      .map(n => n.vnum);
+    if (zoneVnums.length > 0) {
+      result.push({ zoneId, hops, entryVnums: zoneVnums });
+    }
+  }
+
+  result.sort((a, b) => {
+    if (a.hops !== b.hops) return a.hops - b.hops;
     const nameA = zoneNames.get(a.zoneId) ?? "";
     const nameB = zoneNames.get(b.zoneId) ?? "";
     if (nameA && !nameB) return -1;
@@ -1242,6 +1375,53 @@ let farm2ZoneId: number | null = null;
 let farm2PendingActivation = false;
 let zoneScriptState: ServerEvent & { type: "zone_script_state" } | null = null;
 let trackerCurrentVnum: number | null = null;
+
+const AVAILABLE_ZONE_SCRIPTS: Array<{ zoneId: number; name: string; hundreds: number[]; stepLabels: string[] }> = [
+  {
+    zoneId: 258,
+    name: "Лес (зона 258)",
+    hundreds: [258],
+    stepLabels: [
+      "Идти на 25804",
+      "Открыть дверь",
+      "Идти на 25805",
+      "Ждать сообщение про лавочку",
+      "Идти назад на 25804",
+      "Двигать лавочку",
+      "Взять ключ",
+      "Идти на 25805",
+      "Отпереть и открыть дверь",
+      "Открыть дверь",
+      "Идти на 25806",
+      "Ждать реплику старика про шар",
+      "Ответить: помогу",
+      "Идти на 25807",
+      "Раздвинуть ветки",
+      "Идти на 25837",
+      "Лезть на дуб",
+      "Ждать появления духа леса",
+      "Спросить про карликов",
+      "Согласиться на задание духа",
+      "Спуститься к дубу (25837)",
+      "Лезть вниз",
+      "Нырнуть в озеро",
+    ],
+  },
+  {
+    zoneId: 280,
+    name: "Стоянка половцев",
+    hundreds: [280, 281, 283, 284, 285, 286, 289],
+    stepLabels: [
+      "Идти к входу в стоянку (28000)",
+      "Зачистить стоянку половцев",
+    ],
+  },
+];
+
+function getScriptForVnum(vnum: number): { zoneId: number; name: string; stepLabels: string[] } | undefined {
+  const hundred = Math.floor(vnum / 100);
+  return AVAILABLE_ZONE_SCRIPTS.find((s) => s.hundreds.includes(hundred));
+}
 let currentStats: FarmRuntimeStats = {
   hp: 0,
   hpMax: 0,
@@ -2924,10 +3104,28 @@ function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; s
     scriptStatusLine.classList.add("script-status-line--hidden");
   }
 
-  scriptToggleBtn.textContent = state.enabled ? "Стоп" : "Старт 258";
+  if (state.enabled) {
+    scriptToggleBtn.textContent = "Стоп";
+    scriptToggleBtn.disabled = false;
+  } else {
+    const script = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
+    if (script !== undefined) {
+      scriptToggleBtn.textContent = script.name;
+      scriptToggleBtn.disabled = false;
+    } else {
+      scriptToggleBtn.textContent = "Нет скрипта";
+      scriptToggleBtn.disabled = true;
+    }
+  }
 
   scriptStepsList.innerHTML = "";
-  for (const step of state.steps) {
+
+  const stepsToRender: Array<{ label: string; status: string; error?: string }> =
+    state.steps.length > 0
+      ? state.steps
+      : (trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined)?.stepLabels.map((label) => ({ label, status: "pending" })) ?? [];
+
+  for (const step of stepsToRender) {
     const li = document.createElement("li");
     li.className = `script-step script-step--${step.status}`;
 
@@ -3030,10 +3228,16 @@ function createSocket(): WebSocket {
       case "map_snapshot":
         trackerCurrentVnum = message.payload.currentVnum;
         updateMap(message.payload, true);
+        if (zoneScriptState && !zoneScriptState.payload.enabled) {
+          renderScriptSteps(zoneScriptState.payload);
+        }
         break;
       case "map_update":
         trackerCurrentVnum = message.payload.currentVnum;
         updateMap(message.payload, false);
+        if (zoneScriptState && !zoneScriptState.payload.enabled) {
+          renderScriptSteps(zoneScriptState.payload);
+        }
         break;
       case "farm2_state":
         farm2Enabled = message.payload.enabled;
@@ -3097,6 +3301,10 @@ function createSocket(): WebSocket {
         triggerCurseCheckbox.checked = message.payload.curse;
         triggerLightCheckbox.checked = message.payload.light;
         triggerFollowLeaderCheckbox.checked = message.payload.followLeader;
+        triggerAssistCheckbox.checked = message.payload.assist ?? false;
+        if (!triggersModal.classList.contains("farm-modal--hidden")) {
+          renderAssistTanks(message.payload.assistTanks ?? []);
+        }
         break;
       case "map_recording_state":
         mapRecordingEnabled = message.payload.enabled;
@@ -3994,6 +4202,26 @@ triggerFollowLeaderCheckbox.addEventListener("change", () => {
   sendClientEvent({ type: "triggers_toggle", payload: { followLeader: triggerFollowLeaderCheckbox.checked } });
 });
 
+triggerAssistCheckbox.addEventListener("change", () => {
+  currentTriggerState = { ...currentTriggerState, assist: triggerAssistCheckbox.checked };
+  sendClientEvent({ type: "triggers_toggle", payload: { assist: triggerAssistCheckbox.checked } });
+});
+
+assistTankAddBtn.addEventListener("click", () => {
+  const name = assistTankInput.value.trim();
+  if (!name) return;
+  if (currentTriggerState.assistTanks.includes(name)) return;
+  const updated = [...currentTriggerState.assistTanks, name];
+  currentTriggerState = { ...currentTriggerState, assistTanks: updated };
+  sendClientEvent({ type: "triggers_toggle", payload: { assistTanks: updated } });
+  renderAssistTanks(updated);
+  assistTankInput.value = "";
+});
+
+assistTankInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") assistTankAddBtn.click();
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !farmSettingsModal.classList.contains("farm-modal--hidden")) {
     closeFarmSettingsModal();
@@ -4034,9 +4262,14 @@ scriptToggleBtn.addEventListener("click", () => {
   if (zoneScriptState?.payload.enabled) {
     sendClientEvent({ type: "zone_script_toggle", payload: { enabled: false } });
   } else {
-    sendClientEvent({ type: "zone_script_toggle", payload: { enabled: true, zoneId: 258 } });
+    const script = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
+    if (script !== undefined) {
+      sendClientEvent({ type: "zone_script_toggle", payload: { enabled: true, zoneId: script.zoneId } });
+    }
   }
 });
+
+
 
 aliasPopupSave.addEventListener("click", () => {
   const alias = aliasPopupInput.value.trim();
@@ -4210,6 +4443,15 @@ document.addEventListener("keydown", (e) => {
   for (const part of cmd.split(";;").map((s) => s.trim()).filter(Boolean)) {
     appendStyledText(`> ${part}\n`, { foreground: "bright-black", bold: false });
     sendClientEvent({ type: "send", payload: { command: part } });
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (isTextInputFocused()) return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key === "у" || e.key === "У") {
+    e.preventDefault();
+    sendClientEvent({ type: "attack_nearest" });
   }
 });
 
