@@ -277,6 +277,9 @@ const triggers = createTriggers({
   getCharacterName: () => {
     return runtimeConfig.profiles.find((p) => p.id === activeProfileId)?.name ?? "";
   },
+  getCharLevel: () => statsLevel,
+  getCharDsu: () => statsDsu,
+  getCharRazb: () => statsRazb,
 });
 
 interface NavigationState {
@@ -418,14 +421,22 @@ function onceRoomChanged(timeoutMs: number): Promise<number | null> {
 // Фраза максимумов: «Вы можете выдержать 50(50) единиц повреждения, и пройти 86(86) верст»
 const MAX_STATS_REGEXP = /Вы можете выдержать \d+\((\d+)\) единиц[а-я]* повреждения.*?пройти \d+\((\d+)\) верст/i;
 // Строка промпта после strip ANSI: «50H 86M 1421o Зауч:0 ОЗ:0 2L 5G Вых:СВЮЗ>»
-const PROMPT_STATS_REGEXP = /(\d+)H\s+(\d+)M\s+\d+o\s+Зауч:\d+/;
+// Захватывает: (1)HP (2)Energy (3)DSU (4)Level — между ОЗ:N и L могут быть [mob:state] или Зс:N
+const PROMPT_STATS_REGEXP = /(\d+)H\s+(\d+)M\s+(\d+)o\s+Зауч:\d+\s+ОЗ:\d+.*?(\d+)L\s+\d+G/;
+// Уровень отдельным regex как fallback (L всегда перед G)
+const PROMPT_LEVEL_REGEXP = /(\d+)L\s+\d+G/;
 const ANSI_ESCAPE_REGEXP = /\u001b\[[0-9;]*m/g;
 const COMBAT_PROMPT_MOB_REGEXP = /\[([^\]:]+):[^\]]+\]/g;
+// «вступить в группу с максимальной разницей в X уровней»
+const RAZB_REGEXP = /максимальной разницей в (\d+) уровн/i;
 
 let statsHp = 0;
 let statsHpMax = 0;
 let statsEnergy = 0;
 let statsEnergyMax = 0;
+let statsLevel = 0;
+let statsDsu = 0;
+let statsRazb = 5;
 
 let survivalTickTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -452,11 +463,26 @@ function parseAndBroadcastStats(text: string): void {
   if (promptMatch) {
     const newHp = Number(promptMatch[1]);
     const newEnergy = Number(promptMatch[2]);
+    const newDsu = Number(promptMatch[3]);
+    const newLevel = Number(promptMatch[4]);
     if (newHp !== statsHp || newEnergy !== statsEnergy) {
       statsHp = newHp;
       statsEnergy = newEnergy;
       changed = true;
     }
+    if (newDsu !== statsDsu) statsDsu = newDsu;
+    if (newLevel !== 0 && newLevel !== statsLevel) statsLevel = newLevel;
+  } else {
+    const levelMatch = PROMPT_LEVEL_REGEXP.exec(stripped);
+    if (levelMatch) {
+      const newLevel = Number(levelMatch[1]);
+      if (newLevel !== 0 && newLevel !== statsLevel) statsLevel = newLevel;
+    }
+  }
+
+  const razbMatch = RAZB_REGEXP.exec(stripped);
+  if (razbMatch) {
+    statsRazb = Number(razbMatch[1]);
   }
 
   if (changed) {

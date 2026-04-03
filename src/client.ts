@@ -1589,6 +1589,7 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
 
     const adj = zoneAdj.get(zoneId) ?? new Map<number, { toVnum: number; direction: string }[]>();
     const localCoords = new Map<number, { x: number; y: number }>();
+    const occupiedCells = new Map<string, number>(); // cellKey → vnum
     const unplaced = new Set(zoneNodes);
     let componentOriginX = 0;
     let localMinX = 0;
@@ -1597,12 +1598,43 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
     let localMaxY = 0;
     let isFirstComponent = true;
 
+    const findFreeCell = (
+      preferredX: number,
+      preferredY: number,
+      dx: number,
+      dy: number,
+    ): { x: number; y: number } => {
+      // Shift perpendicular to the movement direction, step=2 to maintain grid spacing
+      const perpStep = 2;
+      const isHorizontal = dx !== 0;
+      for (let offset = perpStep; offset <= 8; offset += perpStep) {
+        for (const sign of [1, -1]) {
+          const cx = preferredX + (isHorizontal ? 0 : sign * offset);
+          const cy = preferredY + (isHorizontal ? sign * offset : 0);
+          if (!occupiedCells.has(cellKey(cx, cy))) return { x: cx, y: cy };
+        }
+      }
+      // Fallback: spiral search for any empty cell
+      for (let radius = 1; radius <= 20; radius++) {
+        for (let sx = -radius; sx <= radius; sx++) {
+          for (let sy = -radius; sy <= radius; sy++) {
+            if (Math.abs(sx) !== radius && Math.abs(sy) !== radius) continue;
+            const cx = preferredX + sx * 2;
+            const cy = preferredY + sy * 2;
+            if (!occupiedCells.has(cellKey(cx, cy))) return { x: cx, y: cy };
+          }
+        }
+      }
+      return { x: preferredX, y: preferredY };
+    };
+
     while (unplaced.size > 0) {
       const componentRoot = isFirstComponent && zoneId === rootZoneId && unplaced.has(rootVnum)
         ? rootVnum
         : Math.min(...unplaced);
 
       localCoords.set(componentRoot, { x: componentOriginX, y: 0 });
+      occupiedCells.set(cellKey(componentOriginX, 0), componentRoot);
       unplaced.delete(componentRoot);
 
       const queue = [componentRoot];
@@ -1616,12 +1648,20 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
           const delta = DIR_DELTA[neighbor.direction];
           if (!delta) continue;
 
-          const nextCoord = {
-            x: currentCoord.x + delta[0],
-            y: currentCoord.y + delta[1],
-          };
+          const preferredX = currentCoord.x + delta[0];
+          const preferredY = currentCoord.y + delta[1];
+
+          let nextCoord: { x: number; y: number };
+          const existingOccupant = occupiedCells.get(cellKey(preferredX, preferredY));
+          if (existingOccupant !== undefined && existingOccupant !== neighbor.toVnum) {
+            // Collision: another room already occupies the preferred cell — find a free one
+            nextCoord = findFreeCell(preferredX, preferredY, delta[0], delta[1]);
+          } else {
+            nextCoord = { x: preferredX, y: preferredY };
+          }
 
           localCoords.set(neighbor.toVnum, nextCoord);
+          occupiedCells.set(cellKey(nextCoord.x, nextCoord.y), neighbor.toVnum);
           unplaced.delete(neighbor.toVnum);
           queue.push(neighbor.toVnum);
 

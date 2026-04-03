@@ -85,6 +85,9 @@ interface TriggerDependencies {
   onLog(message: string): void;
   isInCombat(): boolean;
   getCharacterName(): string;
+  getCharLevel(): number;
+  getCharDsu(): number;
+  getCharRazb(): number;
 }
 
 export function createTriggers(deps: TriggerDependencies) {
@@ -303,6 +306,14 @@ export function createTriggers(deps: TriggerDependencies) {
 
   function tryHandleLocalCommand(command: string): boolean {
     const lower = command.trim().toLowerCase();
+    if (lower === "дсу") {
+      const level = deps.getCharLevel();
+      const dsu = deps.getCharDsu();
+      const razb = deps.getCharRazb();
+      const dsuFormatted = dsu.toLocaleString("ru-RU");
+      deps.sendCommand(`гг [ Разбег: ${razb} -+- Уровень: ${level} -+- ДСУ: ${dsuFormatted} ]`);
+      return true;
+    }
     if (lower === "автобаш да") {
       setEnabled({ assist: true });
       deps.onLog("[triggers] assist: enabled via follow-leader");
