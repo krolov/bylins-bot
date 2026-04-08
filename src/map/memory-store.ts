@@ -1,5 +1,5 @@
 import type { MapAlias, MapEdge, MapNode, MapSnapshot } from "./types";
-import type { GameItem, MapStore, MobName, RoomAutoCommand } from "./store";
+import type { GameItem, MapStore, MarketSale, MobName, RoomAutoCommand } from "./store";
 
 export function createMemoryMapStore(): MapStore {
   const rooms = new Map<number, MapNode>();
@@ -52,6 +52,28 @@ export function createMemoryMapStore(): MapStore {
         }),
         zoneNames: [],
       };
+    },
+
+    async getZoneSnapshot(currentVnum: number | null): Promise<MapSnapshot> {
+      if (currentVnum === null) {
+        return { currentVnum: null, nodes: [], edges: [], zoneNames: [] };
+      }
+      const zoneId = getZoneId(currentVnum);
+      const zoneNodes = Array.from(rooms.values())
+        .filter((n) => getZoneId(n.vnum) === zoneId)
+        .sort((a, b) => a.vnum - b.vnum);
+      const zoneEdges = Array.from(edges.values())
+        .filter((e) => getZoneId(e.fromVnum) === zoneId || getZoneId(e.toVnum) === zoneId)
+        .map((edge) => ({
+          ...edge,
+          isPortal: edge.isPortal || getZoneId(edge.fromVnum) !== getZoneId(edge.toVnum),
+        }))
+        .sort((a, b) => {
+          if (a.fromVnum !== b.fromVnum) return a.fromVnum - b.fromVnum;
+          if (a.toVnum !== b.toVnum) return a.toVnum - b.toVnum;
+          return a.direction.localeCompare(b.direction);
+        });
+      return { currentVnum, nodes: zoneNodes, edges: zoneEdges, zoneNames: [] };
     },
 
     async reset(): Promise<void> {
@@ -168,6 +190,16 @@ export function createMemoryMapStore(): MapStore {
 
     async getRecentChatMessages(): Promise<Array<{ text: string; timestamp: number }>> {
       return [];
+    },
+
+    async saveMarketSale(_sale: Omit<MarketSale, "id">): Promise<void> {},
+
+    async getMarketSales(_limit?: number): Promise<MarketSale[]> {
+      return [];
+    },
+
+    async getMarketMaxPrice(_itemName: string): Promise<number | null> {
+      return null;
     },
   };
 }

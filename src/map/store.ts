@@ -37,6 +37,16 @@ export interface GameItem {
   lastSeen: Date;
 }
 
+export interface MarketSale {
+  id: number;
+  source: "bazaar" | "auction";
+  lotNumber: number | null;
+  itemName: string;
+  price: number;
+  isOurs: boolean;
+  soldAt: Date;
+}
+
 export interface MobName {
   id: number;
   roomName: string | null;
@@ -57,6 +67,7 @@ export interface MapStore {
   upsertRoom(vnum: number, name: string, exits: MapNode["exits"], closedExits: MapNode["closedExits"]): Promise<void>;
   upsertEdge(edge: MapEdge): Promise<void>;
   getSnapshot(currentVnum: number | null): Promise<MapSnapshot>;
+  getZoneSnapshot(currentVnum: number | null): Promise<MapSnapshot>;
   reset(): Promise<void>;
   deleteZone(zoneId: number): Promise<void>;
   setAlias(vnum: number, alias: string): Promise<void>;
@@ -87,6 +98,9 @@ export interface MapStore {
   isRoomNameBlacklisted(roomName: string): Promise<boolean>;
   saveChatMessage(text: string, timestamp: number): Promise<void>;
   getRecentChatMessages(): Promise<Array<{ text: string; timestamp: number }>>;
+  saveMarketSale(sale: Omit<MarketSale, "id">): Promise<void>;
+  getMarketSales(limit?: number): Promise<MarketSale[]>;
+  getMarketMaxPrice(itemName: string): Promise<number | null>;
 }
 
 interface RoomRow {
@@ -217,6 +231,26 @@ export function createMapStore(database: DatabaseClient): MapStore {
       await database`
         ALTER TABLE game_items ADD COLUMN IF NOT EXISTS has_game_data BOOLEAN NOT NULL DEFAULT FALSE
       `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS market_sales (
+          id          BIGSERIAL PRIMARY KEY,
+          source      TEXT NOT NULL,
+          lot_number  INT,
+          item_name   TEXT NOT NULL,
+          price       INT NOT NULL,
+          is_ours     BOOLEAN NOT NULL DEFAULT FALSE,
+          sold_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      await database`
+        CREATE INDEX IF NOT EXISTS market_sales_item_name_idx ON market_sales (item_name)
+      `;
+
+      await database`
+        CREATE INDEX IF NOT EXISTS market_sales_sold_at_idx ON market_sales (sold_at DESC)
+      `;
     },
 
     async upsertRoom(vnum: number, name: string, exits: MapNode["exits"], closedExits: MapNode["closedExits"]): Promise<void> {
@@ -286,6 +320,56 @@ export function createMapStore(database: DatabaseClient): MapStore {
       const edges = await database<EdgeRow[]>`
         SELECT from_vnum, to_vnum, direction, is_portal
         FROM map_edges
+        ORDER BY from_vnum ASC, to_vnum ASC, direction ASC
+      `;
+
+      const zoneNameRows = await database<{ zone_id: number; name: string }[]>`
+        SELECT zone_id, name FROM zone_names ORDER BY zone_id ASC
+      `;
+
+      return {
+        currentVnum,
+        nodes: nodes.map((node: RoomRow): MapNode => ({
+          vnum: node.vnum,
+          name: node.name,
+          exits: (node.exits ?? []) as MapNode["exits"],
+          closedExits: (node.closed_exits ?? []) as MapNode["closedExits"],
+          visited: node.visited ?? true,
+          color: node.color ?? undefined,
+        })),
+        edges: edges.map((edge: EdgeRow): MapEdge => ({
+          fromVnum: edge.from_vnum,
+          toVnum: edge.to_vnum,
+          direction: edge.direction,
+          isPortal: edge.is_portal || getZoneId(edge.from_vnum) !== getZoneId(edge.to_vnum),
+        })),
+        zoneNames: zoneNameRows.map((row) => [row.zone_id, row.name]),
+      };
+    },
+
+    async getZoneSnapshot(currentVnum: number | null): Promise<MapSnapshot> {
+      if (currentVnum === null) {
+        return { currentVnum: null, nodes: [], edges: [], zoneNames: [] };
+      }
+
+      const zoneId = getZoneId(currentVnum);
+      const zoneMin = zoneId * 100;
+      const zoneMax = zoneId * 100 + 99;
+
+      const nodes = await database<RoomRow[]>`
+        SELECT r.vnum, r.name, r.exits, r.closed_exits, r.visited,
+               COALESCE(c.color, r.color) AS color
+        FROM map_rooms r
+        LEFT JOIN room_colors c ON c.vnum = r.vnum
+        WHERE r.vnum >= ${zoneMin} AND r.vnum <= ${zoneMax}
+        ORDER BY r.vnum ASC
+      `;
+
+      const edges = await database<EdgeRow[]>`
+        SELECT from_vnum, to_vnum, direction, is_portal
+        FROM map_edges
+        WHERE (from_vnum >= ${zoneMin} AND from_vnum <= ${zoneMax})
+           OR (to_vnum >= ${zoneMin} AND to_vnum <= ${zoneMax})
         ORDER BY from_vnum ASC, to_vnum ASC, direction ASC
       `;
 
@@ -616,6 +700,47 @@ export function createMapStore(database: DatabaseClient): MapStore {
         SELECT text, ts FROM chat_messages ORDER BY ts ASC
       `;
       return rows.map((r) => ({ text: r.text, timestamp: Number(r.ts) }));
+    },
+
+    async saveMarketSale(sale: Omit<MarketSale, "id">): Promise<void> {
+      await database`
+        INSERT INTO market_sales (source, lot_number, item_name, price, is_ours, sold_at)
+        VALUES (${sale.source}, ${sale.lotNumber}, ${sale.itemName}, ${sale.price}, ${sale.isOurs}, ${sale.soldAt})
+      `;
+    },
+
+    async getMarketSales(limit = 200): Promise<MarketSale[]> {
+      const rows = await database<{
+        id: string;
+        source: string;
+        lot_number: number | null;
+        item_name: string;
+        price: number;
+        is_ours: boolean;
+        sold_at: Date;
+      }[]>`
+        SELECT id, source, lot_number, item_name, price, is_ours, sold_at
+        FROM market_sales
+        ORDER BY sold_at DESC
+        LIMIT ${limit}
+      `;
+      return rows.map((r) => ({
+        id: Number(r.id),
+        source: r.source as "bazaar" | "auction",
+        lotNumber: r.lot_number,
+        itemName: r.item_name,
+        price: r.price,
+        isOurs: r.is_ours,
+        soldAt: r.sold_at,
+      }));
+    },
+    async getMarketMaxPrice(itemName: string): Promise<number | null> {
+      const rows = await database<{ max_price: number | null }[]>`
+        SELECT MAX(price)::int AS max_price
+        FROM market_sales
+        WHERE item_name = ${itemName}
+      `;
+      return rows[0]?.max_price ?? null;
     },
   };
 }
