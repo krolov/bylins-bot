@@ -24,7 +24,7 @@ export function createItemIdentifier(deps: ItemIdentifierDeps) {
     const startIdx = itemBuffer.search(ITEM_IDENTIFY_START);
     const afterStart = itemBuffer.slice(startIdx);
 
-    const endMatch = /\n(?=\S*\d+H\s|\S*Вых:|\s*$)/.exec(afterStart.slice(afterStart.indexOf("\n") + 1));
+    const endMatch = /\n[^\n]*Вых:/.exec(afterStart.slice(afterStart.indexOf("\n") + 1));
     if (!endMatch && itemBuffer.length < ITEM_BUFFER_MAX) return;
 
     const block = endMatch

@@ -45,11 +45,20 @@ export function parseEquippedItems(text: string): Array<{ slot: string; name: st
   return result;
 }
 
+export type ContainerKey = "склад" | "расход" | "базар" | "хлам";
+
 export interface ContainerTrackerDeps {
-  onContainerContents(container: "bag" | "chest", items: Array<{ name: string; count: number }>): void;
+  onContainerContents(container: ContainerKey, items: Array<{ name: string; count: number }>): void;
   onInventoryContents(items: Array<{ name: string; count: number }>): void;
   onEquippedContents(items: Array<{ slot: string; name: string; keyword: string; wearCmd: string }>): void;
 }
+
+const CONTAINER_LABEL_MAP: Record<string, ContainerKey> = {
+  склад: "склад",
+  расход: "расход",
+  базар: "базар",
+  хлам: "хлам",
+};
 
 export function createContainerTracker(deps: ContainerTrackerDeps) {
   let triggerBuffer = "";
@@ -59,12 +68,12 @@ export function createContainerTracker(deps: ContainerTrackerDeps) {
     triggerBuffer = "";
     const stripped = buf.replace(ANSI_STRIP_REGEXP, "").replace(/\r/g, "");
 
-    if (/Заполнен|Пуст/i.test(stripped)) {
-      if (/Ваши метки:.*склад1/i.test(stripped)) {
-        deps.onContainerContents("bag", parseInspectItems(stripped));
-      }
-      if (/Ваши метки:.*склад2/i.test(stripped)) {
-        deps.onContainerContents("chest", parseInspectItems(stripped));
+    if (/Заполнен|Пуст|Внутри ничего нет/i.test(stripped)) {
+      const labelMatch = /(?:Ваши метки|Метки дружины):\s*(?:\S+\s+)?([а-яёА-ЯЁ]+)\s*$/im.exec(stripped);
+      const label = labelMatch?.[1]?.toLowerCase() ?? "";
+      const containerKey = CONTAINER_LABEL_MAP[label];
+      if (containerKey !== undefined) {
+        deps.onContainerContents(containerKey, parseInspectItems(stripped));
       }
     }
 

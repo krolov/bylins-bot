@@ -726,7 +726,7 @@ export type PartialGearItemCard = Partial<Omit<GearItemCard, "id" | "name" | "it
 
 export function parseMudIdentifyBlock(block: string): { name: string; itemType: string; partial: PartialGearItemCard } | null {
   const stripped = block.replace(/\u001b\[[0-9;]*m/g, "").replace(/\r/g, "");
-  const nameMatch = /Предмет\s+"([^"]+)",\s+тип\s*:\s*(\S+)/.exec(stripped);
+  const nameMatch = /Предмет\s+"(.+)",\s+тип\s*:\s*(\S+)/.exec(stripped);
   if (!nameMatch) return null;
 
   const name = nameMatch[1].trim();
