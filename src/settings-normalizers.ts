@@ -5,8 +5,8 @@ export function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZ
     attackCommand: typeof raw.attackCommand === "string" && raw.attackCommand.trim().length > 0 ? raw.attackCommand.trim() : "заколоть",
     skinningSalvoEnabled: raw.skinningSalvoEnabled === true,
     skinningSkinVerb: typeof raw.skinningSkinVerb === "string" && raw.skinningSkinVerb.trim().length > 0 ? raw.skinningSkinVerb.trim() : "освеж",
-    lootMeatCommand: typeof raw.lootMeatCommand === "string" ? raw.lootMeatCommand.trim() : "пол все.мяс торб",
-    lootHideCommand: typeof raw.lootHideCommand === "string" ? raw.lootHideCommand.trim() : "пол все.шкур торб",
+    lootMeatCommand: typeof raw.lootMeatCommand === "string" ? raw.lootMeatCommand.trim() : "бро все.мяс",
+    lootHideCommand: typeof raw.lootHideCommand === "string" ? raw.lootHideCommand.trim() : "пол все.шкур хлам",
   };
 }
 
