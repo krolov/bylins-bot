@@ -228,6 +228,12 @@ type ServerEvent =
             };
           }>;
         }>;
+        notFound: Array<{
+          name: string;
+          price: number;
+          listNumber: number;
+          source: "shop" | "bazaar" | "inventory";
+        }>;
       };
     }
   | { type: "repair_state"; payload: { running: boolean; message: string } }
@@ -257,10 +263,12 @@ type ServerEvent =
     }
   | { type: "gather_state"; payload: { enabled: boolean; bag: string } }
   | { type: "debug_log_state"; payload: { enabled: boolean } }
+  | { type: "inventory_sort_result"; payload: { commands: Array<{ command: string }> } }
+  | { type: "bazaar_max_price_response"; payload: { itemName: string; maxPrice: number | null } }
   | {
       type: "container_contents";
       payload: {
-        container: "bag" | "chest";
+        container: "склад" | "расход" | "базар" | "хлам";
         items: Array<{ name: string; count: number }>;
       };
     }
@@ -345,8 +353,10 @@ type ClientEvent =
   | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
   | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
   | { type: "attack_nearest" }
-  | { type: "inspect_container"; payload: { container: "bag" | "chest" } }
+  | { type: "inspect_container"; payload: { container: "склад" | "расход" | "базар" | "хлам" } }
   | { type: "inspect_inventory" }
+  | { type: "inventory_auto_sort"; payload: { items: Array<{ name: string; count: number }> } }
+  | { type: "bazaar_max_price_request"; payload: { itemName: string } }
 | { type: "equipped_scan" }
 | { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
 | { type: "farming_toggle"; payload?: { enabled?: boolean; zoneId?: number } };
@@ -372,7 +382,6 @@ const profileSelectInput = requireElement<HTMLSelectElement>("#profile-select");
 const startupCommandsInput = requireElement<HTMLTextAreaElement>("#startup-commands");
 const commandDelayInput = requireElement<HTMLInputElement>("#command-delay-ms");
 const commandInput = requireElement<HTMLInputElement>("#command-input");
-const statusElement = requireElement<HTMLElement>("#status");
 const outputElement = requireElement<HTMLElement>("#output");
 const chatOutputElement = requireElement<HTMLDivElement>("#chat-output");
 const chatClearButton = requireElement<HTMLButtonElement>("#chat-clear-btn");
@@ -408,7 +417,13 @@ const navZoneListEmpty = requireElement<HTMLParagraphElement>("#nav-zone-list-em
 const navFarZonesList = requireElement<HTMLUListElement>("#nav-far-zones-list");
 const navFarZonesListEmpty = requireElement<HTMLParagraphElement>("#nav-far-zones-list-empty");
 const navZoneAliasesTitle = requireElement<HTMLDivElement>("#nav-zone-aliases-title");
+const navZonesSearch = requireElement<HTMLInputElement>("#nav-zones-search");
+const navZonesSearchClear = requireElement<HTMLButtonElement>("#nav-zones-search-clear");
+const navPanel = requireElement<HTMLDivElement>("#nav-panel");
+const navNeighborZonesSection = requireElement<HTMLDivElement>("#nav-neighbor-zones");
+const navFarZonesSection = requireElement<HTMLDivElement>("#nav-far-zones");
 const navStatus = requireElement<HTMLDivElement>("#nav-status");
+const navCurrentRoom = requireElement<HTMLDivElement>("#nav-current-room");
 const aliasPopup = requireElement<HTMLDivElement>("#alias-popup");
 const aliasPopupTitle = requireElement<HTMLSpanElement>("#alias-popup-title");
 const aliasPopupInput = requireElement<HTMLInputElement>("#alias-popup-input");
@@ -536,9 +551,13 @@ const gatherSellButton = requireElement<HTMLButtonElement>("#gather-sell-button"
 const scratchClanBtn = requireElement<HTMLButtonElement>("#scratch-clan-btn");
 const equipAllBtn = requireElement<HTMLButtonElement>("#equip-all-btn");
 const debugLogButton = requireElement<HTMLButtonElement>("#debug-log-button");
+const inventoryAutoSortBtn = requireElement<HTMLButtonElement>("#inventory-auto-sort-btn");
 
-const bagPanelList = requireElement<HTMLTableSectionElement>("#bag-panel-list");
-const chestPanelList = requireElement<HTMLTableSectionElement>("#chest-panel-list");
+const storagePanelList = requireElement<HTMLTableSectionElement>("#storage-panel-list");
+const расходPanelList = requireElement<HTMLTableSectionElement>("#расход-panel-list");
+const bazaarPanelList = requireElement<HTMLTableSectionElement>("#bazaar-panel-list");
+const junkPanelList = requireElement<HTMLTableSectionElement>("#junk-panel-list");
+const junkSellAllBtn = requireElement<HTMLButtonElement>("#junk-sell-all-btn");
 const inventoryPanelList = requireElement<HTMLTableSectionElement>("#inventory-panel-list");
 
 const VOROZHE_CITIES = [
@@ -577,8 +596,8 @@ function defaultFarmSettings(): FarmSettings {
     attackCommand: "заколоть",
     skinningSalvoEnabled: false,
     skinningSkinVerb: "освеж",
-    lootMeatCommand: "пол все.мяс торб",
-    lootHideCommand: "пол все.шкур торб",
+    lootMeatCommand: "бро все.мяс",
+    lootHideCommand: "пол все.шкур хлам",
   };
 }
 
@@ -1090,6 +1109,15 @@ function renderNavPanel(): void {
   const currentVnum = latestMapSnapshot.currentVnum;
   const currentZone = currentVnum !== null ? getZoneId(currentVnum) : null;
 
+  if (currentVnum !== null) {
+    const currentNode = latestMapSnapshot.nodes.find(n => n.vnum === currentVnum);
+    const roomName = currentNode?.name ?? String(currentVnum);
+    navCurrentRoom.textContent = `${roomName} (${currentVnum})`;
+    navCurrentRoom.classList.remove("nav-current-room--hidden");
+  } else {
+    navCurrentRoom.classList.add("nav-current-room--hidden");
+  }
+
   navZoneAliasesTitle.textContent = currentZone !== null
     ? `Текущая зона ${zoneNames.get(currentZone) ? `— ${zoneNames.get(currentZone)}` : `(${currentZone}xx)`}`
     : "Текущая зона";
@@ -1132,56 +1160,101 @@ function renderNavPanel(): void {
   }
 
   const neighborZones = buildNeighborZones(currentZone);
-
-  navZoneList.innerHTML = "";
-  navZoneListEmpty.classList.toggle("alias-list-empty--hidden", neighborZones.length > 0);
-
-  for (const zone of neighborZones) {
-    const li = document.createElement("li");
-    li.className = "nav-zone-list__item";
-
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "nav-zone-list__name";
-    nameSpan.textContent = zoneNames.get(zone.zoneId) ?? `Зона ${zone.zoneId}xx`;
-
-    const goBtn = document.createElement("button");
-    goBtn.type = "button";
-    goBtn.className = "button-small nav-zone-list__go";
-    goBtn.textContent = "Идти";
-    goBtn.addEventListener("click", () => {
-      sendClientEvent({ type: "navigate_to", payload: { vnums: zone.entryVnums } });
-    });
-
-    li.appendChild(nameSpan);
-    li.appendChild(goBtn);
-    navZoneList.appendChild(li);
-  }
-
   const neighborZoneIdSet = new Set(neighborZones.map(z => z.zoneId));
   const farZones = buildFarZones(currentZone, neighborZoneIdSet);
 
-  navFarZonesList.innerHTML = "";
-  navFarZonesListEmpty.classList.toggle("alias-list-empty--hidden", farZones.length > 0);
+  allNeighborZones = neighborZones;
+  allFarZones = farZones;
+  allVisitedZones = buildAllVisitedZones(currentZone, neighborZoneIdSet);
+  farZonesPage = 0;
 
-  for (const zone of farZones) {
-    const li = document.createElement("li");
-    li.className = "nav-zone-list__item";
+  applyNavZonesFilter();
+}
 
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "nav-zone-list__name";
-    nameSpan.textContent = zoneNames.get(zone.zoneId) ?? `Зона ${zone.zoneId}xx`;
+function buildNavZoneItem(zone: NeighborZone | FarZone): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = "nav-zone-list__item";
 
-    const goBtn = document.createElement("button");
-    goBtn.type = "button";
-    goBtn.className = "button-small nav-zone-list__go";
-    goBtn.textContent = "Идти";
-    goBtn.addEventListener("click", () => {
-      sendClientEvent({ type: "navigate_to", payload: { vnums: zone.entryVnums } });
-    });
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "nav-zone-list__name";
+  nameSpan.textContent = zoneNames.get(zone.zoneId) ?? `Зона ${zone.zoneId}xx`;
 
-    li.appendChild(nameSpan);
-    li.appendChild(goBtn);
-    navFarZonesList.appendChild(li);
+  const goBtn = document.createElement("button");
+  goBtn.type = "button";
+  goBtn.className = "button-small nav-zone-list__go";
+  goBtn.textContent = "Идти";
+  goBtn.addEventListener("click", () => {
+    sendClientEvent({ type: "navigate_to", payload: { vnums: zone.entryVnums } });
+  });
+
+  li.appendChild(nameSpan);
+  li.appendChild(goBtn);
+  return li;
+}
+
+function applyNavZonesFilter(): void {
+  const query = navZonesSearchQuery;
+
+  const filteredNeighbor = query
+    ? allNeighborZones.filter(z => {
+        const name = zoneNames.get(z.zoneId) ?? `Зона ${z.zoneId}xx`;
+        return name.toLowerCase().includes(query);
+      })
+    : allNeighborZones;
+
+  const sourceForFar = query ? allVisitedZones : allFarZones;
+  const filteredFar = query
+    ? sourceForFar.filter(z => {
+        const name = zoneNames.get(z.zoneId) ?? `Зона ${z.zoneId}xx`;
+        return name.toLowerCase().includes(query);
+      })
+    : sourceForFar;
+
+  const neighborSectionTitle = navNeighborZonesSection.querySelector<HTMLElement>(".nav-section__title");
+
+  if (query && filteredNeighbor.length === 0) {
+    navNeighborZonesSection.style.display = "none";
+  } else {
+    navNeighborZonesSection.style.display = "";
+    if (neighborSectionTitle) neighborSectionTitle.style.display = "";
+    navZoneList.innerHTML = "";
+    navZoneListEmpty.classList.toggle("alias-list-empty--hidden", filteredNeighbor.length > 0);
+    for (const zone of filteredNeighbor) {
+      navZoneList.appendChild(buildNavZoneItem(zone));
+    }
+  }
+
+  const farSectionTitle = navFarZonesSection.querySelector<HTMLElement>(".nav-section__title");
+
+  if (query && filteredFar.length === 0) {
+    navFarZonesSection.style.display = "none";
+  } else {
+    navFarZonesSection.style.display = "";
+    if (farSectionTitle) {
+      farSectionTitle.textContent = query ? "Все зоны" : "Дальние зоны";
+    }
+    navFarZonesList.innerHTML = "";
+    navFarZonesListEmpty.classList.toggle("alias-list-empty--hidden", filteredFar.length > 0);
+
+    farZonesPage = 0;
+    const firstPage = filteredFar.slice(0, FAR_ZONES_PAGE_SIZE);
+    for (const zone of firstPage) {
+      navFarZonesList.appendChild(buildNavZoneItem(zone));
+    }
+
+    allFarZonesFiltered = filteredFar;
+  }
+}
+
+let allFarZonesFiltered: FarZone[] = [];
+
+function loadMoreFarZones(): void {
+  farZonesPage += 1;
+  const start = farZonesPage * FAR_ZONES_PAGE_SIZE;
+  const end = start + FAR_ZONES_PAGE_SIZE;
+  const nextItems = allFarZonesFiltered.slice(start, end);
+  for (const zone of nextItems) {
+    navFarZonesList.appendChild(buildNavZoneItem(zone));
   }
 }
 
@@ -1197,10 +1270,10 @@ interface FarZone {
 }
 
 function buildNeighborZones(currentZone: number | null): NeighborZone[] {
-  if (currentZone === null || latestMapSnapshot.nodes.length === 0) return [];
+  if (currentZone === null || latestFullSnapshot.nodes.length === 0) return [];
 
   const neighborZoneIds = new Set<number>();
-  for (const edge of latestMapSnapshot.edges) {
+  for (const edge of latestFullSnapshot.edges) {
     const fromZone = getZoneId(edge.fromVnum);
     const toZone = getZoneId(edge.toVnum);
     if (fromZone === currentZone && toZone !== currentZone) {
@@ -1212,12 +1285,12 @@ function buildNeighborZones(currentZone: number | null): NeighborZone[] {
   }
 
   const visitedVnums = new Set(
-    latestMapSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
+    latestFullSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
   );
 
   const result: NeighborZone[] = [];
   for (const zoneId of neighborZoneIds) {
-    const zoneVnums = latestMapSnapshot.nodes
+    const zoneVnums = latestFullSnapshot.nodes
       .filter(n => getZoneId(n.vnum) === zoneId && visitedVnums.has(n.vnum))
       .map(n => n.vnum);
     if (zoneVnums.length > 0) {
@@ -1237,11 +1310,10 @@ function buildNeighborZones(currentZone: number | null): NeighborZone[] {
 }
 
 function buildFarZones(currentZone: number | null, neighborZoneIds: Set<number>): FarZone[] {
-  if (currentZone === null || latestMapSnapshot.nodes.length === 0) return [];
+  if (currentZone === null || latestFullSnapshot.nodes.length === 0) return [];
 
-  // Build zone adjacency map from edges
   const zoneAdj = new Map<number, Set<number>>();
-  for (const edge of latestMapSnapshot.edges) {
+  for (const edge of latestFullSnapshot.edges) {
     const fromZone = getZoneId(edge.fromVnum);
     const toZone = getZoneId(edge.toVnum);
     if (fromZone === toZone) continue;
@@ -1251,16 +1323,14 @@ function buildFarZones(currentZone: number | null, neighborZoneIds: Set<number>)
     zoneAdj.get(toZone)!.add(fromZone);
   }
 
-  // BFS from currentZone, collect zones at hops 2–4
   const visited = new Set<number>([currentZone, ...neighborZoneIds]);
   const queue: Array<{ zoneId: number; hops: number }> = [];
 
-  // Seed queue with neighbors (hop=1) as already-visited boundary
   for (const nz of neighborZoneIds) {
     queue.push({ zoneId: nz, hops: 1 });
   }
 
-  const farZoneHops = new Map<number, number>(); // zoneId → hops
+  const farZoneHops = new Map<number, number>();
 
   let head = 0;
   while (head < queue.length) {
@@ -1277,12 +1347,12 @@ function buildFarZones(currentZone: number | null, neighborZoneIds: Set<number>)
   }
 
   const visitedVnums = new Set(
-    latestMapSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
+    latestFullSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
   );
 
   const result: FarZone[] = [];
   for (const [zoneId, hops] of farZoneHops) {
-    const zoneVnums = latestMapSnapshot.nodes
+    const zoneVnums = latestFullSnapshot.nodes
       .filter(n => getZoneId(n.vnum) === zoneId && visitedVnums.has(n.vnum))
       .map(n => n.vnum);
     if (zoneVnums.length > 0) {
@@ -1292,6 +1362,42 @@ function buildFarZones(currentZone: number | null, neighborZoneIds: Set<number>)
 
   result.sort((a, b) => {
     if (a.hops !== b.hops) return a.hops - b.hops;
+    const nameA = zoneNames.get(a.zoneId) ?? "";
+    const nameB = zoneNames.get(b.zoneId) ?? "";
+    if (nameA && !nameB) return -1;
+    if (!nameA && nameB) return 1;
+    return nameA.localeCompare(nameB) || a.zoneId - b.zoneId;
+  });
+
+  return result;
+}
+
+function buildAllVisitedZones(currentZone: number | null, neighborZoneIds: Set<number>): FarZone[] {
+  if (latestFullSnapshot.nodes.length === 0) return [];
+
+  const visitedVnums = new Set(
+    latestFullSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
+  );
+
+  const excludedZones = new Set<number>();
+  if (currentZone !== null) excludedZones.add(currentZone);
+  for (const nz of neighborZoneIds) excludedZones.add(nz);
+
+  const zoneVnumsMap = new Map<number, number[]>();
+  for (const node of latestFullSnapshot.nodes) {
+    if (!visitedVnums.has(node.vnum)) continue;
+    const zoneId = getZoneId(node.vnum);
+    if (excludedZones.has(zoneId)) continue;
+    if (!zoneVnumsMap.has(zoneId)) zoneVnumsMap.set(zoneId, []);
+    zoneVnumsMap.get(zoneId)!.push(node.vnum);
+  }
+
+  const result: FarZone[] = [];
+  for (const [zoneId, vnums] of zoneVnumsMap) {
+    result.push({ zoneId, hops: 0, entryVnums: vnums });
+  }
+
+  result.sort((a, b) => {
     const nameA = zoneNames.get(a.zoneId) ?? "";
     const nameB = zoneNames.get(b.zoneId) ?? "";
     if (nameA && !nameB) return -1;
@@ -1346,6 +1452,7 @@ let latestMapSnapshot: MapSnapshotPayload = {
   edges: [],
   zoneNames: [],
 };
+let latestFullSnapshot: MapSnapshotPayload = latestMapSnapshot;
 let globalMapZoom = 0.6;
 let globalMapOpen = false;
 let globalMapSearchQuery = "";
@@ -1375,6 +1482,13 @@ let farm2ZoneId: number | null = null;
 let farm2PendingActivation = false;
 let zoneScriptState: ServerEvent & { type: "zone_script_state" } | null = null;
 let trackerCurrentVnum: number | null = null;
+
+let navZonesSearchQuery = "";
+let farZonesPage = 0;
+const FAR_ZONES_PAGE_SIZE = 30;
+let allFarZones: FarZone[] = [];
+let allNeighborZones: NeighborZone[] = [];
+let allVisitedZones: FarZone[] = [];
 
 const AVAILABLE_ZONE_SCRIPTS: Array<{ zoneId: number; name: string; hundreds: number[]; stepLabels: string[] }> = [
   {
@@ -1410,10 +1524,59 @@ const AVAILABLE_ZONE_SCRIPTS: Array<{ zoneId: number; name: string; hundreds: nu
   {
     zoneId: 280,
     name: "Стоянка половцев",
-    hundreds: [280, 281, 283, 284, 285, 286, 289],
+    hundreds: [280],
     stepLabels: [
       "Идти к входу в стоянку (28000)",
       "Зачистить стоянку половцев",
+    ],
+  },
+  {
+    zoneId: 286,
+    name: "Птичий бор (286)",
+    hundreds: [286],
+    stepLabels: [
+      "Идти к входу в зону (28664)",
+      "Зачистить основную часть зоны (без камыша)",
+      "Идти к камышу (28629)",
+      "Раздвинуть камыш",
+      "Зачистить камышовую часть (стелс)",
+      "Вернуться к входу (28664)",
+    ],
+  },
+  {
+    zoneId: 111,
+    name: "Лесная зона (111)",
+    hundreds: [111],
+    stepLabels: [
+      "Идти к входу в лесную зону (11186)",
+      "Зачистить лесную зону (стелс)",
+    ],
+  },
+  {
+    zoneId: 102,
+    name: "Дубрава (102)",
+    hundreds: [102],
+    stepLabels: [
+      "Идти к входу в дубраву (10200)",
+      "Зачистить дубраву (стелс)",
+    ],
+  },
+  {
+    zoneId: 103,
+    name: "Латинский монастырь (103)",
+    hundreds: [103],
+    stepLabels: [
+      "Идти к входу в монастырь (10300)",
+      "Зачистить латинский монастырь (стелс)",
+    ],
+  },
+  {
+    zoneId: 104,
+    name: "Купеческая усадьба (104)",
+    hundreds: [104],
+    stepLabels: [
+      "Идти к входу в усадьбу (10400)",
+      "Зачистить купеческую усадьбу (стелс)",
     ],
   },
 ];
@@ -1486,11 +1649,23 @@ interface GridCell {
 }
 
 const gridLayout = new Map<number, GridCell>();
+const collisionDisplacedVnums = new Set<number>();
 const ZONE_GAP = 8;
 const COMPONENT_GAP = 4;
 
 let currentZLevel = 0;
 let availableZLevels: number[] = [0];
+
+// P2: DOM cache — room tiles keyed by vnum, valid for the current rendered layout
+const mapRoomElements = new Map<number, HTMLDivElement>();
+// P1: snapshot fingerprint — if nodes+edges count unchanged and only currentVnum moved,
+// skip full integrateSnapshot and only patch the current-room CSS class
+let lastLayoutNodeCount = -1;
+let lastLayoutEdgeCount = -1;
+let lastRenderedZone: number | null = null;
+let lastRenderedZLevel = -999;
+let lastRenderedMinX = 0;
+let lastRenderedMaxY = 0;
 
 function cellKey(x: number, y: number): string {
   return `${x},${y}`;
@@ -1502,6 +1677,7 @@ function placeRoom(vnum: number, x: number, y: number, zLevel: number): void {
 
 function resetGridLayout(): void {
   gridLayout.clear();
+  collisionDisplacedVnums.clear();
 }
 
 function getZoneId(vnum: number): number {
@@ -1539,19 +1715,12 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
 
     adj.get(edge.fromVnum)?.push({ toVnum: edge.toVnum, direction: edge.direction });
 
-    const reverseDirection =
-      edge.direction === "north"
-        ? "south"
-        : edge.direction === "south"
-          ? "north"
-          : edge.direction === "east"
-            ? "west"
-            : edge.direction === "west"
-              ? "east"
-              : null;
-
-    if (reverseDirection) {
-      adj.get(edge.toVnum)?.push({ toVnum: edge.fromVnum, direction: reverseDirection });
+    const reverseDir = OPPOSITE_DIR[edge.direction];
+    if (reverseDir && adj.has(edge.toVnum)) {
+      const toNeighbors = adj.get(edge.toVnum)!;
+      if (!toNeighbors.some((n) => n.toVnum === edge.fromVnum)) {
+        toNeighbors.push({ toVnum: edge.fromVnum, direction: reverseDir });
+      }
     }
   }
 
@@ -1589,52 +1758,142 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
 
     const adj = zoneAdj.get(zoneId) ?? new Map<number, { toVnum: number; direction: string }[]>();
     const localCoords = new Map<number, { x: number; y: number }>();
-    const occupiedCells = new Map<string, number>(); // cellKey → vnum
+
+    // Pre-compute zLevel for each horizontal component using up/down edges
+    // so that components on different levels don't compete for grid cells
+    const zoneUpDownEdges = edges.filter(
+      (e) => (e.direction === "up" || e.direction === "down") &&
+        !e.isPortal &&
+        getZoneId(e.fromVnum) === zoneId &&
+        getZoneId(e.toVnum) === zoneId,
+    );
+    const preHorizAdj = new Map<number, number[]>();
+    for (const e of edges) {
+      if (!DIR_DELTA[e.direction] || e.isPortal || getZoneId(e.fromVnum) !== zoneId || getZoneId(e.toVnum) !== zoneId) continue;
+      const fa = preHorizAdj.get(e.fromVnum) ?? []; fa.push(e.toVnum); preHorizAdj.set(e.fromVnum, fa);
+      const ta = preHorizAdj.get(e.toVnum) ?? []; ta.push(e.fromVnum); preHorizAdj.set(e.toVnum, ta);
+    }
+    const preCompOf = new Map<number, number>();
+    for (const v of zoneNodes) {
+      if (preCompOf.has(v)) continue;
+      const q = [v]; preCompOf.set(v, v);
+      while (q.length > 0) {
+        const c = q.shift()!;
+        for (const nb of preHorizAdj.get(c) ?? []) {
+          if (!preCompOf.has(nb)) { preCompOf.set(nb, v); q.push(nb); }
+        }
+      }
+    }
+    const preUpDownAdj = new Map<number, { toVnum: number; delta: number }[]>();
+    for (const e of zoneUpDownEdges) {
+      const delta = e.direction === "up" ? 1 : -1;
+      const fa = preUpDownAdj.get(e.fromVnum) ?? []; fa.push({ toVnum: e.toVnum, delta }); preUpDownAdj.set(e.fromVnum, fa);
+      const ta = preUpDownAdj.get(e.toVnum) ?? []; ta.push({ toVnum: e.fromVnum, delta: -delta }); preUpDownAdj.set(e.toVnum, ta);
+    }
+    const preCompZLevel = new Map<number, number>();
+    for (const v of [...zoneNodes].sort((a, b) => a - b)) {
+      const compId = preCompOf.get(v)!;
+      if (preCompZLevel.has(compId)) continue;
+      let inferredZ = 0;
+      outer: for (const vv of zoneNodes) {
+        if (preCompOf.get(vv) !== compId) continue;
+        for (const { toVnum, delta } of preUpDownAdj.get(vv) ?? []) {
+          const toComp = preCompOf.get(toVnum);
+          if (toComp !== undefined && toComp !== compId && preCompZLevel.has(toComp)) {
+            inferredZ = preCompZLevel.get(toComp)! - delta;
+            break outer;
+          }
+        }
+      }
+      preCompZLevel.set(compId, inferredZ);
+    }
+    const preVnumZLevel = new Map<number, number>();
+    for (const v of zoneNodes) {
+      preVnumZLevel.set(v, preCompZLevel.get(preCompOf.get(v)!) ?? 0);
+    }
+
+    const occupiedByLevel = new Map<number, Map<string, number>>();
+    const getOccupied = (zl: number): Map<string, number> => {
+      if (!occupiedByLevel.has(zl)) occupiedByLevel.set(zl, new Map());
+      return occupiedByLevel.get(zl)!;
+    };
+
     const unplaced = new Set(zoneNodes);
     let componentOriginX = 0;
     let localMinX = 0;
     let localMaxX = 0;
     let localMinY = 0;
     let localMaxY = 0;
-    let isFirstComponent = true;
 
     const findFreeCell = (
       preferredX: number,
       preferredY: number,
       dx: number,
       dy: number,
+      zl: number,
     ): { x: number; y: number } => {
-      // Shift perpendicular to the movement direction, step=2 to maintain grid spacing
       const perpStep = 2;
       const isHorizontal = dx !== 0;
+      const occ = getOccupied(zl);
       for (let offset = perpStep; offset <= 8; offset += perpStep) {
         for (const sign of [1, -1]) {
           const cx = preferredX + (isHorizontal ? 0 : sign * offset);
           const cy = preferredY + (isHorizontal ? sign * offset : 0);
-          if (!occupiedCells.has(cellKey(cx, cy))) return { x: cx, y: cy };
+          if (!occ.has(cellKey(cx, cy))) return { x: cx, y: cy };
         }
       }
-      // Fallback: spiral search for any empty cell
       for (let radius = 1; radius <= 20; radius++) {
         for (let sx = -radius; sx <= radius; sx++) {
           for (let sy = -radius; sy <= radius; sy++) {
             if (Math.abs(sx) !== radius && Math.abs(sy) !== radius) continue;
             const cx = preferredX + sx * 2;
             const cy = preferredY + sy * 2;
-            if (!occupiedCells.has(cellKey(cx, cy))) return { x: cx, y: cy };
+            if (!occ.has(cellKey(cx, cy))) return { x: cx, y: cy };
           }
         }
       }
       return { x: preferredX, y: preferredY };
     };
 
-    while (unplaced.size > 0) {
-      const componentRoot = isFirstComponent && zoneId === rootZoneId && unplaced.has(rootVnum)
-        ? rootVnum
-        : Math.min(...unplaced);
+    const componentOriginByLevel = new Map<number, number>();
 
-      localCoords.set(componentRoot, { x: componentOriginX, y: 0 });
-      occupiedCells.set(cellKey(componentOriginX, 0), componentRoot);
+    const dbOnlyAdj = new Map<number, { toVnum: number; direction: string }[]>();
+    for (const vnum of zoneNodes) dbOnlyAdj.set(vnum, []);
+    for (const edge of edges) {
+      if (!DIR_DELTA[edge.direction] || edge.isPortal) continue;
+      if (getZoneId(edge.fromVnum) !== zoneId || getZoneId(edge.toVnum) !== zoneId) continue;
+      dbOnlyAdj.get(edge.fromVnum)?.push({ toVnum: edge.toVnum, direction: edge.direction });
+    }
+
+    const doubleStepPairs = new Set<string>();
+    for (const [vnum, neighbors] of adj) {
+      for (const { toVnum, direction } of neighbors) {
+        const reverseDir = OPPOSITE_DIR[direction];
+        if (!reverseDir) continue;
+        const toNeighbors = adj.get(toVnum) ?? [];
+        const dbNeighbors = dbOnlyAdj.get(vnum) ?? [];
+        for (const { toVnum: middleVnum } of toNeighbors) {
+          if (middleVnum === vnum) continue;
+          if (dbNeighbors.some((n) => n.toVnum === middleVnum)) continue;
+          const middleNeighbors = adj.get(middleVnum) ?? [];
+          const linksBack = middleNeighbors.some((n) => n.toVnum === vnum && n.direction === reverseDir);
+          const linksForward = middleNeighbors.some((n) => n.toVnum === toVnum);
+          if (linksBack && linksForward) {
+            doubleStepPairs.add(`${vnum}:${direction}:${toVnum}`);
+            doubleStepPairs.add(`${toVnum}:${reverseDir}:${vnum}`);
+          }
+        }
+      }
+    }
+
+    while (unplaced.size > 0) {
+      const componentRoot = Math.min(...unplaced);
+      const rootZL = preVnumZLevel.get(componentRoot) ?? 0;
+      const occ = getOccupied(rootZL);
+      const originX = componentOriginByLevel.get(rootZL) ?? 0;
+
+      localCoords.set(componentRoot, { x: originX, y: 0 });
+      occ.set(cellKey(originX, 0), componentRoot);
       unplaced.delete(componentRoot);
 
       const queue = [componentRoot];
@@ -1642,26 +1901,29 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
         const current = queue.shift()!;
         const currentCoord = localCoords.get(current);
         if (!currentCoord) continue;
+        const currentZL = preVnumZLevel.get(current) ?? 0;
+        const currentOcc = getOccupied(currentZL);
 
         for (const neighbor of adj.get(current) ?? []) {
           if (localCoords.has(neighbor.toVnum)) continue;
           const delta = DIR_DELTA[neighbor.direction];
           if (!delta) continue;
 
-          const preferredX = currentCoord.x + delta[0];
-          const preferredY = currentCoord.y + delta[1];
+          const step = doubleStepPairs.has(`${current}:${neighbor.direction}:${neighbor.toVnum}`) ? 2 : 1;
+          const preferredX = currentCoord.x + delta[0] * step;
+          const preferredY = currentCoord.y + delta[1] * step;
 
           let nextCoord: { x: number; y: number };
-          const existingOccupant = occupiedCells.get(cellKey(preferredX, preferredY));
+          const existingOccupant = currentOcc.get(cellKey(preferredX, preferredY));
           if (existingOccupant !== undefined && existingOccupant !== neighbor.toVnum) {
-            // Collision: another room already occupies the preferred cell — find a free one
-            nextCoord = findFreeCell(preferredX, preferredY, delta[0], delta[1]);
+            nextCoord = findFreeCell(preferredX, preferredY, delta[0], delta[1], currentZL);
+            collisionDisplacedVnums.add(neighbor.toVnum);
           } else {
             nextCoord = { x: preferredX, y: preferredY };
           }
 
           localCoords.set(neighbor.toVnum, nextCoord);
-          occupiedCells.set(cellKey(nextCoord.x, nextCoord.y), neighbor.toVnum);
+          currentOcc.set(cellKey(nextCoord.x, nextCoord.y), neighbor.toVnum);
           unplaced.delete(neighbor.toVnum);
           queue.push(neighbor.toVnum);
 
@@ -1672,8 +1934,13 @@ function integrateSnapshot(snapshot: MapSnapshotPayload): void {
         }
       }
 
-      componentOriginX = localMaxX + COMPONENT_GAP;
-      isFirstComponent = false;
+      const levelMaxX = Math.max(
+        ...[...localCoords.entries()]
+          .filter(([v]) => (preVnumZLevel.get(v) ?? 0) === rootZL)
+          .map(([, c]) => c.x),
+        componentOriginByLevel.get(rootZL) ?? 0,
+      );
+      componentOriginByLevel.set(rootZL, levelMaxX + COMPONENT_GAP);
     }
 
     const zoneOffsetX = isFirstZone ? 0 : previousZoneMaxX + ZONE_GAP - localMinX;
@@ -1782,7 +2049,40 @@ function updateZLevelControls(): void {
   zLevelUpButton.disabled = currentZLevel >= (availableZLevels[availableZLevels.length - 1] ?? 0);
 }
 
-function renderGridMap(snapshot: MapSnapshotPayload): void {
+function renderGridMap(snapshot: MapSnapshotPayload, onlyCurrentChanged = false): void {
+  if (onlyCurrentChanged && mapRoomElements.size > 0) {
+    const nodeColorByVnum = new Map(snapshot.nodes.map((n) => [n.vnum, n.color ?? null]));
+    for (const [vnum, el] of mapRoomElements) {
+      const isCurrent = vnum === snapshot.currentVnum;
+      el.className = isCurrent ? "map-room map-room--current" : "map-room";
+      if (!isCurrent) {
+        const color = nodeColorByVnum.get(vnum);
+        el.style.background = color ?? "";
+      } else {
+        el.style.background = "";
+      }
+    }
+    if (snapshot.currentVnum != null) {
+      const cell = gridLayout.get(snapshot.currentVnum);
+      if (cell) {
+        requestAnimationFrame(() => {
+          const cx = (cell.gridX - lastRenderedMinX + PAD) * CELL + TILE / 2;
+          const cy = (lastRenderedMaxY - cell.gridY + PAD) * CELL + TILE / 2;
+          const targetScrollLeft = cx - mapCanvasElement.clientWidth / 2;
+          const targetScrollTop = cy - mapCanvasElement.clientHeight / 2;
+          console.log("[scroll-fast] vnum=" + snapshot.currentVnum + " gridX=" + cell.gridX + " gridY=" + cell.gridY + " minX=" + lastRenderedMinX + " maxY=" + lastRenderedMaxY + " cx=" + cx + " cy=" + cy + " clientW=" + mapCanvasElement.clientWidth + " clientH=" + mapCanvasElement.clientHeight + " canvasH=" + mapCanvasElement.scrollHeight + " targetL=" + targetScrollLeft + " targetT=" + targetScrollTop);
+          mapCanvasElement.scrollLeft = targetScrollLeft;
+          mapCanvasElement.scrollTop = targetScrollTop;
+          console.log("[scroll-fast-after] actualL=" + mapCanvasElement.scrollLeft + " actualT=" + mapCanvasElement.scrollTop);
+        });
+      } else {
+        console.log("[scroll-fast] cell NOT FOUND for vnum=" + snapshot.currentVnum + " gridLayout.size=" + gridLayout.size);
+      }
+    }
+    return;
+  }
+
+  mapRoomElements.clear();
   mapCanvasElement.innerHTML = "";
 
   if (snapshot.nodes.length === 0) {
@@ -1807,6 +2107,12 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
     Array.from(levelCells.keys()).filter((vnum) => nodeByVnum.has(vnum))
   );
 
+  // P0: O(1) position lookup — replaces O(n) Array.from().some/find scans inside loops
+  const cellByPos = new Map<string, GridCell>();
+  for (const cell of levelCells.values()) {
+    cellByPos.set(cellKey(cell.gridX, cell.gridY), cell);
+  }
+
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const cell of levelCells.values()) {
     if (cell.gridX < minX) minX = cell.gridX;
@@ -1823,13 +2129,8 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
       if (!delta) continue;
       const nx = cell.gridX + delta[0];
       const ny = cell.gridY + delta[1];
-      const matchingNeighbor = Array.from(levelCells.values()).some(
-        (candidate) =>
-          candidate.vnum !== cell.vnum &&
-          candidate.gridX === nx &&
-          candidate.gridY === ny &&
-          visibleVnums.has(candidate.vnum)
-      );
+      const neighbor = cellByPos.get(cellKey(nx, ny));
+      const matchingNeighbor = neighbor !== undefined && neighbor.vnum !== cell.vnum && visibleVnums.has(neighbor.vnum);
       if (matchingNeighbor) continue;
       if (nx < minX) minX = nx;
       if (ny < minY) minY = ny;
@@ -1842,6 +2143,9 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
   const rows = maxY - minY + 1;
   const canvasW = (cols + PAD * 2) * CELL;
   const canvasH = (rows + PAD * 2) * CELL;
+
+  lastRenderedMinX = minX;
+  lastRenderedMaxY = maxY;
 
   function toRenderY(gy: number): number {
     return maxY - gy;
@@ -1865,11 +2169,70 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
   svg.style.pointerEvents = "none";
 
   const confirmedEdgeKeys = new Set<string>();
+  const edgeDirectionsByVnum = new Map<number, Set<string>>();
   for (const edge of snapshot.edges) {
     confirmedEdgeKeys.add(`${edge.fromVnum}:${edge.direction}`);
+    if (levelCells.has(edge.fromVnum)) {
+      let dirs = edgeDirectionsByVnum.get(edge.fromVnum);
+      if (!dirs) { dirs = new Set(); edgeDirectionsByVnum.set(edge.fromVnum, dirs); }
+      dirs.add(edge.direction);
+    }
+  }
+
+  const componentIdOf = new Map<number, number>();
+  {
+    const horizAdj = new Map<number, number[]>();
+    for (const edge of snapshot.edges) {
+      if (edge.isPortal || !DIR_DELTA[edge.direction]) continue;
+      if (!levelCells.has(edge.fromVnum) || !levelCells.has(edge.toVnum)) continue;
+      const fz = getZoneId(edge.fromVnum), tz = getZoneId(edge.toVnum);
+      if (fz !== tz) continue;
+      const fa = horizAdj.get(edge.fromVnum) ?? []; fa.push(edge.toVnum); horizAdj.set(edge.fromVnum, fa);
+      const ta = horizAdj.get(edge.toVnum) ?? []; ta.push(edge.fromVnum); horizAdj.set(edge.toVnum, ta);
+    }
+    for (const vnum of levelCells.keys()) {
+      if (componentIdOf.has(vnum)) continue;
+      const q = [vnum];
+      componentIdOf.set(vnum, vnum);
+      while (q.length > 0) {
+        const cur = q.shift()!;
+        for (const nb of horizAdj.get(cur) ?? []) {
+          if (!componentIdOf.has(nb) && levelCells.has(nb)) {
+            componentIdOf.set(nb, vnum);
+            q.push(nb);
+          }
+        }
+      }
+    }
   }
 
   const portalVnums = new Set<number>();
+  const REVERSE_DIR: Record<string, string> = { north: "south", south: "north", east: "west", west: "east" };
+  const drawIntraPortal = (cellA: { gridX: number; gridY: number }, dir: string): void => {
+    const dirDelta = DIR_DELTA[dir];
+    if (!dirDelta) return;
+    const [cx, cy] = tileCenter(cellA.gridX, cellA.gridY);
+    const reach = TILE / 2 + (CELL - TILE) / 2 + 10;
+    const ex = cx + dirDelta[0] * reach;
+    const ey = cy - dirDelta[1] * reach;
+    const stem = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    stem.setAttribute("x1", String(cx));
+    stem.setAttribute("y1", String(cy));
+    stem.setAttribute("x2", String(ex));
+    stem.setAttribute("y2", String(ey));
+    stem.setAttribute("class", "map-edge map-edge--intra-portal-stem");
+    svg.appendChild(stem);
+    const crossHalf = 6;
+    const [ppx, ppy] = dirDelta[0] !== 0 ? [0, crossHalf] : [crossHalf, 0];
+    const cross = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    cross.setAttribute("x1", String(ex - ppx));
+    cross.setAttribute("y1", String(ey - ppy));
+    cross.setAttribute("x2", String(ex + ppx));
+    cross.setAttribute("y2", String(ey + ppy));
+    cross.setAttribute("class", "map-edge--intra-portal-cross");
+    svg.appendChild(cross);
+  };
+
   const drawnEdges = new Set<string>();
   for (const edge of snapshot.edges) {
     const fromCell = levelCells.get(edge.fromVnum);
@@ -1878,34 +2241,36 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
 
     if (edge.isPortal) {
       portalVnums.add(edge.fromVnum);
-      if (!visibleVnums.has(edge.fromVnum)) continue;
+      if (!toCell) {
+        if (!visibleVnums.has(edge.fromVnum)) continue;
 
-      const [cx, cy] = tileCenter(fromCell.gridX, fromCell.gridY);
-      const dirDelta = DIR_DELTA[edge.direction];
-      if (!dirDelta) continue;
+        const [cx, cy] = tileCenter(fromCell.gridX, fromCell.gridY);
+        const dirDelta = DIR_DELTA[edge.direction];
+        if (!dirDelta) continue;
 
-      const reach = TILE / 2 + (CELL - TILE) / 2 + 10;
-      const ex = cx + dirDelta[0] * reach;
-      const ey = cy - dirDelta[1] * reach;
+        const reach = TILE / 2 + (CELL - TILE) / 2 + 10;
+        const ex = cx + dirDelta[0] * reach;
+        const ey = cy - dirDelta[1] * reach;
 
-      const stem = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      stem.setAttribute("x1", String(cx));
-      stem.setAttribute("y1", String(cy));
-      stem.setAttribute("x2", String(ex));
-      stem.setAttribute("y2", String(ey));
-      stem.setAttribute("class", "map-edge map-edge--portal-stem");
-      svg.appendChild(stem);
+        const stem = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        stem.setAttribute("x1", String(cx));
+        stem.setAttribute("y1", String(cy));
+        stem.setAttribute("x2", String(ex));
+        stem.setAttribute("y2", String(ey));
+        stem.setAttribute("class", "map-edge map-edge--portal-stem");
+        svg.appendChild(stem);
 
-      const crossHalf = 6;
-      const [px, py] = dirDelta[0] !== 0 ? [0, crossHalf] : [crossHalf, 0];
-      const cross = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      cross.setAttribute("x1", String(ex - px));
-      cross.setAttribute("y1", String(ey - py));
-      cross.setAttribute("x2", String(ex + px));
-      cross.setAttribute("y2", String(ey + py));
-      cross.setAttribute("class", "map-edge--portal-cross");
-      svg.appendChild(cross);
-      continue;
+        const crossHalf = 6;
+        const [px, py] = dirDelta[0] !== 0 ? [0, crossHalf] : [crossHalf, 0];
+        const cross = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        cross.setAttribute("x1", String(ex - px));
+        cross.setAttribute("y1", String(ey - py));
+        cross.setAttribute("x2", String(ex + px));
+        cross.setAttribute("y2", String(ey + py));
+        cross.setAttribute("class", "map-edge--portal-cross");
+        svg.appendChild(cross);
+        continue;
+      }
     }
 
     if (!toCell) continue;
@@ -1914,6 +2279,24 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
     const edgeKey = [edge.fromVnum, edge.toVnum].sort().join("-");
     if (drawnEdges.has(edgeKey)) continue;
     drawnEdges.add(edgeKey);
+
+    const isCrossComponent =
+      getZoneId(edge.fromVnum) === getZoneId(edge.toVnum) &&
+      componentIdOf.get(edge.fromVnum) !== componentIdOf.get(edge.toVnum);
+
+    const isCollisionEdge =
+      collisionDisplacedVnums.has(edge.fromVnum) || collisionDisplacedVnums.has(edge.toVnum);
+
+    const gridDist = Math.abs(fromCell.gridX - toCell.gridX) + Math.abs(fromCell.gridY - toCell.gridY);
+    const isPhysicallyAdjacent = gridDist <= 2;
+
+    if ((isCrossComponent || isCollisionEdge) && !isPhysicallyAdjacent) {
+      drawIntraPortal(fromCell, edge.direction);
+      if (toCell && REVERSE_DIR[edge.direction]) {
+        drawIntraPortal(toCell, REVERSE_DIR[edge.direction]);
+      }
+      continue;
+    }
 
     const [x1, y1] = tileCenter(fromCell.gridX, fromCell.gridY);
     const [x2, y2] = tileCenter(toCell.gridX, toCell.gridY);
@@ -1964,9 +2347,7 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
 
     const upDownExits = (node.exits ?? []).filter((d) => d === "up" || d === "down");
     if (upDownExits.length > 0) {
-      const edgeDirections = new Set(
-        snapshot.edges.filter((e) => e.fromVnum === cell.vnum).map((e) => e.direction)
-      );
+      const edgeDirections = edgeDirectionsByVnum.get(cell.vnum) ?? new Set<string>();
       const closedSet = new Set(node.closedExits ?? []);
 
       for (const dir of upDownExits) {
@@ -1984,6 +2365,7 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
     }
 
     wrapper.appendChild(tile);
+    mapRoomElements.set(cell.vnum, tile);
   }
 
   const STUB = 14;
@@ -1999,13 +2381,10 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
 
       const nx = cell.gridX + delta[0];
       const ny = cell.gridY + delta[1];
-      const neighborCell = Array.from(levelCells.values()).find(
-        (candidate) =>
-          candidate.vnum !== cell.vnum &&
-          candidate.gridX === nx &&
-          candidate.gridY === ny &&
-          visibleVnums.has(candidate.vnum)
-      );
+      const candidate = cellByPos.get(cellKey(nx, ny));
+      const neighborCell = (candidate !== undefined && candidate.vnum !== cell.vnum && visibleVnums.has(candidate.vnum))
+        ? candidate
+        : undefined;
 
       if (neighborCell) {
         const edgeConfirmed =
@@ -2098,6 +2477,7 @@ function renderGridMap(snapshot: MapSnapshotPayload): void {
     const snapCell = currentCell;
     requestAnimationFrame(() => {
       const [cx, cy] = tileCenter(snapCell.gridX, snapCell.gridY);
+      console.log("[scroll-full] vnum=" + snapshot.currentVnum + " gridX=" + snapCell.gridX + " gridY=" + snapCell.gridY + " cx=" + cx + " cy=" + cy + " clientW=" + mapCanvasElement.clientWidth + " clientH=" + mapCanvasElement.clientHeight + " canvasH=" + mapCanvasElement.scrollHeight);
       mapCanvasElement.scrollLeft = cx - mapCanvasElement.clientWidth / 2;
       mapCanvasElement.scrollTop = cy - mapCanvasElement.clientHeight / 2;
     });
@@ -2173,13 +2553,46 @@ function createDefaultTerminalStyle(): TerminalStyle {
 
 function updateMap(snapshot: MapSnapshotPayload, fullReset: boolean): void {
   latestMapSnapshot = snapshot;
+  if (fullReset) {
+    latestFullSnapshot = snapshot;
+  } else {
+    latestFullSnapshot = {
+      ...latestFullSnapshot,
+      currentVnum: snapshot.currentVnum,
+      zoneNames: snapshot.zoneNames.length > 0 ? snapshot.zoneNames : latestFullSnapshot.zoneNames,
+    };
+  }
   for (const [zoneId, name] of snapshot.zoneNames) {
     zoneNames.set(zoneId, name);
   }
   saveZoneNames(zoneNames);
+
+  const currentZoneId = snapshot.currentVnum != null ? getZoneId(snapshot.currentVnum) : null;
+  const expectedZLevel =
+    snapshot.currentVnum != null && gridLayout.has(snapshot.currentVnum)
+      ? gridLayout.get(snapshot.currentVnum)!.zLevel
+      : currentZLevel;
+  const graphUnchanged =
+    !fullReset &&
+    snapshot.nodes.length === lastLayoutNodeCount &&
+    snapshot.edges.length === lastLayoutEdgeCount &&
+    currentZoneId === lastRenderedZone &&
+    expectedZLevel === lastRenderedZLevel;
+
+  if (graphUnchanged) {
+    renderGridMap(snapshot, true);
+    renderNavPanel();
+    return;
+  }
+
+  lastLayoutNodeCount = snapshot.nodes.length;
+  lastLayoutEdgeCount = snapshot.edges.length;
+
   resetGridLayout();
   integrateSnapshot(snapshot);
-  renderGridMap(snapshot);
+  lastRenderedZone = currentZoneId;
+  lastRenderedZLevel = currentZLevel;
+  renderGridMap(snapshot, false);
   renderNavPanel();
 }
 
@@ -2385,7 +2798,6 @@ function routeZoneEdge(
 
   const DIRS: [number, number][] = [
     [1, 0], [-1, 0], [0, 1], [0, -1],
-    [1, 1], [-1, 1], [1, -1], [-1, -1],
   ];
 
   type Node = { x: number; y: number; g: number; f: number; parent: Node | null };
@@ -2421,11 +2833,7 @@ function routeZoneEdge(
       const isTarget = nx === tx && ny === ty;
       if (!isTarget && occupied.has(nk)) continue;
 
-      const moveCost = dx !== 0 && dy !== 0 ? 1.4 : 1.0;
-      const crossPenalty = !isTarget && (
-        (dx !== 0 && dy !== 0 && (occupied.has(key(current.x + dx, current.y)) || occupied.has(key(current.x, current.y + dy))))
-      ) ? 3 : 0;
-      const g = current.g + moveCost + crossPenalty;
+      const g = current.g + 1.0;
       const h = Math.abs(tx - nx) + Math.abs(ty - ny);
       const existing = open.get(nk);
       if (!existing || g < existing.g) {
@@ -2488,9 +2896,6 @@ function renderZoneMap(snapshot: MapSnapshotPayload): void {
     const half = G_TILE / 2;
     const ex = dx === 0 ? 0 : dx > 0 ? half : -half;
     const ey = dy === 0 ? 0 : dy > 0 ? half : -half;
-    if (dx !== 0 && dy !== 0) {
-      return [cx + ex, cy + ey];
-    }
     return [cx + ex, cy + ey];
   }
 
@@ -2703,7 +3108,7 @@ function updateGlobalMapZoomLabel(): void {
 function openGlobalMap(): void {
   globalMapOpen = true;
   globalMapModal.classList.remove("global-map-modal--hidden");
-  renderZoneMap(latestMapSnapshot);
+  renderZoneMap(latestFullSnapshot);
 }
 
 function applyGlobalMapSearch(): void {
@@ -2744,13 +3149,13 @@ document.addEventListener("keydown", (e) => {
 globalMapZoomIn.addEventListener("click", () => {
   globalMapZoom = Math.min(2.0, parseFloat((globalMapZoom + 0.2).toFixed(1)));
   updateGlobalMapZoomLabel();
-  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+  if (globalMapOpen) renderZoneMap(latestFullSnapshot);
 });
 
 globalMapZoomOut.addEventListener("click", () => {
   globalMapZoom = Math.max(0.2, parseFloat((globalMapZoom - 0.2).toFixed(1)));
   updateGlobalMapZoomLabel();
-  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+  if (globalMapOpen) renderZoneMap(latestFullSnapshot);
 });
 
 let globalMapDragOrigin: { x: number; y: number; scrollLeft: number; scrollTop: number } | null = null;
@@ -2839,7 +3244,7 @@ function saveZoneRename(): void {
   saveZoneNames(zoneNames);
   sendClientEvent({ type: "zone_name_set", payload: { zoneId: globalMapZoneRenameId, name: name || null } });
   closeZoneRenamePopup();
-  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+  if (globalMapOpen) renderZoneMap(latestFullSnapshot);
 }
 
 zoneRenameSave.addEventListener("click", saveZoneRename);
@@ -2851,7 +3256,7 @@ zoneRenameDelete.addEventListener("click", () => {
     sendClientEvent({ type: "zone_name_set", payload: { zoneId: globalMapZoneRenameId, name: null } });
   }
   closeZoneRenamePopup();
-  if (globalMapOpen) renderZoneMap(latestMapSnapshot);
+  if (globalMapOpen) renderZoneMap(latestFullSnapshot);
 });
 zoneRenameInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") saveZoneRename();
@@ -3106,10 +3511,6 @@ function appendSystemLine(text: string): void {
   appendOutput(`\n[system] ${text}\n`);
 }
 
-function setStatus(text: string): void {
-  statusElement.textContent = text;
-}
-
 function updateConnectButton(state: "idle" | "connecting" | "connected" | "disconnected" | "error"): void {
   const isActive = state === "connected" || state === "connecting";
   connectForm.querySelectorAll<HTMLButtonElement>("button[type='submit']").forEach((btn) => {
@@ -3234,7 +3635,6 @@ function createSocket(): WebSocket {
 
   nextSocket.addEventListener("open", () => {
     reconnectDelay = 1000;
-    setStatus("Connected");
     flushPendingQueue();
     sendClientEvent({ type: "send", payload: { command: "осм склад1" } });
     sendClientEvent({ type: "send", payload: { command: "осм склад2" } });
@@ -3254,7 +3654,6 @@ function createSocket(): WebSocket {
         commandDelayInput.value = String(message.payload.commandDelayMs);
         break;
       case "status":
-        setStatus(message.payload.message);
         appendSystemLine(message.payload.message);
         updateConnectButton(message.payload.state);
         break;
@@ -3262,7 +3661,6 @@ function createSocket(): WebSocket {
         appendOutput(message.payload.text);
         break;
       case "error":
-        setStatus(message.payload.message);
         appendSystemLine(`error: ${message.payload.message}`);
         break;
       case "map_snapshot":
@@ -3299,6 +3697,7 @@ function createSocket(): WebSocket {
       case "aliases_snapshot":
         currentAliases = message.payload.aliases;
         renderNavPanel();
+        lastLayoutNodeCount = -1;
         renderGridMap(latestMapSnapshot);
         break;
       case "navigation_state":
@@ -3400,11 +3799,16 @@ function createSocket(): WebSocket {
         break;
       }
       case "container_contents": {
-        renderContainerList(
-          message.payload.container === "bag" ? bagPanelList : chestPanelList,
-          message.payload.items,
-          message.payload.container,
-        );
+        const containerPanelMap = {
+          склад: storagePanelList,
+          расход: расходPanelList,
+          базар: bazaarPanelList,
+          хлам: junkPanelList,
+        };
+        const panelList = containerPanelMap[message.payload.container];
+        if (panelList) {
+          renderContainerList(panelList, message.payload.items, message.payload.container);
+        }
         break;
       }
       case "inventory_contents": {
@@ -3451,6 +3855,28 @@ function createSocket(): WebSocket {
         }
         break;
       }
+      case "inventory_sort_result": {
+        for (const { command } of message.payload.commands) {
+          sendClientEvent({ type: "send", payload: { command } });
+        }
+        break;
+      }
+      case "bazaar_max_price_response": {
+        const { itemName, maxPrice } = message.payload;
+        if (maxPrice === null) break;
+        const selector = `tr[data-item-name="${CSS.escape(itemName)}"]`;
+        const panelSources = [bazaarPanelList, расходPanelList];
+        for (const panel of panelSources) {
+          panel.querySelectorAll<HTMLTableRowElement>(selector).forEach((row) => {
+            const sellBtn = row.querySelector<HTMLButtonElement>(".container-panel__sell-btn");
+            if (sellBtn) {
+              sellBtn.dataset["sellPrice"] = String(maxPrice);
+              sellBtn.title = `Продать за ${maxPrice} кун`;
+            }
+          });
+        }
+        break;
+      }
     }
   });
 
@@ -3461,7 +3887,6 @@ function createSocket(): WebSocket {
   });
 
   nextSocket.addEventListener("error", () => {
-    setStatus("Socket error — reconnecting…");
   });
 
   return nextSocket;
@@ -3668,6 +4093,7 @@ zLevelDownButton.addEventListener("click", () => {
   const idx = availableZLevels.indexOf(currentZLevel);
   if (idx > 0) {
     currentZLevel = availableZLevels[idx - 1]!;
+    lastRenderedZLevel = currentZLevel;
     updateZLevelControls();
     renderGridMap(latestMapSnapshot);
   }
@@ -3677,6 +4103,7 @@ zLevelUpButton.addEventListener("click", () => {
   const idx = availableZLevels.indexOf(currentZLevel);
   if (idx < availableZLevels.length - 1) {
     currentZLevel = availableZLevels[idx + 1]!;
+    lastRenderedZLevel = currentZLevel;
     updateZLevelControls();
     renderGridMap(latestMapSnapshot);
   }
@@ -3786,6 +4213,23 @@ gatherSellButton.addEventListener("click", () => {
   sendClientEvent({ type: "gather_sell_bag" });
 });
 
+junkSellAllBtn.addEventListener("click", () => {
+  const rows = junkPanelList.querySelectorAll<HTMLTableRowElement>("tr");
+  rows.forEach((row) => {
+    const nameCell = row.querySelector(".container-panel__name");
+    const countCell = row.querySelector(".container-panel__count");
+    const name = nameCell?.textContent?.trim() ?? "";
+    if (!name) return;
+    const kw = name.split(/\s+/)[0] ?? name;
+    const countText = countCell?.textContent?.replace("×", "").trim() ?? "";
+    const count = countText ? parseInt(countText, 10) : 1;
+    for (let i = 0; i < count; i++) {
+      sendClientEvent({ type: "send", payload: { command: `взя ${kw} хлам` } });
+      sendClientEvent({ type: "send", payload: { command: `прод ${kw}` } });
+    }
+  });
+});
+
 scratchClanBtn.addEventListener("click", () => {
   pendingEquippedAction = "scratch";
   sendClientEvent({ type: "equipped_scan" });
@@ -3800,17 +4244,38 @@ debugLogButton.addEventListener("click", () => {
   sendClientEvent({ type: "debug_log_toggle" });
 });
 
+inventoryAutoSortBtn.addEventListener("click", () => {
+  const rows = inventoryPanelList.querySelectorAll<HTMLTableRowElement>("tr");
+  const items: Array<{ name: string; count: number }> = [];
+  rows.forEach((row) => {
+    const countCell = row.querySelector(".container-panel__count");
+    const nameCell = row.querySelector(".container-panel__name");
+    const name = nameCell?.textContent?.trim() ?? "";
+    const countText = countCell?.textContent?.replace("×", "").trim() ?? "";
+    const count = countText ? parseInt(countText, 10) : 1;
+    if (name) items.push({ name, count });
+  });
+  if (items.length > 0) {
+    sendClientEvent({ type: "inventory_auto_sort", payload: { items } });
+  }
+});
+
 document.querySelectorAll<HTMLButtonElement>(".container-panel__refresh").forEach((btn) => {
   btn.addEventListener("click", () => {
-    const container = btn.dataset["container"] as "bag" | "chest" | undefined;
-    if (container === "bag") {
-      sendClientEvent({ type: "send", payload: { command: "осм склад1" } });
-    } else if (container === "chest") {
-      sendClientEvent({ type: "send", payload: { command: "осм склад2" } });
+    const container = btn.dataset["container"] as "склад" | "расход" | "базар" | "хлам" | undefined;
+    if (container === "склад" || container === "расход" || container === "базар" || container === "хлам") {
+      sendClientEvent({ type: "send", payload: { command: `осм ${container}` } });
     } else {
       sendClientEvent({ type: "send", payload: { command: "инв" } });
     }
   });
+});
+
+requireElement<HTMLButtonElement>("#refresh-all-containers-btn").addEventListener("click", () => {
+  for (const container of ["склад", "расход", "базар", "хлам"] as const) {
+    sendClientEvent({ type: "send", payload: { command: `осм ${container}` } });
+  }
+  sendClientEvent({ type: "send", payload: { command: "инв" } });
 });
 
 compareButton.addEventListener("click", openCompareAdvisor);
@@ -3885,6 +4350,12 @@ type CompareScanPayload = {
         wearSlots: string[];
       };
     }>;
+  }>;
+  notFound: Array<{
+    name: string;
+    price: number;
+    listNumber: number;
+    source: "shop" | "bazaar" | "inventory";
   }>;
 };
 
@@ -4014,44 +4485,92 @@ function renderComparePanel(payload: CompareScanPayload): void {
       compareAdvisorTableBody.appendChild(tr);
     }
   }
+
+  if (payload.hasShop && payload.notFound.length > 0) {
+    const headerRow = document.createElement("tr");
+    headerRow.className = "compare-advisor__notfound-header-row";
+    const headerTd = document.createElement("td");
+    headerTd.colSpan = 5;
+    headerTd.className = "compare-advisor__notfound-header";
+    headerTd.textContent = `Не в базе (${payload.notFound.length})`;
+    headerRow.appendChild(headerTd);
+    compareAdvisorTableBody.appendChild(headerRow);
+
+    for (const item of payload.notFound) {
+      const tr = document.createElement("tr");
+      tr.className = "compare-advisor__notfound-row";
+
+      const nameTd = document.createElement("td");
+      nameTd.className = "compare-advisor__name-cell compare-advisor__item-name compare-advisor__name-cell--indent";
+      nameTd.colSpan = 2;
+      nameTd.textContent = item.name;
+
+      const priceTd = document.createElement("td");
+      priceTd.textContent = `${item.price}`;
+
+      const sourceTd = document.createElement("td");
+      sourceTd.textContent = `м:${item.listNumber}`;
+
+      const actionTd = document.createElement("td");
+      const charBtn = document.createElement("button");
+      charBtn.type = "button";
+      charBtn.className = "compare-advisor__char-btn button-secondary button-small";
+      charBtn.textContent = `хар ${item.listNumber}`;
+      charBtn.addEventListener("click", () => {
+        sendClientEvent({ type: "send", payload: { command: `характ ${item.listNumber}` } });
+        tr.style.display = "none";
+      });
+      actionTd.appendChild(charBtn);
+
+      tr.appendChild(nameTd);
+      tr.appendChild(priceTd);
+      tr.appendChild(sourceTd);
+      tr.appendChild(actionTd);
+      compareAdvisorTableBody.appendChild(tr);
+    }
+  }
 }
 
 // ─── Container / Inventory lists ──────────────────────────────────────────────
 
 function renderItemRow(
   item: { name: string; count: number },
-  sellCommand: (kw: string, count: number) => string,
-  dropCommand: (kw: string, count: number) => string,
+  sellCommand: ((kw: string, count: number) => string) | null,
+  dropCommand: ((kw: string, count: number) => string) | null,
 ): HTMLTableRowElement {
   const keyword = item.name.split(/\s+/)[0] ?? item.name;
   const tr = document.createElement("tr");
 
   const tdSell = document.createElement("td");
   tdSell.className = "container-panel__sell-cell";
-  const sellBtn = document.createElement("button");
-  sellBtn.type = "button";
-  sellBtn.className = "container-panel__sell-btn";
-  sellBtn.textContent = "П";
-  sellBtn.title = "Продать";
-  sellBtn.addEventListener("click", () => {
-    const cmd = sellCommand(keyword, item.count);
-    for (const part of cmd.split(";;").map((s) => s.trim()).filter(Boolean)) {
-      sendClientEvent({ type: "send", payload: { command: part } });
-    }
-  });
-  tdSell.appendChild(sellBtn);
+  if (sellCommand !== null) {
+    const sellBtn = document.createElement("button");
+    sellBtn.type = "button";
+    sellBtn.className = "container-panel__sell-btn";
+    sellBtn.textContent = "П";
+    sellBtn.title = "Продать";
+    sellBtn.addEventListener("click", () => {
+      const cmd = sellCommand(keyword, item.count);
+      for (const part of cmd.split(";;").map((s) => s.trim()).filter(Boolean)) {
+        sendClientEvent({ type: "send", payload: { command: part } });
+      }
+    });
+    tdSell.appendChild(sellBtn);
+  }
 
   const tdDrop = document.createElement("td");
   tdDrop.className = "container-panel__sell-cell";
-  const dropBtn = document.createElement("button");
-  dropBtn.type = "button";
-  dropBtn.className = "container-panel__sell-btn";
-  dropBtn.textContent = "В";
-  dropBtn.title = "Выбросить";
-  dropBtn.addEventListener("click", () => {
-    sendClientEvent({ type: "send", payload: { command: dropCommand(keyword, item.count) } });
-  });
-  tdDrop.appendChild(dropBtn);
+  if (dropCommand !== null) {
+    const dropBtn = document.createElement("button");
+    dropBtn.type = "button";
+    dropBtn.className = "container-panel__sell-btn";
+    dropBtn.textContent = "В";
+    dropBtn.title = "Выбросить";
+    dropBtn.addEventListener("click", () => {
+      sendClientEvent({ type: "send", payload: { command: dropCommand(keyword, item.count) } });
+    });
+    tdDrop.appendChild(dropBtn);
+  }
 
   const tdCount = document.createElement("td");
   tdCount.className = "container-panel__count";
@@ -4072,21 +4591,103 @@ function sortItems<T extends { name: string; count: number }>(items: T[]): T[] {
   return [...items].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "ru"));
 }
 
+function renderBazaarSellRow(
+  item: { name: string; count: number },
+  takeFrom: string,
+  dropCommand: ((kw: string, count: number) => string) | null,
+): HTMLTableRowElement {
+  const kw = item.name.split(/\s+/)[0] ?? item.name;
+  const tr = document.createElement("tr");
+  tr.dataset["itemName"] = item.name;
+
+  const tdSell = document.createElement("td");
+  tdSell.className = "container-panel__sell-cell";
+  const sellBtn = document.createElement("button");
+  sellBtn.type = "button";
+  sellBtn.className = "container-panel__sell-btn";
+  sellBtn.textContent = "П";
+  sellBtn.title = "Продать";
+  sellBtn.dataset["takeCmd"] = `взя ${kw} ${takeFrom}`;
+  sellBtn.dataset["sellPrice"] = "";
+  sellBtn.addEventListener("click", () => {
+    const price = sellBtn.dataset["sellPrice"];
+    if (!price) return;
+    sendClientEvent({ type: "send", payload: { command: sellBtn.dataset["takeCmd"] ?? "" } });
+    sendClientEvent({ type: "send", payload: { command: `базар выставить ${kw} ${price}` } });
+  });
+  tdSell.appendChild(sellBtn);
+
+  const tdDrop = document.createElement("td");
+  tdDrop.className = "container-panel__sell-cell";
+  if (dropCommand !== null) {
+    const dropBtn = document.createElement("button");
+    dropBtn.type = "button";
+    dropBtn.className = "container-panel__sell-btn";
+    dropBtn.textContent = "В";
+    dropBtn.title = "Выбросить";
+    dropBtn.addEventListener("click", () => {
+      sendClientEvent({ type: "send", payload: { command: dropCommand(kw, item.count) } });
+    });
+    tdDrop.appendChild(dropBtn);
+  }
+
+  const tdCount = document.createElement("td");
+  tdCount.className = "container-panel__count";
+  tdCount.textContent = item.count > 1 ? `×${item.count}` : "";
+
+  const tdName = document.createElement("td");
+  tdName.className = "container-panel__name";
+  tdName.textContent = item.name;
+
+  tr.appendChild(tdSell);
+  tr.appendChild(tdDrop);
+  tr.appendChild(tdCount);
+  tr.appendChild(tdName);
+  return tr;
+}
+
 function renderContainerList(
   tbody: HTMLTableSectionElement,
   items: Array<{ name: string; count: number }>,
-  container: string,
+  container: "склад" | "расход" | "базар" | "хлам",
 ): void {
   tbody.innerHTML = "";
-  const containerKw = container === "bag" ? "торб" : "сунду";
-  const isChest = container === "chest";
   for (const item of sortItems(items)) {
-    tbody.appendChild(renderItemRow(
-      item,
-      (kw) => isChest ? `базар выставить ${kw} 200` : `взя ${kw} склад1;;продать ${kw}`,
-      (kw, count) => count > 1 ? `бросить все.${kw} ${containerKw}` : `бросить ${kw}`,
-    ));
+    if (container === "склад") {
+      tbody.appendChild(renderItemRow(
+        item,
+        null,
+        (k, count) => count > 1 ? `бросить все.${k} склад` : `бросить ${k} склад`,
+      ));
+    } else if (container === "расход") {
+      tbody.appendChild(renderBazaarSellRow(
+        item,
+        "расход",
+        (k, count) => count > 1 ? `бросить все.${k} расход` : `бросить ${k} расход`,
+      ));
+    } else if (container === "базар") {
+      tbody.appendChild(renderBazaarSellRow(item, "базар", null));
+    } else {
+      tbody.appendChild(renderItemRow(
+        item,
+        (k) => `взя ${k} хлам;;прод ${k}`,
+        (k) => `взя ${k} хлам;;бро ${k}`,
+      ));
+    }
   }
+  if (container === "базар" || container === "расход") {
+    requestBazaarMaxPrices(tbody);
+  }
+}
+
+function requestBazaarMaxPrices(tbody: HTMLTableSectionElement): void {
+  const rows = tbody.querySelectorAll<HTMLTableRowElement>("tr[data-item-name]");
+  rows.forEach((row) => {
+    const itemName = row.dataset["itemName"];
+    if (itemName) {
+      sendClientEvent({ type: "bazaar_max_price_request", payload: { itemName } });
+    }
+  });
 }
 
 function renderInventoryList(
@@ -4095,11 +4696,60 @@ function renderInventoryList(
 ): void {
   tbody.innerHTML = "";
   for (const item of sortItems(items)) {
-    tbody.appendChild(renderItemRow(
-      item,
-      (kw) => `продать ${kw}`,
-      (kw, count) => count > 1 ? `бросить все.${kw}` : `бросить ${kw}`,
-    ));
+    const kw = item.name.split(/\s+/)[0] ?? item.name;
+    const tr = document.createElement("tr");
+
+    const tdSort = document.createElement("td");
+    tdSort.className = "container-panel__sell-cell";
+    const sortBtn = document.createElement("button");
+    sortBtn.type = "button";
+    sortBtn.className = "container-panel__sell-btn";
+    sortBtn.textContent = "⇅";
+    sortBtn.title = "Авто: базар или хлам";
+    sortBtn.addEventListener("click", () => {
+      sendClientEvent({ type: "inventory_auto_sort", payload: { items: [item] } });
+    });
+    tdSort.appendChild(sortBtn);
+
+    const tdSell = document.createElement("td");
+    tdSell.className = "container-panel__sell-cell";
+    const sellBtn = document.createElement("button");
+    sellBtn.type = "button";
+    sellBtn.className = "container-panel__sell-btn";
+    sellBtn.textContent = "П";
+    sellBtn.title = "Продать";
+    sellBtn.addEventListener("click", () => {
+      sendClientEvent({ type: "send", payload: { command: `прод ${kw}` } });
+    });
+    tdSell.appendChild(sellBtn);
+
+    const tdDrop = document.createElement("td");
+    tdDrop.className = "container-panel__sell-cell";
+    const dropBtn = document.createElement("button");
+    dropBtn.type = "button";
+    dropBtn.className = "container-panel__sell-btn";
+    dropBtn.textContent = "В";
+    dropBtn.title = "Выбросить";
+    dropBtn.addEventListener("click", () => {
+      const cmd = item.count > 1 ? `бросить все.${kw}` : `бросить ${kw}`;
+      sendClientEvent({ type: "send", payload: { command: cmd } });
+    });
+    tdDrop.appendChild(dropBtn);
+
+    const tdCount = document.createElement("td");
+    tdCount.className = "container-panel__count";
+    tdCount.textContent = item.count > 1 ? `×${item.count}` : "";
+
+    const tdName = document.createElement("td");
+    tdName.className = "container-panel__name";
+    tdName.textContent = item.name;
+
+    tr.appendChild(tdSort);
+    tr.appendChild(tdSell);
+    tr.appendChild(tdDrop);
+    tr.appendChild(tdCount);
+    tr.appendChild(tdName);
+    tbody.appendChild(tr);
   }
 }
 
@@ -4667,6 +5317,28 @@ document.addEventListener("keydown", (e) => {
 });
 
 initVorozheModal();
+
+navPanel.addEventListener("scroll", () => {
+  if (navPanel.scrollTop + navPanel.clientHeight >= navPanel.scrollHeight - 100) {
+    const totalRendered = (farZonesPage + 1) * FAR_ZONES_PAGE_SIZE;
+    if (totalRendered < allFarZonesFiltered.length) {
+      loadMoreFarZones();
+    }
+  }
+});
+
+navZonesSearch.addEventListener("input", () => {
+  navZonesSearchQuery = navZonesSearch.value.trim().toLowerCase();
+  navZonesSearchClear.classList.toggle("nav-zones-search__clear--hidden", navZonesSearchQuery === "");
+  applyNavZonesFilter();
+});
+
+navZonesSearchClear.addEventListener("click", () => {
+  navZonesSearch.value = "";
+  navZonesSearchQuery = "";
+  navZonesSearchClear.classList.add("nav-zones-search__clear--hidden");
+  applyNavZonesFilter();
+});
 
 renderFarmButton();
 updateActionBadges();

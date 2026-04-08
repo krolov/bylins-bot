@@ -33,8 +33,6 @@
         </div>
       </div>
 
-      <span id="status" class="topbar__status">Idle</span>
-
       <textarea id="startup-commands" name="startupCommands" hidden></textarea>
       <input id="command-delay-ms" name="commandDelayMs" type="number" hidden />
     </header>
@@ -132,34 +130,59 @@
           <button id="container-tab-inventory" type="button" class="map-tab map-tab--active">Инвентарь</button>
           <button id="container-tab-nav" type="button" class="map-tab">Навигация</button>
           <button id="container-tab-script" type="button" class="map-tab">Скрипт</button>
+          <button id="refresh-all-containers-btn" type="button" class="button-secondary button-small" title="Обновить все контейнеры">↺ все</button>
         </div>
 
         <div id="container-panel-inventory" class="container-panels__panel">
-        <div class="container-panel" id="bag-panel">
+        <div class="container-panel" id="storage-panel">
           <div class="container-panel__header">
-            <span class="container-panel__title">Торба</span>
-            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="bag" title="Обновить">↺</button>
+            <span class="container-panel__title">Склад</span>
+            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="склад" title="Обновить">↺</button>
           </div>
           <div class="container-panel__scroll">
             <table class="container-panel__table">
-              <tbody id="bag-panel-list"></tbody>
+              <tbody id="storage-panel-list"></tbody>
             </table>
           </div>
         </div>
-        <div class="container-panel" id="chest-panel">
+        <div class="container-panel" id="расход-panel">
           <div class="container-panel__header">
-            <span class="container-panel__title">Сундук</span>
-            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="chest" title="Обновить">↺</button>
+            <span class="container-panel__title">Расход</span>
+            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="расход" title="Обновить">↺</button>
           </div>
           <div class="container-panel__scroll">
             <table class="container-panel__table">
-              <tbody id="chest-panel-list"></tbody>
+              <tbody id="расход-panel-list"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="container-panel" id="bazaar-panel">
+          <div class="container-panel__header">
+            <span class="container-panel__title">Базар</span>
+            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="базар" title="Обновить">↺</button>
+          </div>
+          <div class="container-panel__scroll">
+            <table class="container-panel__table">
+              <tbody id="bazaar-panel-list"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="container-panel" id="junk-panel">
+          <div class="container-panel__header">
+            <span class="container-panel__title">Хлам</span>
+            <button type="button" id="junk-sell-all-btn" class="button-secondary button-small" title="Продать всё из хлама">Продать все</button>
+            <button type="button" class="container-panel__refresh button-secondary button-small" data-container="хлам" title="Обновить">↺</button>
+          </div>
+          <div class="container-panel__scroll">
+            <table class="container-panel__table">
+              <tbody id="junk-panel-list"></tbody>
             </table>
           </div>
         </div>
         <div class="container-panel" id="inventory-panel">
           <div class="container-panel__header">
             <span class="container-panel__title">Инвентарь</span>
+            <button type="button" id="inventory-auto-sort-btn" class="button-secondary button-small" title="Разложить по базару/хламу">⇅</button>
             <button type="button" class="container-panel__refresh container-panel__refresh--inventory button-secondary button-small" title="Обновить">↺</button>
           </div>
           <div class="container-panel__scroll">
@@ -173,6 +196,11 @@
         <div id="container-panel-nav" class="container-panels__panel container-panels__panel--hidden">
           <div id="nav-status" class="nav-status nav-status--hidden"></div>
           <div id="nav-panel" class="nav-panel">
+            <div class="nav-zones-search-wrap">
+              <input id="nav-zones-search" type="search" class="nav-zones-search__input" placeholder="Поиск зон..." autocomplete="off" />
+              <button id="nav-zones-search-clear" type="button" class="nav-zones-search__clear nav-zones-search__clear--hidden" aria-label="Очистить">✕</button>
+            </div>
+            <div id="nav-current-room" class="nav-current-room nav-current-room--hidden"></div>
             <div id="nav-zone-aliases" class="nav-section">
               <div class="nav-section__title" id="nav-zone-aliases-title">Текущая зона</div>
               <ul id="nav-alias-list" class="alias-list"></ul>
