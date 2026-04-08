@@ -31,12 +31,14 @@ function getArg(name: string): string | null {
 const vnumsArg = getArg("vnums");
 const excludeArg = getArg("exclude");
 const startArg = getArg("start");
+const endArg = getArg("end");
 
 if (!vnumsArg) {
-  console.error("Usage: bun scripts/tsp-route.ts --vnums <range|list> [--exclude <vnum,...>] [--start <vnum>]");
+  console.error("Usage: bun scripts/tsp-route.ts --vnums <range|list> [--exclude <vnum,...>] [--start <vnum>] [--end <vnum>]");
   console.error("  --vnums  28000-28057  or  28000,28001,28005");
   console.error("  --exclude  28033,28048");
   console.error("  --start  28000  (starting vnum, defaults to first in list)");
+  console.error("  --end    28000  (ending vnum, appended via BFS after TSP)");
   process.exit(1);
 }
 
@@ -86,14 +88,9 @@ async function loadGraph(vnums: number[]): Promise<Graph> {
   for (const v of vnums) graph.set(v, new Map());
 
   for (const { from_vnum, to_vnum } of rows) {
-    // Only add edge if both endpoints are in our allowed set
-    // (or at least from_vnum is — to_vnum may be outside zone and that's ok
-    //  for pathfinding through corridors)
     if (!graph.has(from_vnum)) graph.set(from_vnum, new Map());
     if (!graph.has(to_vnum)) graph.set(to_vnum, new Map());
     graph.get(from_vnum)!.set(to_vnum, 1);
-    // Assume bidirectional (MUD maps usually are)
-    graph.get(to_vnum)!.set(from_vnum, 1);
   }
 
   return graph;
@@ -232,6 +229,19 @@ async function main(): Promise<void> {
   }
 
   const route = nearestNeighbourTSP(graph, reachableVnums, startVnum);
+
+  if (endArg) {
+    const endVnum = Number(endArg);
+    const last = route[route.length - 1];
+    if (last !== endVnum) {
+      const endPath = bfsPath(graph, last, endVnum);
+      if (endPath) {
+        for (let i = 1; i < endPath.length; i++) route.push(endPath[i]);
+      } else {
+        console.error(`Warning: no path from ${last} to end vnum ${endVnum}`);
+      }
+    }
+  }
 
   console.error(`Route: ${route.length} steps covering ${reachableVnums.length} targets.`);
   console.error(`Unique vnums in route: ${new Set(route).size}`);
