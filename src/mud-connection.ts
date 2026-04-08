@@ -14,6 +14,17 @@ const SB = 250;
 const SE = 240;
 
 const STARTUP_COMMAND_FALLBACK_MS = 1200;
+const KEEPALIVE_INTERVAL_MS = 30_000;
+const RECONNECT_DELAYS_MS = [5_000, 10_000, 20_000, 30_000, 60_000];
+const RECONNECT_MAX_ATTEMPTS = RECONNECT_DELAYS_MS.length;
+
+interface ResolvedConnectConfig {
+  host: string;
+  port: number;
+  tls: boolean;
+  startupCommands: string[];
+  commandDelayMs: number;
+}
 
 export interface Session {
   decoder: TextDecoder;
@@ -25,6 +36,12 @@ export interface Session {
   startupPlan?: StartupPlan;
   telnetState: TelnetState;
   mudTarget?: string;
+  lastCommandAt: number;
+  keepaliveTimer?: ReturnType<typeof setInterval>;
+  disconnectedByUser: boolean;
+  lastConnectConfig?: ResolvedConnectConfig;
+  reconnectTimer?: ReturnType<typeof setTimeout>;
+  reconnectAttempt: number;
 }
 
 interface StartupPlan {
@@ -70,6 +87,9 @@ export function createMudConnection(deps: MudConnectionDeps) {
         : "Ready to connect.",
       connectAttemptId: 0,
       telnetState: createTelnetState(),
+      lastCommandAt: 0,
+      disconnectedByUser: false,
+      reconnectAttempt: 0,
     };
   }
 
@@ -81,6 +101,20 @@ export function createMudConnection(deps: MudConnectionDeps) {
     if (session.startupPlan?.fallbackTimer) {
       clearTimeout(session.startupPlan.fallbackTimer);
       session.startupPlan.fallbackTimer = undefined;
+    }
+  }
+
+  function clearKeepalive(session: Session): void {
+    if (session.keepaliveTimer) {
+      clearInterval(session.keepaliveTimer);
+      session.keepaliveTimer = undefined;
+    }
+  }
+
+  function clearReconnect(session: Session): void {
+    if (session.reconnectTimer) {
+      clearTimeout(session.reconnectTimer);
+      session.reconnectTimer = undefined;
     }
   }
 
@@ -221,6 +255,7 @@ export function createMudConnection(deps: MudConnectionDeps) {
     command: string,
     source: string,
   ): void {
+    s.lastCommandAt = Date.now();
     deps.trackOutgoingCommand(command);
     writeMudCommand(socket, command);
     deps.logEvent(ws, "mud-out", deps.sanitizeLogText(command), {
@@ -233,9 +268,12 @@ export function createMudConnection(deps: MudConnectionDeps) {
     ws: BunServerWebSocket | null,
     session: Session,
     reason: string,
-    options: { closeSocket?: boolean; state?: "disconnected" | "error" } = {},
+    options: { closeSocket?: boolean; state?: "disconnected" | "error"; byUser?: boolean } = {},
   ): void {
     const tcpSocket = session.tcpSocket;
+    const wasConnected = session.connected;
+    const lastConfig = session.lastConnectConfig;
+
     session.connectAttemptId += 1;
     session.tcpSocket = undefined;
     session.connected = false;
@@ -244,8 +282,14 @@ export function createMudConnection(deps: MudConnectionDeps) {
     session.decoder = new TextDecoder();
     session.telnetState = createTelnetState();
     clearStartupFallback(session);
+    clearKeepalive(session);
+    clearReconnect(session);
     session.startupPlan = undefined;
     session.mudTarget = undefined;
+
+    if (options.byUser) {
+      session.disconnectedByUser = true;
+    }
 
     if (options.closeSocket !== false && tcpSocket) {
       tcpSocket.close();
@@ -258,6 +302,24 @@ export function createMudConnection(deps: MudConnectionDeps) {
     });
 
     deps.updateSessionStatus(options.state ?? "disconnected", reason);
+
+    if (!options.byUser && lastConfig) {
+      const attempt = session.reconnectAttempt;
+      if (attempt < RECONNECT_MAX_ATTEMPTS) {
+        const delay = RECONNECT_DELAYS_MS[attempt] ?? RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1];
+        session.reconnectAttempt += 1;
+        deps.logEvent(ws, "session", `Auto-reconnect in ${delay / 1000}s... (attempt ${session.reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`);
+        deps.updateSessionStatus("connecting", `Auto-reconnect in ${delay / 1000}s... (attempt ${session.reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`);
+        session.reconnectTimer = setTimeout(() => {
+          session.reconnectTimer = undefined;
+          session.disconnectedByUser = false;
+          void connectToMud(ws, session, lastConfig);
+        }, delay);
+      } else {
+        deps.logEvent(ws, "session", `Auto-reconnect exhausted after ${RECONNECT_MAX_ATTEMPTS} attempts. Manual reconnect required.`);
+        deps.updateSessionStatus(options.state ?? "disconnected", `Reconnect failed after ${RECONNECT_MAX_ATTEMPTS} attempts.`);
+      }
+    }
   }
 
   function normalizeConnectPayload(payload: ConnectPayload | undefined) {
@@ -286,9 +348,13 @@ export function createMudConnection(deps: MudConnectionDeps) {
   async function connectToMud(
     ws: BunServerWebSocket | null,
     session: Session,
-    payload: ConnectPayload | undefined,
+    payload: ConnectPayload | ResolvedConnectConfig | undefined,
   ): Promise<void> {
-    const config = normalizeConnectPayload(payload);
+    const config = "host" in (payload ?? {}) && "startupCommands" in (payload ?? {})
+      ? (payload as ResolvedConnectConfig)
+      : normalizeConnectPayload(payload as ConnectPayload | undefined);
+    session.lastConnectConfig = config;
+    session.disconnectedByUser = false;
     session.mudTarget = `${config.host}:${config.port}${config.tls ? " (tls)" : ""}`;
     const existingSocket = session.tcpSocket;
     const attemptId = beginAttempt(session, config.startupCommands, config.commandDelayMs);
@@ -322,11 +388,24 @@ export function createMudConnection(deps: MudConnectionDeps) {
 
             session.tcpSocket = socket;
             session.connected = true;
+            session.reconnectAttempt = 0;
+            session.lastCommandAt = Date.now();
             scheduleStartupFallback(ws, session, attemptId);
             session.state = "connected";
             session.statusMessage = `Connected to ${config.host}:${config.port}.`;
             deps.logEvent(ws, "session", "Connected to MUD.", { target: session.mudTarget });
             deps.updateSessionStatus("connected", `Connected to ${config.host}:${config.port}.`);
+
+            clearKeepalive(session);
+            session.keepaliveTimer = setInterval(() => {
+              if (!isCurrentAttempt(session, attemptId) || !session.connected || !session.tcpSocket) {
+                clearKeepalive(session);
+                return;
+              }
+              if (Date.now() - session.lastCommandAt >= KEEPALIVE_INTERVAL_MS) {
+                writeAndLogMudCommand(ws, session, session.tcpSocket, "", "keepalive");
+              }
+            }, KEEPALIVE_INTERVAL_MS);
           },
           data(socket, data) {
             if (!isCurrentAttempt(session, attemptId)) {
@@ -406,7 +485,7 @@ export function createMudConnection(deps: MudConnectionDeps) {
       ws: BunServerWebSocket | null,
       reason: string,
       options?: { closeSocket?: boolean; state?: "disconnected" | "error" },
-    ) => teardownSession(ws, session, reason, options),
+    ) => teardownSession(ws, session, reason, { ...options, byUser: true }),
     writeAndLogMudCommand: (
       ws: BunServerWebSocket | null,
       socket: MudSocket,

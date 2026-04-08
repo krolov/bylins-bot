@@ -8,6 +8,7 @@ import { findPath } from "./map/pathfinder.ts";
 import type { PathStep } from "./map/pathfinder.ts";
 import { createParserState, feedText } from "./map/parser.ts";
 import { createMapStore } from "./map/store.ts";
+import type { MarketSale } from "./map/store.ts";
 import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker.ts";
 import { createMover } from "./map/mover.ts";
 import type { Direction } from "./map/types.ts";
@@ -73,6 +74,35 @@ const mudConnection = createMudConnection({
         });
       }
     }
+    const marketSales = extractMarketSales(text);
+    if (marketSales.length > 0) {
+      const now = new Date();
+      for (const sale of marketSales) {
+        void mapStore.saveMarketSale({ ...sale, soldAt: now }).catch((error: unknown) => {
+          logEvent(ws, "error", error instanceof Error ? `Market sale persist error: ${error.message}` : "Market sale persist error.");
+        });
+      }
+    }
+    if (LOOT_FROM_CORPSE_RE.test(text)) {
+      const stripped = text.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
+      LOOT_FROM_CORPSE_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = LOOT_FROM_CORPSE_RE.exec(stripped)) !== null) {
+        const name = m[1]?.trim();
+        if (name) pendingLootItems.set(name, (pendingLootItems.get(name) ?? 0) + 1);
+      }
+      scheduleLootSort();
+    }
+    if (PICKUP_FROM_GROUND_RE.test(text)) {
+      const stripped = text.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
+      PICKUP_FROM_GROUND_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = PICKUP_FROM_GROUND_RE.exec(stripped)) !== null) {
+        const name = m[1]?.trim();
+        if (name) pendingLootItems.set(name, (pendingLootItems.get(name) ?? 0) + 1);
+      }
+      scheduleLootSort();
+    }
     void persistParsedMapData(text, ws).catch((error: unknown) => {
       logEvent(ws, "error", error instanceof Error ? `Automapper error: ${error.message}` : "Automapper error.");
     });
@@ -96,7 +126,25 @@ const sharedSession = mudConnection.session;
 let activeProfileId: string = readLastProfileId();
 const recentOutputChunks: string[] = [];
 
-const CHAT_FILTER_NAMES = ["Незнакомец", "Ворожея", "Кузнец", "Хитрый лавочник", "Здоровый дядька", "Владелец двора", "Раненый воин", "Травник", "Старец", "Пленник", "Девка для утех", "Леха Небокоптитель", "Боярин Вейдеров", "Старик", "Варяг", "Вальгрим", "Седовласый старик", "Пастух", "Краснодеревщик", "Староста", "Полуслепой немощный колдун", "Голодный зверюга", "Дружинник", "Желтоглазый дух леса", "Наворопник", "Нарочный", "Отшельник", "Боевой конь", "Ослик Иа", "Полосатый пчел", "Молодой цыган", "Юрий, сын Антонов", "страж лагеря", "Старейшина"];
+const CHAT_FILTER_NAMES = [
+  "Незнакомец", "Ворожея", "Кузнец", "Хитрый лавочник", "Здоровый дядька", "Владелец двора",
+  "Раненый воин", "Травник", "Старец", "Пленник", "Девка для утех", "Леха Небокоптитель",
+  "Боярин Вейдеров", "Старик", "Варяг", "Вальгрим", "Седовласый старик", "Пастух",
+  "Краснодеревщик", "Староста", "Полуслепой немощный колдун",
+  "Голодный зверюга", "Дружинник", "Желтоглазый дух леса", "Наворопник", "Нарочный",
+  "Отшельник", "Боевой конь", "Ослик Иа", "Полосатый пчел", "Молодой цыган",
+  "Юрий, сын Антонов", "страж лагеря", "Страж лагеря", "Старейшина",
+  "Волх", "Глашатай", "Зажиточный муж", "Знахарь", "Корчмарь", "Латинский рыцарь",
+  "Лихой человек", "Мастер Будулай", "Мясник", "Нищий странник", "Обеспокоенный кузнец",
+  "Опытный охотник", "Перевозчик", "Переяславльский стражник", "Перун", "Святогор",
+  "Сгорбленный старик", "Седой воин", "Седой паромщик", "Седой старец", "Старичок-болотник",
+  "Страж ворот", "Странный тип", "Странствующий волхв Онуфрий", "Странствующий волшебник Петро",
+  "Тюремщик", "Уставший рыбак", "Уставший старик", "Уцелевший купец", "Хмурый охотник",
+  "десятник Никифор", "кладовщик Степан", "конюх Митроха", "трактирщик Жиртрестос",
+  "Неприметный старичок", "Индус", "Луцкий сторож", "Хозяин двора",
+  "Сухонькая старушка", "Рыжий трактирщик", "Пьяный медведь", "Леший",
+  "Рыжий муравьишка", "Старый цыган", "сказитель", "Старый охотник", "Гадалка",
+];
 
 function isChatLine(text: string): boolean {
   if (CHAT_FILTER_NAMES.some((name) => text.includes(name))) return false;
@@ -120,6 +168,69 @@ function extractChatLines(mudText: string): string[] {
   const stripped = mudText.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
   const lines = stripped.split("\n");
   return lines.filter((line) => isChatLine(line.trim()));
+}
+
+// Regex for: "Базар : лот 76(белый камушек) продан за 45000 кун."
+const BAZAAR_SALE_RE = /Базар\s*:\s*лот\s+(\d+)\(([^)]+)\)\s+продан\S*\s+за\s+(\d+)\s+кун/;
+// Regex for: "Базар : лот 14(дымчатый ...) продан. 1000 кун переведено на ваш счет."  (our sale)
+const BAZAAR_OUR_SALE_RE = /Базар\s*:\s*лот\s+(\d+)\(([^)]+)\)\s+продан[^.]*\.\s+(\d+)\s+кун\s+переведено\s+на\s+ваш\s+счет/;
+// Regex for: "Аукцион : лот 0(царская книга знаний) продан с аукциона за 12312 кун"
+const AUCTION_SALE_RE = /Аукцион\s*:\s*лот\s+(\d+)\(([^)]+)\)\s+продан\S*\s+с\s+аукциона\s+за\s+(\d+)\s+кун/;
+// Trigger auto-sort whenever player loots a corpse (manual or scripted)
+const LOOT_FROM_CORPSE_RE = /Вы взяли (.+?) из трупа /gi;
+// Trigger auto-sort whenever player picks up from ground
+const PICKUP_FROM_GROUND_RE = /Вы подняли (?!труп\b)(.+?)\./gi;
+
+const pendingLootItems = new Map<string, number>();
+let lootSortTimer: ReturnType<typeof setTimeout> | null = null;
+interface ParsedMarketSale {
+  source: "bazaar" | "auction";
+  lotNumber: number | null;
+  itemName: string;
+  price: number;
+  isOurs: boolean;
+}
+
+function extractMarketSales(mudText: string): ParsedMarketSale[] {
+  const stripped = mudText.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
+  const lines = stripped.split("\n");
+  const result: ParsedMarketSale[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const bazaarOurs = BAZAAR_OUR_SALE_RE.exec(trimmed);
+    if (bazaarOurs) {
+      result.push({
+        source: "bazaar",
+        lotNumber: Number(bazaarOurs[1]),
+        itemName: bazaarOurs[2].trim(),
+        price: Number(bazaarOurs[3]),
+        isOurs: true,
+      });
+      continue;
+    }
+    const bazaar = BAZAAR_SALE_RE.exec(trimmed);
+    if (bazaar) {
+      result.push({
+        source: "bazaar",
+        lotNumber: Number(bazaar[1]),
+        itemName: bazaar[2].trim(),
+        price: Number(bazaar[3]),
+        isOurs: false,
+      });
+      continue;
+    }
+    const auction = AUCTION_SALE_RE.exec(trimmed);
+    if (auction) {
+      result.push({
+        source: "auction",
+        lotNumber: Number(auction[1]),
+        itemName: auction[2].trim(),
+        price: Number(auction[3]),
+        isOurs: false,
+      });
+    }
+  }
+  return result;
 }
 const parserState = createParserState();
 const trackerState = createTrackerState();
@@ -394,8 +505,82 @@ const zoneScriptController = createZoneScriptController({
       appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
     },
   },
+  autoSortInventory: async () => {
+    await autoSortInventory();
+  },
 });
 sessionTeardownHooks.add(() => zoneScriptController.handleSessionClosed());
+
+async function autoSortInventory(): Promise<void> {
+  if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+  const resultPromise = containerTracker.waitForInspectResult(3000);
+  mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "инв", "zone-script");
+  const inventoryText = await resultPromise;
+  const items = parseInventoryItems(inventoryText);
+  for (const item of items) {
+    const maxPrice = await mapStore.getMarketMaxPrice(item.name);
+    const kw = item.name.split(/\s+/)[0] ?? item.name;
+    const target = maxPrice !== null ? "базар" : "хлам";
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, `пол ${kw} ${target}`, "zone-script");
+  }
+}
+
+async function sortLootedItems(lootedNames: Map<string, number>): Promise<void> {
+  if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+
+  const inventoryText = await new Promise<string>((resolve) => {
+    let buf = "";
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      mudTextHandlers.delete(handler);
+      resolve(buf);
+    }, 3000);
+    const handler = (raw: string) => {
+      if (done) return;
+      const stripped = raw.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
+      buf += stripped;
+      if (/Вы несете:/i.test(stripped) && /\d+H\s+\d+M/i.test(stripped)) {
+        done = true;
+        clearTimeout(timer);
+        mudTextHandlers.delete(handler);
+        resolve(buf);
+      }
+    };
+    mudTextHandlers.add(handler);
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "инв", "zone-script");
+  });
+
+  const inventoryItems = parseInventoryItems(inventoryText);
+
+  const mobKey = (name: string) => name.split(/\s+/).map((w) => w.slice(0, 4)).join(".");
+
+  const lootedKeys = new Set<string>();
+  for (const [name] of lootedNames) {
+    lootedKeys.add(mobKey(name).toLowerCase());
+  }
+
+  for (const item of inventoryItems) {
+    if (!lootedKeys.has(mobKey(item.name).toLowerCase())) continue;
+    const first = item.name.split(/\s+/)[0] ?? item.name;
+    const maxPrice = await mapStore.getMarketMaxPrice(item.name);
+    const target = maxPrice !== null ? "базар" : "хлам";
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, `пол ${first} ${target}`, "zone-script");
+  }
+}
+
+function scheduleLootSort(): void {
+  if (lootSortTimer !== null) clearTimeout(lootSortTimer);
+  lootSortTimer = setTimeout(() => {
+    lootSortTimer = null;
+    const items = new Map(pendingLootItems);
+    pendingLootItems.clear();
+    void sortLootedItems(items).catch((error: unknown) => {
+      logEvent(null, "error", error instanceof Error ? `Loot sort error: ${error.message}` : "Loot sort error.");
+    });
+  }, 1500);
+}
 
 function onceRoomChanged(timeoutMs: number): Promise<number | null> {
   return new Promise((resolve) => {
@@ -679,6 +864,12 @@ function handleSendCommand(ws: BunServerWebSocket, command: string | undefined):
     return;
   }
 
+  if (trimmedCommand.toLowerCase() === "дсу") {
+    const dsuFormatted = statsDsu.toLocaleString("ru-RU");
+    mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, `гг [ Разбег: ${statsRazb} -+- Уровень: ${statsLevel} -+- ДСУ: ${dsuFormatted} ]`, "browser");
+    return;
+  }
+
   mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, trimmedCommand, "browser");
 }
 
@@ -706,6 +897,10 @@ function resetMapState(): void {
 
 async function getCurrentMapSnapshot(): Promise<MapSnapshot> {
   return mapStore.getSnapshot(trackerState.currentRoomId);
+}
+
+async function getCurrentZoneSnapshot(): Promise<MapSnapshot> {
+  return mapStore.getZoneSnapshot(trackerState.currentRoomId);
 }
 
 async function sendMapSnapshot(ws: BunServerWebSocket): Promise<void> {
@@ -738,10 +933,10 @@ async function sendMapSnapshot(ws: BunServerWebSocket): Promise<void> {
 }
 
 async function broadcastMapSnapshot(type: "map_snapshot" | "map_update"): Promise<void> {
-  broadcastServerEvent({
-    type,
-    payload: await getCurrentMapSnapshot(),
-  });
+  const payload = type === "map_update"
+    ? await getCurrentZoneSnapshot()
+    : await getCurrentMapSnapshot();
+  broadcastServerEvent({ type, payload });
 }
 
 function broadcastNavigationState(): void {
@@ -1466,11 +1661,10 @@ const server = Bun.serve({
         }
         case "inspect_container": {
           const containerKey = event.payload?.container;
-          if (containerKey !== "bag" && containerKey !== "chest") break;
+          if (containerKey !== "склад" && containerKey !== "расход" && containerKey !== "базар" && containerKey !== "хлам") break;
           logEvent(ws, "browser-in", `inspect_container: ${containerKey}`);
           if (sharedSession.tcpSocket && sharedSession.connected) {
-            const keyword = containerKey === "bag" ? "торб" : "сунду";
-            mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `осм ${keyword}`, "inspect-container");
+            mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `осм ${containerKey}`, "inspect-container");
           }
           break;
         }
@@ -1487,6 +1681,28 @@ const server = Bun.serve({
             containerTracker.startEquippedScan();
             mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, "equipment", "equipped-scan");
           }
+          break;
+        }
+        case "inventory_auto_sort": {
+          const items = event.payload?.items ?? [];
+          logEvent(ws, "browser-in", `inventory_auto_sort: ${items.length} items`);
+          const commands: Array<{ command: string }> = [];
+          for (const item of items) {
+            const maxPrice = await mapStore.getMarketMaxPrice(item.name);
+            const kw = item.name.split(/\s+/)[0] ?? item.name;
+            if (maxPrice !== null) {
+              commands.push({ command: `пол ${kw} базар` });
+            } else {
+              commands.push({ command: `пол ${kw} хлам` });
+            }
+          }
+          sendServerEvent(ws, { type: "inventory_sort_result", payload: { commands } });
+          break;
+        }
+        case "bazaar_max_price_request": {
+          const itemName = event.payload?.itemName ?? "";
+          const maxPrice = await mapStore.getMarketMaxPrice(itemName);
+          sendServerEvent(ws, { type: "bazaar_max_price_response", payload: { itemName, maxPrice } });
           break;
         }
         case "zone_name_set": {
