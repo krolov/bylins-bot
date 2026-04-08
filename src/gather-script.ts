@@ -34,7 +34,7 @@ interface GatherControllerDependencies {
 
 export function createGatherController(deps: GatherControllerDependencies) {
   let enabled = false;
-  let bag = "сунду";
+  let bag = "склад2";
 
   function handleMudText(text: string): void {
     if (!enabled) return;
@@ -85,9 +85,10 @@ export function createGatherController(deps: GatherControllerDependencies) {
   }
 
   function pickup(item: string): void {
-    deps.onLog(`[gather] взя ${item}; полож ${item} ${bag}`);
-    deps.sendCommand(`взя ${item}`);
-    deps.sendCommand(`полож ${item} ${bag}`);
+    const keyword = item.slice(0, 6);
+    deps.onLog(`[gather] взя ${keyword}; полож ${keyword} ${bag}`);
+    deps.sendCommand(`взя ${keyword}`);
+    deps.sendCommand(`полож ${keyword} ${bag}`);
   }
 
   function setEnabled(value: boolean): void {

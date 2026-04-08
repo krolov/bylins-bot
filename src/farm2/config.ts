@@ -7,8 +7,8 @@ export function defaultConfig(): Farm2Config {
     targetValues: [],
     skinningSalvoEnabled: false,
     skinningSkinVerb: "освеж",
-    lootMeatCommand: "пол все.мяс торб",
-    lootHideCommand: "пол все.шкур торб",
+    lootMeatCommand: "бро все.мяс",
+    lootHideCommand: "пол все.шкур хлам",
   };
 }
 

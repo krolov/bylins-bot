@@ -458,7 +458,7 @@ export function parseInspectItems(inspectText: string): Array<{ name: string; co
   return items;
 }
 
-const CONTAINER_KEYWORDS_REGEXP = /торб|сунд/i;
+const CONTAINER_KEYWORDS_REGEXP = /торб|сунд|\(пуст|\(есть содержимое/i;
 
 export function parseInventoryItems(inventoryText: string): Array<{ name: string; count: number }> {
   const normalized = stripAnsi(inventoryText).replace(/\r/g, "");
@@ -471,7 +471,7 @@ export function parseInventoryItems(inventoryText: string): Array<{ name: string
     const line = lines[i]?.trim() ?? "";
     if (line.length === 0) continue;
     if (PROMPT_LINE_REGEXP.test(line) || /Вых:/i.test(line)) break;
-    if (CONTAINER_KEYWORDS_REGEXP.test(line)) continue;
+    if (CONTAINER_KEYWORDS_REGEXP.test(line) && !/\*Ринли\s+\*/i.test(line)) continue;
     const match = ITEM_LINE_REGEXP.exec(line);
     if (!match) continue;
     const name = match[1]?.replace(/<[^>]+>/g, "").trim();
