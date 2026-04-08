@@ -3,6 +3,32 @@
 A MUD automation bot and browser client for the Russian-language MUD game `bylins.su:7000`.
 Built with **Bun** (not Node.js). Never use `node`, `npm`, `npx`, or `yarn`.
 
+## Game Repository
+
+The source code of the MUD game itself is at: **https://github.com/bylins/mud**
+Use it as a reference for understanding game mechanics, protocol details, MUD commands, and server-side logic.
+
+> **IMPORTANT:** The game repo contains only a small template subset of zones. Most zones (including zone 286 and many others) are **not present** in the public repo. Do NOT search GitHub for zone room data.
+
+## Researching Zone Layouts for Zone Scripts
+
+When building a zone-script route (farm_zone2 routeVnums), the **only reliable source** for room/exit data is the **local PostgreSQL database** — the automapper populates it as the character walks.
+
+```bash
+# List all rooms in a zone (e.g. zone 286 = vnums 28600–28699)
+psql $DATABASE_URL -c "
+  SELECT r.vnum, r.name,
+         array_agg(e.direction || '->' || e.to_vnum ORDER BY e.direction) AS exits
+  FROM map_rooms r
+  LEFT JOIN map_edges e ON e.from_vnum = r.vnum
+  WHERE r.vnum BETWEEN 28600 AND 28699
+  GROUP BY r.vnum, r.name
+  ORDER BY r.vnum;
+"
+```
+
+Use `map_rooms` + `map_edges` tables. If the zone hasn't been walked yet, the tables will be empty for those vnums — in that case the character needs to navigate through the zone first to populate the map.
+
 ---
 
 ## Build / Run / Test Commands
