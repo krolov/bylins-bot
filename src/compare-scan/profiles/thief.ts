@@ -4,7 +4,7 @@ export const thiefConfig: CharacterConfig = {
   id: "тать",
   classKeywords: ["тать"],
 
-  remorts: 4,
+  remorts: 7,
 
   acWeight: 5,
   armorWeight: 2,
@@ -30,7 +30,7 @@ export const thiefConfig: CharacterConfig = {
 
   affects: [
     { affect: "невидимость",     score: 100 },
-    { affect: "освящение",       score:  30 },
+    { affect: "освящение",       score: -500 },
     { affect: "полет",           score: 100 },
      { affect: "тьма",            score:  30 },
     { affect: "доблесть",        score:  20 },

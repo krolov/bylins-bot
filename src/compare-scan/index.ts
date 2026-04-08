@@ -61,10 +61,18 @@ export interface CompareSlotResult {
   candidates: CompareCandidate[];
 }
 
+export interface NotFoundItem {
+  name: string;
+  price: number;
+  listNumber: number;
+  source: CandidateSource;
+}
+
 export interface CompareScanResult {
   hasShop: boolean;
   coins: number;
   slots: CompareSlotResult[];
+  notFound: NotFoundItem[];
 }
 
 type CharStats = Partial<Record<StatName, number>> & { remorts?: number };
@@ -702,6 +710,10 @@ export async function runCompareScan(
     const validCandidates = cards.filter(
       (x): x is CandidateEntry => x !== null,
     );
+    const notFound: NotFoundItem[] = uniqueItems
+      .filter((_, i) => cards[i] === null)
+      .filter((item) => item.source === "shop")
+      .sort((a, b) => b.price - a.price);
     onProgress(`Найдено в вики: ${validCandidates.length}.`);
 
     // Fetch current equipped cards
@@ -744,7 +756,7 @@ export async function runCompareScan(
     );
 
     onProgress("Готово.");
-    return { hasShop, coins, slots };
+    return { hasShop, coins, slots, notFound };
   } finally {
     unregisterTextHandler(waiter.feed);
     waiter.cancel();
