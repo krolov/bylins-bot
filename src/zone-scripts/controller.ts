@@ -1,6 +1,11 @@
 import type { ScriptStep, StepState, StepStatus, ZoneScriptDeps, ZoneScriptStateSnapshot } from "./types.ts";
+import { ZONE_102_ID, ZONE_102_NAME, zone102Steps } from "./zones/102.ts";
+import { ZONE_103_ID, ZONE_103_NAME, zone103Steps } from "./zones/103.ts";
+import { ZONE_104_ID, ZONE_104_NAME, zone104Steps } from "./zones/104.ts";
+import { ZONE_111_ID, ZONE_111_NAME, zone111Steps } from "./zones/111.ts";
 import { ZONE_258_ID, ZONE_258_NAME, zone258Steps } from "./zones/258.ts";
 import { ZONE_280_ID, ZONE_280_NAME, zone280Steps } from "./zones/280.ts";
+import { ZONE_286_ID, ZONE_286_NAME, zone286Steps } from "./zones/286.ts";
 import { executeFarmZoneStep2 } from "./farm-zone-executor2.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -13,8 +18,13 @@ interface ZoneScript {
 }
 
 const ZONE_SCRIPTS: ZoneScript[] = [
+  { zoneId: ZONE_102_ID, zoneName: ZONE_102_NAME, steps: zone102Steps },
+  { zoneId: ZONE_103_ID, zoneName: ZONE_103_NAME, steps: zone103Steps },
+  { zoneId: ZONE_104_ID, zoneName: ZONE_104_NAME, steps: zone104Steps },
+  { zoneId: ZONE_111_ID, zoneName: ZONE_111_NAME, steps: zone111Steps },
   { zoneId: ZONE_258_ID, zoneName: ZONE_258_NAME, steps: zone258Steps },
   { zoneId: ZONE_280_ID, zoneName: ZONE_280_NAME, steps: zone280Steps },
+  { zoneId: ZONE_286_ID, zoneName: ZONE_286_NAME, steps: zone286Steps },
 ];
 
 interface RunnerState {
@@ -127,7 +137,9 @@ async function executeStep(
           entryVnum: step.entryVnum,
           routeVnums: step.routeVnums,
           targetValues: step.targetValues,
+          skipVnums: step.skipVnums,
           idleTimeoutMs: step.idleTimeoutMs,
+          maxPassCount: step.maxPassCount,
         },
         deps,
         signal,

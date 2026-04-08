@@ -94,8 +94,20 @@ export type ScriptStep =
       /** Ordered route to cycle through. Required — must be non-empty. */
       routeVnums: number[];
       targetValues: string[];
+      /**
+       * Vnums to pass through without attacking. Useful for transit rooms that
+       * contain dangerous mobs (e.g. охотник за черепами) — the bot moves through
+       * them without engaging any targets.
+       */
+      skipVnums?: number[];
       /** Ms of no-combat idle before considering the zone cleared. Default 60 000. */
       idleTimeoutMs?: number;
+      /**
+       * Maximum number of full route passes before stopping.
+       * One pass = one full cycle through routeVnums (index wraps back to 0).
+       * When omitted, only idleTimeoutMs limits the run.
+       */
+      maxPassCount?: number;
     };
 
 // ---------------------------------------------------------------------------
@@ -167,4 +179,5 @@ export interface ZoneScriptDeps {
   reinitRoom(): void;
   mobResolver: MobResolverDeps;
   isStealthProfile(): boolean;
+  autoSortInventory(): Promise<void>;
 }

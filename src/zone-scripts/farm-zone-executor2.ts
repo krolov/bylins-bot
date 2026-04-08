@@ -73,8 +73,9 @@ export interface FarmZoneStep2Params {
   entryVnum: number;
   routeVnums: number[];
   targetValues: string[];
-  /** Ms of no-combat idle before the zone is considered cleared. Default 60 000. */
+  skipVnums?: number[];
   idleTimeoutMs?: number;
+  maxPassCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +93,8 @@ export async function executeFarmZoneStep2(
   deps: ZoneScriptDeps,
   signal: AbortSignal,
 ): Promise<void> {
-  const { entryVnum, routeVnums, targetValues, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS } = params;
+  const { entryVnum, routeVnums, targetValues, skipVnums = [], idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, maxPassCount } = params;
+  const skipSet = new Set(skipVnums);
 
   if (routeVnums.length === 0) {
     deps.onLog("farm_zone2: routeVnums is empty — nothing to do");
@@ -103,9 +105,10 @@ export async function executeFarmZoneStep2(
   await deps.navigateTo(entryVnum);
   if (signal.aborted) return;
 
-  deps.onLog(`farm_zone2: started route steps=${routeVnums.length} idleTimeout=${idleTimeoutMs}ms`);
+  deps.onLog(`farm_zone2: started route steps=${routeVnums.length} idleTimeout=${idleTimeoutMs}ms${maxPassCount !== undefined ? ` maxPassCount=${maxPassCount}` : ""}`);
 
   let routeIndex = 0;
+  let passCount = 0;
   let phase: Phase = "moving";
   let lastCombatAt = Date.now();
   let lastMoveDirection: Direction | null = null;
@@ -235,53 +238,66 @@ export async function executeFarmZoneStep2(
     }
 
     // ── Attack mobs in current room ──────────────────────────────────────────
-    const rawTargets = deps.getVisibleTargets();
-    const visibleTargets = parseMobsFromRoomDescription([...rawTargets.values()], targetValues);
+    if (!skipSet.has(currentRoomId)) {
+      const rawTargets = deps.getVisibleTargets();
+      const visibleTargets = parseMobsFromRoomDescription([...rawTargets.values()], targetValues);
 
-    deps.onLog(
-      `farm_zone2: room=${currentRoomId} visibleTargets=${visibleTargets.size} targets=[${[...visibleTargets.keys()].join(", ")}]`,
-    );
+      deps.onLog(
+        `farm_zone2: room=${currentRoomId} visibleTargets=${visibleTargets.size} targets=[${[...visibleTargets.keys()].join(", ")}]`,
+      );
 
-    if (visibleTargets.size > 0) {
-      // Fire a loot subscription once per "kill wave".
-      if (!lootPending) {
-        lootPending = true;
-        void deps
-          .onMudTextOnce(DEATH_PHRASE, DEATH_LOOT_TIMEOUT_MS)
-          .then(() => {
-            deps.sendCommand("взя все.тр");
-            deps.sendCommand("взя все все.тр");
-            deps.sendCommand("бро все.тр");
-          })
-          .catch(() => {
-            deps.onLog("farm_zone2: death-phrase loot timeout — no loot this kill");
-          })
-          .finally(() => {
-            lootPending = false;
-          });
+      if (visibleTargets.size > 0) {
+        if (!lootPending) {
+          lootPending = true;
+          void deps
+            .onMudTextOnce(DEATH_PHRASE, DEATH_LOOT_TIMEOUT_MS)
+            .then(async () => {
+              deps.sendCommand("взя все.тр");
+              deps.sendCommand("взя все все.тр");
+              deps.sendCommand("бро все.тр");
+              await deps.autoSortInventory();
+            })
+            .catch(() => {
+              deps.onLog("farm_zone2: death-phrase loot timeout — no loot this kill");
+            })
+            .finally(() => {
+              lootPending = false;
+            });
+        }
+
+        for (const target of targetValues) {
+          deps.sendCommand(`закол ${target}`);
+        }
+        deps.onLog(`farm_zone2: attack sent for ${targetValues.length} target(s), waiting for death/miss`);
+
+        await deps.onMudTextOnce(DEATH_OR_MISS_PHRASE, DEATH_WAIT_TIMEOUT_MS).catch(() => {
+          deps.onLog("farm_zone2: death/miss wait timeout");
+        });
+
+        deps.reinitRoom();
+        deps.onLog(`farm_zone2: reinitRoom sent, waiting ${TICK_INTERVAL_MS}ms for mobs list refresh`);
+        await sleep(TICK_INTERVAL_MS, signal);
+        continue;
       }
-
-      for (const target of targetValues) {
-        deps.sendCommand(`закол ${target}`);
-      }
-      deps.onLog(`farm_zone2: attack sent for ${targetValues.length} target(s), waiting for death/miss`);
-
-      await deps.onMudTextOnce(DEATH_OR_MISS_PHRASE, DEATH_WAIT_TIMEOUT_MS).catch(() => {
-        deps.onLog("farm_zone2: death/miss wait timeout");
-      });
-
-      deps.reinitRoom();
-      deps.onLog(`farm_zone2: reinitRoom sent, waiting ${TICK_INTERVAL_MS}ms for mobs list refresh`);
-      await sleep(TICK_INTERVAL_MS, signal);
-      continue;
+    } else {
+      deps.onLog(`farm_zone2: room=${currentRoomId} is in skipVnums — skipping attack`);
     }
 
-    // ── No mobs — advance route ──────────────────────────────────────────────
+    // ── No mobs (or skip room) — advance route ───────────────────────────────
     const targetVnum = routeVnums[routeIndex];
 
     // If already at the target, advance the index and loop immediately.
     if (currentRoomId === targetVnum) {
-      routeIndex = (routeIndex + 1) % routeVnums.length;
+      const nextIndex = (routeIndex + 1) % routeVnums.length;
+      if (nextIndex === 0) {
+        passCount++;
+        deps.onLog(`farm_zone2: completed pass #${passCount}${maxPassCount !== undefined ? `/${maxPassCount}` : ""}`);
+        if (maxPassCount !== undefined && passCount >= maxPassCount) {
+          deps.onLog(`farm_zone2: maxPassCount=${maxPassCount} reached — stopping`);
+          return;
+        }
+      }
+      routeIndex = nextIndex;
       deps.onLog(
         `farm_zone2: at target vnum=${targetVnum}, advancing routeIndex → ${routeIndex}`,
       );

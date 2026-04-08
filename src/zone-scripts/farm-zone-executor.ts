@@ -164,10 +164,11 @@ async function executeRouteMode(
         didSneak = false;
         if (!lootPending) {
           lootPending = true;
-          void deps.onMudTextOnce(/мертв[а]?,\s*(?:его|её|ее)\s*душа/i, 15_000).then(() => {
+          void deps.onMudTextOnce(/мертв[а]?,\s*(?:его|её|ее)\s*душа/i, 15_000).then(async () => {
             deps.sendCommand("взя все.тр");
             deps.sendCommand("взя все все.тр");
             deps.sendCommand("бро все.тр");
+            await deps.autoSortInventory();
           }).catch(() => {
             deps.onLog(`farm_zone[route]: death phrase timeout — no loot`);
           }).finally(() => {
