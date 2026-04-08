@@ -1,0 +1,32 @@
+module.exports = {
+  apps: [
+    {
+      name: "bylins-bot",
+      script: "/root/.bun/bin/bun",
+      args: "run src/server.ts",
+      cwd: "/root/bylins-bot",
+      interpreter: "none",
+      kill_timeout: 5000,
+      treekill: true,
+      autorestart: true,
+      watch: false,
+      max_restarts: 10,
+      min_uptime: "5s",
+      env: {
+        HOST: "0.0.0.0",
+        PORT: "3211",
+        MUD_AUTO_CONNECT: "true",
+        MUD_HOST: "bylins.su",
+        MUD_PORT: "7000",
+        MUD_TLS: "false",
+        MUD_STARTUP_COMMANDS: "5;;воинмир;;respect1",
+        MUD_COMMAND_DELAY_MS: "150",
+        MUD_LINE_ENDING: "crlf",
+        DATABASE_URL: "postgres://bylins:bylins@localhost:5432/bylins_bot",
+        DOMAIN: "sc.kerat.ru",
+        BASIC_AUTH_USERNAME: "admin",
+        BASIC_AUTH_PASSWORD_HASH: "$2a$14$replace_me_with_a_real_hash",
+      },
+    },
+  ],
+};
