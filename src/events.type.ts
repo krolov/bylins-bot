@@ -5,6 +5,7 @@ import type { TriggerState } from "./triggers.ts";
 import type { GatherState } from "./gather-script.ts";
 import type { CompareScanResult, CompareSlotResult, CompareCandidate } from "./compare-scan/index.ts";
 import type { ZoneScriptStateSnapshot } from "./zone-scripts/index.ts";
+import type { ContainerKey } from "./container-tracker.ts";
 
 export interface WsData {
   sessionId: string;
@@ -59,8 +60,10 @@ export type ClientEvent =
   | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
   | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
   | { type: "attack_nearest" }
-  | { type: "inspect_container"; payload: { container: "bag" | "chest" } }
+  | { type: "inspect_container"; payload: { container: ContainerKey } }
   | { type: "inspect_inventory" }
+  | { type: "inventory_auto_sort"; payload: { items: Array<{ name: string; count: number }> } }
+  | { type: "bazaar_max_price_request"; payload: { itemName: string } }
   | { type: "equipped_scan" };
 
 export type ServerEvent =
@@ -198,9 +201,16 @@ export type ServerEvent =
   | { type: "zone_script_state"; payload: ZoneScriptStateSnapshot }
   | { type: "debug_log_state"; payload: { enabled: boolean } }
   | {
+      type: "inventory_sort_result";
+      payload: {
+        commands: Array<{ command: string }>;
+      };
+    }
+  | { type: "bazaar_max_price_response"; payload: { itemName: string; maxPrice: number | null } }
+  | {
       type: "container_contents";
       payload: {
-        container: "bag" | "chest";
+        container: ContainerKey;
         items: Array<{ name: string; count: number }>;
       };
     }
@@ -241,3 +251,4 @@ export type { TriggerState } from "./triggers.ts";
 export type { MapAlias, MapSnapshot } from "./map/types.ts";
 export type { GatherState } from "./gather-script.ts";
 export type { CandidateSource, CompareSlotResult, CompareCandidate, CompareScanResult } from "./compare-scan/index.ts";
+export type { ContainerKey } from "./container-tracker.ts";
