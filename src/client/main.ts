@@ -156,20 +156,6 @@ const buyFoodBadge = requireElement<HTMLSpanElement>("#buy-food-badge");
 const fillFlaskBadge = requireElement<HTMLSpanElement>("#fill-flask-badge");
 
 const triggersButton = requireElement<HTMLButtonElement>("#triggers-button");
-const triggersModal = requireElement<HTMLDivElement>("#triggers-modal");
-const triggersModalBackdrop = requireElement<HTMLDivElement>("#triggers-modal .farm-modal__backdrop");
-const triggersModalClose = requireElement<HTMLButtonElement>("#triggers-modal-close");
-const triggersModalCancel = requireElement<HTMLButtonElement>("#triggers-modal-cancel");
-const triggerDodgeCheckbox = requireElement<HTMLInputElement>("#trigger-dodge");
-const triggerStandUpCheckbox = requireElement<HTMLInputElement>("#trigger-stand-up");
-const triggerRearmCheckbox = requireElement<HTMLInputElement>("#trigger-rearm");
-const triggerCurseCheckbox = requireElement<HTMLInputElement>("#trigger-curse");
-const triggerLightCheckbox = requireElement<HTMLInputElement>("#trigger-light");
-const triggerFollowLeaderCheckbox = requireElement<HTMLInputElement>("#trigger-follow-leader");
-const triggerAssistCheckbox = requireElement<HTMLInputElement>("#trigger-assist");
-const assistTanksList = requireElement<HTMLDivElement>("#assist-tanks-list");
-const assistTankInput = requireElement<HTMLInputElement>("#assist-tank-input");
-const assistTankAddBtn = requireElement<HTMLButtonElement>("#assist-tank-add-btn");
 
 const itemDbButton = requireElement<HTMLButtonElement>("#item-db-button");
 
@@ -295,48 +281,6 @@ function openSurvivalSettingsModal(): void {
 
 function closeSurvivalSettingsModal(): void {
   survivalSettingsModal.classList.add("farm-modal--hidden");
-}
-
-let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean; assist: boolean; assistTanks: string[] } = { dodge: true, standUp: true, rearm: true, curse: false, light: false, followLeader: true, assist: false, assistTanks: [] };
-
-function renderAssistTanks(tanks: string[]): void {
-  assistTanksList.innerHTML = "";
-  for (const tank of tanks) {
-    const item = document.createElement("div");
-    item.className = "assist-tank-item";
-    const name = document.createElement("span");
-    name.className = "assist-tank-item__name";
-    name.textContent = tank;
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.className = "button-secondary button-small";
-    removeBtn.textContent = "✕";
-    removeBtn.addEventListener("click", () => {
-      const updated = currentTriggerState.assistTanks.filter((t) => t !== tank);
-      currentTriggerState = { ...currentTriggerState, assistTanks: updated };
-      sendClientEvent({ type: "triggers_toggle", payload: { assistTanks: updated } });
-      renderAssistTanks(updated);
-    });
-    item.appendChild(name);
-    item.appendChild(removeBtn);
-    assistTanksList.appendChild(item);
-  }
-}
-
-function openTriggersModal(): void {
-  triggerDodgeCheckbox.checked = currentTriggerState.dodge;
-  triggerStandUpCheckbox.checked = currentTriggerState.standUp;
-  triggerRearmCheckbox.checked = currentTriggerState.rearm;
-  triggerCurseCheckbox.checked = currentTriggerState.curse;
-  triggerLightCheckbox.checked = currentTriggerState.light;
-  triggerFollowLeaderCheckbox.checked = currentTriggerState.followLeader;
-  triggerAssistCheckbox.checked = currentTriggerState.assist;
-  renderAssistTanks(currentTriggerState.assistTanks);
-  triggersModal.classList.remove("farm-modal--hidden");
-}
-
-function closeTriggersModal(): void {
-  triggersModal.classList.add("farm-modal--hidden");
 }
 
 
@@ -2930,17 +2874,7 @@ function createSocket(): WebSocket {
         break;
       }
       case "triggers_state":
-        currentTriggerState = message.payload;
-        triggerDodgeCheckbox.checked = message.payload.dodge;
-        triggerStandUpCheckbox.checked = message.payload.standUp;
-        triggerRearmCheckbox.checked = message.payload.rearm;
-        triggerCurseCheckbox.checked = message.payload.curse;
-        triggerLightCheckbox.checked = message.payload.light;
-        triggerFollowLeaderCheckbox.checked = message.payload.followLeader;
-        triggerAssistCheckbox.checked = message.payload.assist ?? false;
-        if (!triggersModal.classList.contains("farm-modal--hidden")) {
-          renderAssistTanks(message.payload.assistTanks ?? []);
-        }
+        bus.emit("triggers_state", message.payload);
         break;
       case "map_recording_state":
         mapRecordingEnabled = message.payload.enabled;
@@ -3361,10 +3295,9 @@ repairBtn.addEventListener("click", () => {
   sendClientEvent({ type: "repair_start" });
 });
 
-triggersButton.addEventListener("click", openTriggersModal);
-triggersModalClose.addEventListener("click", closeTriggersModal);
-triggersModalCancel.addEventListener("click", closeTriggersModal);
-triggersModalBackdrop.addEventListener("click", closeTriggersModal);
+triggersButton.addEventListener("click", () => {
+  void import("./modals/triggers.ts").then((m) => m.openTriggersModal());
+});
 
 itemDbButton.addEventListener("click", () => {
   void import("./modals/item-db.ts").then((m) => m.openItemDbModal());
@@ -3681,55 +3614,6 @@ function renderInventoryList(
 }
 
 
-triggerDodgeCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, dodge: triggerDodgeCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { dodge: triggerDodgeCheckbox.checked } });
-});
-
-triggerStandUpCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, standUp: triggerStandUpCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { standUp: triggerStandUpCheckbox.checked } });
-});
-
-triggerRearmCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, rearm: triggerRearmCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { rearm: triggerRearmCheckbox.checked } });
-});
-
-triggerCurseCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, curse: triggerCurseCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { curse: triggerCurseCheckbox.checked } });
-});
-
-triggerLightCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, light: triggerLightCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { light: triggerLightCheckbox.checked } });
-});
-
-triggerFollowLeaderCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, followLeader: triggerFollowLeaderCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { followLeader: triggerFollowLeaderCheckbox.checked } });
-});
-
-triggerAssistCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, assist: triggerAssistCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { assist: triggerAssistCheckbox.checked } });
-});
-
-assistTankAddBtn.addEventListener("click", () => {
-  const name = assistTankInput.value.trim();
-  if (!name) return;
-  if (currentTriggerState.assistTanks.includes(name)) return;
-  const updated = [...currentTriggerState.assistTanks, name];
-  currentTriggerState = { ...currentTriggerState, assistTanks: updated };
-  sendClientEvent({ type: "triggers_toggle", payload: { assistTanks: updated } });
-  renderAssistTanks(updated);
-  assistTankInput.value = "";
-});
-
-assistTankInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") assistTankAddBtn.click();
-});
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !farmSettingsModal.classList.contains("farm-modal--hidden")) {
@@ -3737,9 +3621,6 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape" && !survivalSettingsModal.classList.contains("farm-modal--hidden")) {
     closeSurvivalSettingsModal();
-  }
-  if (e.key === "Escape" && !triggersModal.classList.contains("farm-modal--hidden")) {
-    closeTriggersModal();
   }
   if (e.key === "Escape" && !mapContextMenu.classList.contains("map-context-menu--hidden")) {
     closeMapContextMenu();
