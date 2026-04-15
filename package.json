@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "build": "bun run build:client && bun run typecheck",
     "test": "bun test",
+    "smoke": "bun run build:client && bun run scripts/smoke-test.ts",
     "gear": "bun run scripts/gear-advisor.ts"
   },
   "devDependencies": {

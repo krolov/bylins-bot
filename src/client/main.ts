@@ -1,367 +1,44 @@
-interface ConnectDefaults {
-  autoConnect: boolean;
-  host: string;
-  port: number;
-  tls: boolean;
-  startupCommands: string[];
-  commandDelayMs: number;
-}
+import type { SurvivalSettings } from "../events.type.ts";
+import type {
+  ConnectDefaults,
+  ProfileInfo,
+  ProfilesResponse,
+  AnsiColorName,
+  TerminalStyle,
+  AnsiSegment,
+  MapNodePayload,
+  MapEdgePayload,
+  MapSnapshotPayload,
+  AliasPayload,
+  NavigationStatePayload,
+  GameItemPayload,
+  FarmSettings,
+  FarmRuntimeStats,
+  GridCell,
+  NeighborZone,
+  FarZone,
+  ZoneNode,
+  ZoneEdge,
+  ColumnDef,
+  HotkeyEntry,
+  ServerEvent,
+  ClientEvent,
+} from "./types.ts";
+import {
+  WEAPON_COLUMNS,
+  ARMOR_COLUMNS,
+  AVAILABLE_ZONE_SCRIPTS,
+  DIR_DELTA,
+  OPPOSITE_DIR,
+  DIRECTION_PRIORITY,
+  SCRIPT_STEP_ICONS,
+  DEFAULT_HOTKEYS,
+} from "./constants.ts";
+import * as bus from "./bus.ts";
 
-interface ProfileInfo {
-  id: string;
-  name: string;
-}
-
-interface ProfilesResponse {
-  profiles: ProfileInfo[];
-  defaultProfileId: string;
-}
-
-type AnsiColorName =
-  | "default"
-  | "black"
-  | "red"
-  | "green"
-  | "yellow"
-  | "blue"
-  | "magenta"
-  | "cyan"
-  | "white"
-  | "bright-black"
-  | "bright-red"
-  | "bright-green"
-  | "bright-yellow"
-  | "bright-blue"
-  | "bright-magenta"
-  | "bright-cyan"
-  | "bright-white";
-
-interface TerminalStyle {
-  foreground: AnsiColorName;
-  bold: boolean;
-}
-
-interface AnsiSegment {
-  text: string;
-  style: TerminalStyle;
-}
-
-interface MapNodePayload {
-  vnum: number;
-  name: string;
-  exits: string[];
-  closedExits: string[];
-  visited: boolean;
-  color?: string;
-}
-
-interface MapEdgePayload {
-  fromVnum: number;
-  toVnum: number;
-  direction: string;
-  isPortal: boolean;
-}
-
-interface MapSnapshotPayload {
-  currentVnum: number | null;
-  nodes: MapNodePayload[];
-  edges: MapEdgePayload[];
-  zoneNames: Array<[number, string]>;
-}
-
-interface AliasPayload {
-  vnum: number;
-  alias: string;
-}
-
-interface NavigationStatePayload {
-  active: boolean;
-  targetVnum: number | null;
-  totalSteps: number;
-  currentStep: number;
-}
-
-interface GameItemPayload {
-  name: string;
-  itemType: string;
-  data: Record<string, unknown>;
-  firstSeen: string;
-  lastSeen: string;
-}
-
-type ServerEvent =
-  | {
-      type: "status";
-      payload: {
-        state: "idle" | "connecting" | "connected" | "disconnected" | "error";
-        message: string;
-      };
-    }
-  | {
-      type: "defaults";
-      payload: ConnectDefaults;
-    }
-  | {
-      type: "output";
-      payload: {
-        text: string;
-      };
-    }
-  | {
-      type: "error";
-      payload: {
-        message: string;
-      };
-    }
-  | {
-      type: "map_snapshot";
-      payload: MapSnapshotPayload;
-    }
-  | {
-      type: "map_update";
-      payload: MapSnapshotPayload;
-    }
-  | {
-       type: "farm2_state";
-       payload: {
-         enabled: boolean;
-         zoneId: number | null;
-         pendingActivation: boolean;
-         attackCommand: string;
-         targetValues: string[];
-       };
-    }
-  | {
-      type: "stats_update";
-      payload: {
-        hp: number;
-        hpMax: number;
-        energy: number;
-        energyMax: number;
-      };
-    }
-  | {
-      type: "aliases_snapshot";
-      payload: {
-        aliases: AliasPayload[];
-      };
-    }
-  | {
-      type: "navigation_state";
-      payload: NavigationStatePayload;
-    }
-  | {
-      type: "survival_status";
-      payload: {
-        foodEmpty: boolean;
-        flaskEmpty: boolean;
-      };
-    }
-  | {
-      type: "farm_settings_data";
-      payload: {
-        zoneId: number;
-        settings: FarmSettings | null;
-      };
-    }
-  | {
-      type: "survival_settings_data";
-      payload: SurvivalSettings | null;
-    }
-   | {
-       type: "triggers_state";
-        payload: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean; assist: boolean; assistTanks: string[] };
-    }
-  | {
-      type: "items_data";
-      payload: {
-        items: GameItemPayload[];
-      };
-    }
-  | {
-      type: "room_auto_commands_snapshot";
-      payload: {
-        entries: Array<{ vnum: number; command: string }>;
-      };
-    }
-  | { type: "compare_scan_progress"; payload: { message: string } }
-  | {
-      type: "compare_scan_result";
-      payload: {
-        hasShop: boolean;
-        coins: number;
-        slots: Array<{
-          slot: string;
-          currentItemName: string | null;
-          currentScore: number;
-          currentCard: {
-            id: number;
-            name: string;
-            itemType: string;
-            ac: number;
-            armor: number;
-            damageAvg: number;
-            affects: string[];
-            properties: string[];
-            material: string;
-            wearSlots: string[];
-          } | null;
-          candidates: Array<{
-            itemId: number;
-            itemName: string;
-            price: number;
-            listNumber: number;
-            score: number;
-            source: "shop" | "bazaar" | "inventory" | "guild_storage";
-            hasGameData: boolean;
-            card: {
-              id: number;
-              name: string;
-              itemType: string;
-              ac: number;
-              armor: number;
-              damageAvg: number;
-              affects: string[];
-              properties: string[];
-              material: string;
-              wearSlots: string[];
-            };
-          }>;
-        }>;
-        notFound: Array<{
-          name: string;
-          price: number;
-          listNumber: number;
-          source: "shop" | "bazaar" | "inventory" | "guild_storage";
-        }>;
-      };
-    }
-  | { type: "repair_state"; payload: { running: boolean; message: string } }
-  | { type: "combat_state"; payload: { inCombat: boolean } }
-  | { type: "map_recording_state"; payload: { enabled: boolean } }
-  | {
-      type: "wiki_item_search_result";
-      payload: {
-        query: string;
-        found: boolean;
-        name?: string;
-        itemType?: string;
-        text?: string;
-        loadLocation?: string;
-        error?: string;
-      };
-    }
-  | {
-      type: "vorozhe_route_result";
-      payload: {
-        from: string;
-        to: string;
-        found: boolean;
-        steps: Array<{ from: string; to: string; items: string[] }>;
-        totalItems: Record<string, number>;
-      };
-    }
-  | { type: "gather_state"; payload: { enabled: boolean; bag: string } }
-  | { type: "debug_log_state"; payload: { enabled: boolean } }
-  | { type: "inventory_sort_result"; payload: { commands: Array<{ command: string }> } }
-  | { type: "bazaar_max_price_response"; payload: { itemName: string; maxPrice: number | null } }
-  | {
-      type: "container_contents";
-      payload: {
-        container: "склад" | "расход" | "базар" | "хлам";
-        items: Array<{ name: string; count: number }>;
-      };
-    }
-  | {
-      type: "inventory_contents";
-      payload: {
-        items: Array<{ name: string; count: number }>;
-      };
-    }
-  | {
-      type: "equipped_contents";
-      payload: {
-        items: Array<{ slot: string; name: string; keyword: string; wearCmd: string }>;
-      };
-    }
-  | {
-      type: "chat_message";
-      payload: {
-        text: string;
-        timestamp: number;
-      };
-    }
-  | {
-      type: "chat_history";
-      payload: {
-        messages: Array<{ text: string; timestamp: number }>;
-      };
-    }
-  | {
-      type: "zone_script_state";
-      payload: {
-        enabled: boolean;
-        zoneId: number | null;
-        zoneName: string | null;
-        currentStepIndex: number | null;
-        steps: Array<{ index: number; label: string; status: string; error?: string }>;
-        errorMessage: string | null;
-      };
-    };
-
-type ClientEvent =
-  | {
-      type: "connect";
-      payload: Omit<ConnectDefaults, "autoConnect" | "startupCommands"> & { profileId?: string; startupCommands?: string[] };
-    }
-  | { type: "send"; payload: { command: string } }
-  | { type: "disconnect" }
-  | { type: "map_reset" }
-  | { type: "map_reset_area" }
-  | { type: "map_recording_toggle"; payload?: { enabled?: boolean } }
-  | { type: "farm2_toggle"; payload?: { enabled?: boolean } }
-  | { type: "alias_set"; payload: { vnum: number; alias: string } }
-  | { type: "alias_delete"; payload: { vnum: number } }
-  | { type: "navigate_to"; payload: { vnums: number[] } }
-  | { type: "goto_and_run"; payload: { vnums: number[]; commands: string[]; action?: "buy_food" | "fill_flask" } }
-  | { type: "navigate_stop" }
-  | { type: "farm_settings_get"; payload: { zoneId: number } }
-  | {
-      type: "farm_settings_save";
-      payload: {
-        zoneId: number;
-        settings: FarmSettings;
-      };
-    }
-  | {
-      type: "triggers_toggle";
-      payload: { dodge?: boolean; standUp?: boolean; rearm?: boolean; curse?: boolean; light?: boolean; followLeader?: boolean; assist?: boolean; assistTanks?: string[] };
-    }
-  | { type: "item_db_get" }
-  | { type: "room_auto_command_set"; payload: { vnum: number; command: string } }
-  | { type: "room_auto_command_delete"; payload: { vnum: number } }
-  | { type: "room_auto_commands_get" }
-  | { type: "survival_settings_get" }
-  | { type: "survival_settings_save"; payload: SurvivalSettings }
-  | { type: "compare_scan_start" }
-  | { type: "compare_apply"; payload: { commands: string[] } }
-  | { type: "repair_start" }
-  | { type: "wiki_item_search"; payload: { query: string } }
-  | { type: "vorozhe_route_find"; payload: { from: string; to: string } }
-  | { type: "gather_toggle"; payload?: { enabled?: boolean } }
-  | { type: "gather_sell_bag" }
-  | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
-  | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
-  | { type: "attack_nearest" }
-  | { type: "inspect_container"; payload: { container: "склад" | "расход" | "базар" | "хлам" } }
-  | { type: "inspect_inventory" }
-  | { type: "inventory_auto_sort"; payload: { items: Array<{ name: string; count: number }> } }
-  | { type: "bazaar_max_price_request"; payload: { itemName: string } }
-| { type: "equipped_scan" }
-| { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
-| { type: "farming_toggle"; payload?: { enabled?: boolean; zoneId?: number } };
-
-import type { SurvivalSettings } from "./events.type.ts";
+// Modal chunks emit outbound messages via the bus to avoid importing main.ts
+// (which would force the bundler to keep them on the critical path).
+bus.on("client_send", (ev) => sendClientEvent(ev as ClientEvent));
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -479,20 +156,6 @@ const buyFoodBadge = requireElement<HTMLSpanElement>("#buy-food-badge");
 const fillFlaskBadge = requireElement<HTMLSpanElement>("#fill-flask-badge");
 
 const triggersButton = requireElement<HTMLButtonElement>("#triggers-button");
-const triggersModal = requireElement<HTMLDivElement>("#triggers-modal");
-const triggersModalBackdrop = requireElement<HTMLDivElement>("#triggers-modal .farm-modal__backdrop");
-const triggersModalClose = requireElement<HTMLButtonElement>("#triggers-modal-close");
-const triggersModalCancel = requireElement<HTMLButtonElement>("#triggers-modal-cancel");
-const triggerDodgeCheckbox = requireElement<HTMLInputElement>("#trigger-dodge");
-const triggerStandUpCheckbox = requireElement<HTMLInputElement>("#trigger-stand-up");
-const triggerRearmCheckbox = requireElement<HTMLInputElement>("#trigger-rearm");
-const triggerCurseCheckbox = requireElement<HTMLInputElement>("#trigger-curse");
-const triggerLightCheckbox = requireElement<HTMLInputElement>("#trigger-light");
-const triggerFollowLeaderCheckbox = requireElement<HTMLInputElement>("#trigger-follow-leader");
-const triggerAssistCheckbox = requireElement<HTMLInputElement>("#trigger-assist");
-const assistTanksList = requireElement<HTMLDivElement>("#assist-tanks-list");
-const assistTankInput = requireElement<HTMLInputElement>("#assist-tank-input");
-const assistTankAddBtn = requireElement<HTMLButtonElement>("#assist-tank-add-btn");
 
 const itemDbButton = requireElement<HTMLButtonElement>("#item-db-button");
 
@@ -505,46 +168,10 @@ const globalMapZoomIn = requireElement<HTMLButtonElement>("#global-map-zoom-in")
 const globalMapZoomOut = requireElement<HTMLButtonElement>("#global-map-zoom-out");
 const globalMapZoomLabel = requireElement<HTMLSpanElement>("#global-map-zoom-label");
 const globalMapSearch = requireElement<HTMLInputElement>("#global-map-search");
-const itemDbModal = requireElement<HTMLDivElement>("#item-db-modal");
-const itemDbModalBackdrop = requireElement<HTMLDivElement>("#item-db-modal .farm-modal__backdrop");
-const itemDbModalClose = requireElement<HTMLButtonElement>("#item-db-modal-close");
-const itemDbTableBody = requireElement<HTMLTableSectionElement>("#item-db-table-body");
-const itemDbThead = requireElement<HTMLTableSectionElement>("#item-db-thead");
-const itemDbEmpty = requireElement<HTMLParagraphElement>("#item-db-empty");
-const itemDbTabs = requireElement<HTMLDivElement>("#item-db-tabs");
-const itemDbSearch = requireElement<HTMLInputElement>("#item-db-search");
-const itemDbCount = requireElement<HTMLSpanElement>("#item-db-count");
-const itemDbWikiInput = requireElement<HTMLInputElement>("#item-db-wiki-input");
-const itemDbWikiBtn = requireElement<HTMLButtonElement>("#item-db-wiki-btn");
-const itemDbWikiResult = requireElement<HTMLDivElement>("#item-db-wiki-result");
-
-const itemDetailModal             = requireElement<HTMLDivElement>("#item-detail-modal");
-const itemDetailModalBackdrop     = requireElement<HTMLDivElement>("#item-detail-modal .farm-modal__backdrop");
-const itemDetailModalClose        = requireElement<HTMLButtonElement>("#item-detail-modal-close");
-const itemDetailModalCloseFooter  = requireElement<HTMLButtonElement>("#item-detail-modal-close-footer");
-const itemDetailModalTitle        = requireElement<HTMLSpanElement>("#item-detail-modal-title");
-const itemDetailModalBody         = requireElement<HTMLDivElement>("#item-detail-modal-body");
 
 const compareButton = requireElement<HTMLButtonElement>("#compare-button");
-const compareAdvisorPanel = requireElement<HTMLDivElement>("#compare-advisor-panel");
-const compareAdvisorClose = requireElement<HTMLButtonElement>("#compare-advisor-close");
-const compareAdvisorTitle = requireElement<HTMLSpanElement>("#compare-advisor-title");
-const compareAdvisorStatus = requireElement<HTMLParagraphElement>("#compare-advisor-status");
-const compareAdvisorTableBody = requireElement<HTMLTableSectionElement>("#compare-advisor-table-body");
-const compareAdvisorCoins = requireElement<HTMLParagraphElement>("#compare-advisor-coins");
 
 const vorozheButton = requireElement<HTMLButtonElement>("#vorozhe-button");
-const vorozheModal = requireElement<HTMLDivElement>("#vorozhe-modal");
-const vorozheModalClose = requireElement<HTMLButtonElement>("#vorozhe-modal-close");
-const vorozheModalCancel = requireElement<HTMLButtonElement>("#vorozhe-modal-cancel");
-const vorozheModalBackdrop = requireElement<HTMLDivElement>("#vorozhe-modal .farm-modal__backdrop");
-const vorozheFromButtons = requireElement<HTMLDivElement>("#vorozhe-from-buttons");
-const vorozheToButtons = requireElement<HTMLDivElement>("#vorozhe-to-buttons");
-const vorozheResult = requireElement<HTMLDivElement>("#vorozhe-result");
-const vorozheNoRoute = requireElement<HTMLDivElement>("#vorozhe-no-route");
-const vorozheRouteTable = requireElement<HTMLTableElement>("#vorozhe-route-table");
-const vorozheRouteTbody = requireElement<HTMLTableSectionElement>("#vorozhe-route-tbody");
-const vorozheTotal = requireElement<HTMLDivElement>("#vorozhe-total");
 
 const gatherToggleButton = requireElement<HTMLButtonElement>("#gather-toggle-button");
 const gatherSellButton = requireElement<HTMLButtonElement>("#gather-sell-button");
@@ -560,36 +187,10 @@ const junkPanelList = requireElement<HTMLTableSectionElement>("#junk-panel-list"
 const junkSellAllBtn = requireElement<HTMLButtonElement>("#junk-sell-all-btn");
 const inventoryPanelList = requireElement<HTMLTableSectionElement>("#inventory-panel-list");
 
-const VOROZHE_CITIES = [
-  "Брянск", "Великий Новгород", "Владимир", "Вышгород", "Галич",
-  "Искоростень", "Киев", "Корсунь", "Курск", "Ладога",
-  "Любеч", "Меньск", "Муром", "Переяславль", "Полоцк",
-  "Псков", "Путивль", "Ростов Великий", "Русса", "Рязань",
-  "Тверь", "Торжок", "Тотьма", "Туров", "Чернигов",
-] as const;
 
-let vorozheFrom: string | null = null;
-let vororozheFromButtons: HTMLButtonElement[] = [];
-let vorozheTo: string | null = null;
-let vorozheToButtonsList: HTMLButtonElement[] = [];
 
 let farmModalZoneId: number | null = null;
 let currentSurvivalSettings: SurvivalSettings = defaultSurvivalSettings();
-
-interface FarmSettings {
-  attackCommand: string;
-  skinningSalvoEnabled: boolean;
-  skinningSkinVerb: string;
-  lootMeatCommand: string;
-  lootHideCommand: string;
-}
-
-interface FarmRuntimeStats {
-  hp: number;
-  hpMax: number;
-  energy: number;
-  energyMax: number;
-}
 
 function defaultFarmSettings(): FarmSettings {
   return {
@@ -682,314 +283,6 @@ function closeSurvivalSettingsModal(): void {
   survivalSettingsModal.classList.add("farm-modal--hidden");
 }
 
-let currentTriggerState: { dodge: boolean; standUp: boolean; rearm: boolean; curse: boolean; light: boolean; followLeader: boolean; assist: boolean; assistTanks: string[] } = { dodge: true, standUp: true, rearm: true, curse: false, light: false, followLeader: true, assist: false, assistTanks: [] };
-
-function renderAssistTanks(tanks: string[]): void {
-  assistTanksList.innerHTML = "";
-  for (const tank of tanks) {
-    const item = document.createElement("div");
-    item.className = "assist-tank-item";
-    const name = document.createElement("span");
-    name.className = "assist-tank-item__name";
-    name.textContent = tank;
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.className = "button-secondary button-small";
-    removeBtn.textContent = "✕";
-    removeBtn.addEventListener("click", () => {
-      const updated = currentTriggerState.assistTanks.filter((t) => t !== tank);
-      currentTriggerState = { ...currentTriggerState, assistTanks: updated };
-      sendClientEvent({ type: "triggers_toggle", payload: { assistTanks: updated } });
-      renderAssistTanks(updated);
-    });
-    item.appendChild(name);
-    item.appendChild(removeBtn);
-    assistTanksList.appendChild(item);
-  }
-}
-
-function openTriggersModal(): void {
-  triggerDodgeCheckbox.checked = currentTriggerState.dodge;
-  triggerStandUpCheckbox.checked = currentTriggerState.standUp;
-  triggerRearmCheckbox.checked = currentTriggerState.rearm;
-  triggerCurseCheckbox.checked = currentTriggerState.curse;
-  triggerLightCheckbox.checked = currentTriggerState.light;
-  triggerFollowLeaderCheckbox.checked = currentTriggerState.followLeader;
-  triggerAssistCheckbox.checked = currentTriggerState.assist;
-  renderAssistTanks(currentTriggerState.assistTanks);
-  triggersModal.classList.remove("farm-modal--hidden");
-}
-
-function closeTriggersModal(): void {
-  triggersModal.classList.add("farm-modal--hidden");
-}
-
-let itemDbAllItems: GameItemPayload[] = [];
-let itemDbActiveTab = "all";
-const itemDbRowMap = new WeakMap<HTMLTableRowElement, GameItemPayload>();
-
-type ColumnDef = { label: string; render: (data: Record<string, unknown>) => string; cls?: string };
-
-const WEAPON_COLUMNS: ColumnDef[] = [
-  { label: "Класс",     render: d => String(d.weaponClass ?? d.class ?? "—"),      cls: "items-modal__cell--muted" },
-  { label: "Кубики",    render: d => String(d.damageDice ?? d.damage_dice ?? "—"), cls: "items-modal__cell--mono" },
-  { label: "Avg",       render: d => (d.damageAvg ?? d.damage_avg) != null ? String(d.damageAvg ?? d.damage_avg) : "—", cls: "items-modal__cell--mono" },
-  { label: "Материал",  render: d => String(d.material ?? "—"),                    cls: "items-modal__cell--muted" },
-  { label: "Прочность", render: d => d.durability_cur != null ? `${d.durability_cur}/${d.durability_max}` : "—" },
-  { label: "Аффекты",   render: d => Array.isArray(d.affects) ? (d.affects as string[]).join(", ") || "—" : String(d.affects ?? "—"), cls: "items-modal__cell--tag" },
-  { label: "Свойства",  render: d => Array.isArray(d.properties) ? (d.properties as string[]).join(", ") || "—" : String(d.extra_props ?? "—"), cls: "items-modal__cell--tag" },
-];
-
-const ARMOR_COLUMNS: ColumnDef[] = [
-  { label: "Слот",      render: d => Array.isArray(d.wearSlots) ? (d.wearSlots as {slot:string}[]).map(s => typeof s === "string" ? s : s.slot).join(", ") || "—" : String(d.wear_slot ?? d.slot ?? "—"), cls: "items-modal__cell--muted" },
-  { label: "Материал",  render: d => String(d.material ?? "—"),  cls: "items-modal__cell--muted" },
-  { label: "Прочность", render: d => d.durability_cur != null ? `${d.durability_cur}/${d.durability_max}` : "—" },
-  { label: "AC",        render: d => String(d.ac ?? d.armor ?? "—"), cls: "items-modal__cell--mono" },
-  { label: "Аффекты",   render: d => Array.isArray(d.affects) ? (d.affects as string[]).join(", ") || "—" : String(d.affects ?? "—"), cls: "items-modal__cell--tag" },
-  { label: "Свойства",  render: d => Array.isArray(d.properties) ? (d.properties as string[]).join(", ") || "—" : String(d.extra_props ?? "—"), cls: "items-modal__cell--tag" },
-];
-
-function getColumnsForTab(tab: string): ColumnDef[] {
-  if (tab === "ОРУЖИЕ") return WEAPON_COLUMNS;
-  if (tab === "БРОНЯ")  return ARMOR_COLUMNS;
-  return [];
-}
-
-function renderGenericData(data: Record<string, unknown>): HTMLElement {
-  const wrap = document.createElement("span");
-  const entries = Object.entries(data).filter(([, v]) => v != null && v !== "" && v !== "ничего");
-  wrap.textContent = entries.map(([k, v]) => {
-    const val = typeof v === "object" ? JSON.stringify(v) : String(v);
-    return `${k}: ${val}`;
-  }).join(" · ");
-  wrap.className = "items-modal__cell--muted";
-  wrap.style.fontSize = "11px";
-  return wrap;
-}
-
-function applyItemDbFilter(): void {
-  const query = itemDbSearch.value.trim().toLowerCase();
-  const tab   = itemDbActiveTab;
-  const cols  = getColumnsForTab(tab);
-
-  const filtered = itemDbAllItems.filter(item => {
-    const tabMatch = tab === "all" || item.itemType === tab;
-    const searchMatch = !query || item.name.toLowerCase().includes(query);
-    return tabMatch && searchMatch;
-  });
-
-  itemDbTableBody.innerHTML = "";
-  itemDbThead.querySelector("tr")!.innerHTML = "";
-
-  if (filtered.length === 0) {
-    itemDbEmpty.classList.remove("items-modal__empty--hidden");
-    itemDbCount.textContent = "";
-    return;
-  }
-  itemDbEmpty.classList.add("items-modal__empty--hidden");
-  itemDbCount.textContent = `${filtered.length} предм.`;
-
-  const headRow = itemDbThead.querySelector("tr")!;
-  const nameHeader = document.createElement("th");
-  nameHeader.className = "items-modal__th";
-  nameHeader.textContent = "Название";
-  headRow.appendChild(nameHeader);
-
-  if (cols.length > 0) {
-    for (const col of cols) {
-      const th = document.createElement("th");
-      th.className = "items-modal__th";
-      th.textContent = col.label;
-      headRow.appendChild(th);
-    }
-  } else {
-    const th = document.createElement("th");
-    th.className = "items-modal__th";
-    th.textContent = "Данные";
-    headRow.appendChild(th);
-
-    const thType = document.createElement("th");
-    thType.className = "items-modal__th";
-    thType.textContent = "Тип";
-    headRow.appendChild(thType);
-  }
-
-  for (const item of filtered) {
-    const tr = document.createElement("tr");
-    tr.className = "items-modal__row items-modal__row--clickable";
-    itemDbRowMap.set(tr, item);
-
-    const tdName = document.createElement("td");
-    tdName.className = "items-modal__cell items-modal__cell--name";
-    tdName.textContent = item.name;
-    tr.appendChild(tdName);
-
-    if (cols.length > 0) {
-      for (const col of cols) {
-        const td = document.createElement("td");
-        td.className = `items-modal__cell${col.cls ? " " + col.cls : ""}`;
-        td.textContent = col.render(item.data);
-        tr.appendChild(td);
-      }
-    } else {
-      const tdData = document.createElement("td");
-      tdData.className = "items-modal__cell";
-      tdData.appendChild(renderGenericData(item.data));
-      tr.appendChild(tdData);
-
-      const tdType = document.createElement("td");
-      tdType.className = "items-modal__cell items-modal__cell--muted";
-      tdType.textContent = item.itemType;
-      tr.appendChild(tdType);
-    }
-
-    itemDbTableBody.appendChild(tr);
-  }
-}
-
-function buildItemDbTabs(items: GameItemPayload[]): void {
-  const types = [...new Set(items.map(i => i.itemType))].sort();
-  itemDbTabs.innerHTML = "";
-
-  const allBtn = document.createElement("button");
-  allBtn.type = "button";
-  allBtn.className = "items-modal__tab" + (itemDbActiveTab === "all" ? " items-modal__tab--active" : "");
-  allBtn.dataset.tab = "all";
-  allBtn.textContent = `Все (${items.length})`;
-  itemDbTabs.appendChild(allBtn);
-
-  for (const t of types) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "items-modal__tab" + (itemDbActiveTab === t ? " items-modal__tab--active" : "");
-    btn.dataset.tab = t;
-    btn.textContent = `${t} (${items.filter(i => i.itemType === t).length})`;
-    itemDbTabs.appendChild(btn);
-  }
-}
-
-function renderItemDbTable(items: GameItemPayload[]): void {
-  itemDbAllItems = items;
-  buildItemDbTabs(items);
-  applyItemDbFilter();
-}
-
-function openItemDbModal(): void {
-  itemDbModal.classList.remove("farm-modal--hidden");
-  sendClientEvent({ type: "item_db_get" });
-}
-
-function closeItemDbModal(): void {
-  itemDbModal.classList.add("farm-modal--hidden");
-}
-
-function openItemDetailModal(item: GameItemPayload): void {
-  itemDetailModalTitle.textContent = item.name;
-  renderItemDetail(item);
-  itemDetailModal.classList.remove("farm-modal--hidden");
-}
-
-function closeItemDetailModal(): void {
-  itemDetailModal.classList.add("farm-modal--hidden");
-}
-
-function renderItemDetail(item: GameItemPayload): void {
-  const d = item.data;
-  itemDetailModalBody.innerHTML = "";
-
-  function row(label: string, value: string | null | undefined): void {
-    if (value === null || value === undefined || value === "") return;
-    const p = document.createElement("p");
-    p.className = "item-detail-modal__row";
-    const labelEl = document.createElement("span");
-    labelEl.className = "item-detail-modal__label";
-    labelEl.textContent = label + ": ";
-    const valueEl = document.createElement("span");
-    valueEl.className = "item-detail-modal__value";
-    valueEl.textContent = value;
-    p.appendChild(labelEl);
-    p.appendChild(valueEl);
-    itemDetailModalBody.appendChild(p);
-  }
-
-  function listSection(label: string, arr: unknown): void {
-    if (!Array.isArray(arr) || arr.length === 0) return;
-    const section = document.createElement("div");
-    section.className = "item-detail-modal__section";
-    const h = document.createElement("p");
-    h.className = "item-detail-modal__section-title";
-    h.textContent = label + ":";
-    section.appendChild(h);
-    for (const entry of arr) {
-      const p = document.createElement("p");
-      p.className = "item-detail-modal__list-item";
-      if (typeof entry === "object" && entry !== null && "stat" in entry && "value" in entry) {
-        p.textContent = `${(entry as { stat: string; value: number }).stat}: ${(entry as { stat: string; value: number }).value}`;
-      } else {
-        p.textContent = String(entry);
-      }
-      section.appendChild(p);
-    }
-    itemDetailModalBody.appendChild(section);
-  }
-
-  row("Тип", item.itemType);
-  row("Материал", typeof d["material"] === "string" ? d["material"] : null);
-
-  if (d["weaponClass"] != null) {
-    row("Класс оружия", String(d["weaponClass"]));
-  }
-  if (d["damageDice"] != null) {
-    row("Урон (кости)", String(d["damageDice"]));
-  }
-  if (d["damageAvg"] != null && Number(d["damageAvg"]) > 0) {
-    row("Средний урон", String(d["damageAvg"]));
-  }
-  if (d["ac"] != null && Number(d["ac"]) !== 0) {
-    row("AC", String(d["ac"]));
-  }
-  if (d["armor"] != null && Number(d["armor"]) !== 0) {
-    row("Броня", String(d["armor"]));
-  }
-  if (d["remorts"] != null && Number(d["remorts"]) > 0) {
-    row("Перевоплощений", String(d["remorts"]));
-  }
-  if (d["isMetal"] === true) {
-    row("Металл", "да");
-  }
-  if (d["isShiny"] === true) {
-    row("Блестящий", "да");
-  }
-
-  const wearSlots = d["wearSlots"];
-  if (Array.isArray(wearSlots) && wearSlots.length > 0) {
-    row("Слоты", (wearSlots as string[]).join(", "));
-  }
-
-  listSection("Аффекты", d["affects"]);
-  listSection("Свойства", d["properties"]);
-  listSection("Запрет классам", d["forbidden"]);
-  listSection("Треб. правая рука", d["rightHandReqs"]);
-  listSection("Треб. левая рука", d["leftHandReqs"]);
-  listSection("Треб. обе руки", d["bothHandReqs"]);
-  listSection("Треб. надевание", d["wearReqs"]);
-
-  if (d["id"] != null) {
-    row("Wiki ID", String(d["id"]));
-  }
-
-  const firstSeen = item.firstSeen ? new Date(item.firstSeen).toLocaleDateString("ru-RU") : null;
-  const lastSeen = item.lastSeen ? new Date(item.lastSeen).toLocaleDateString("ru-RU") : null;
-  if (firstSeen) row("Первый раз", firstSeen);
-  if (lastSeen) row("Последний раз", lastSeen);
-
-  if (itemDetailModalBody.children.length === 0) {
-    const p = document.createElement("p");
-    p.className = "item-detail-modal__empty";
-    p.textContent = "Нет данных";
-    itemDetailModalBody.appendChild(p);
-  }
-}
 
 
 function commitSurvivalSettings(): void {
@@ -1258,17 +551,6 @@ function loadMoreFarZones(): void {
   }
 }
 
-interface NeighborZone {
-  zoneId: number;
-  entryVnums: number[];
-}
-
-interface FarZone {
-  zoneId: number;
-  hops: number;
-  entryVnums: number[];
-}
-
 function buildNeighborZones(currentZone: number | null): NeighborZone[] {
   if (currentZone === null || latestFullSnapshot.nodes.length === 0) return [];
 
@@ -1490,96 +772,6 @@ let allFarZones: FarZone[] = [];
 let allNeighborZones: NeighborZone[] = [];
 let allVisitedZones: FarZone[] = [];
 
-const AVAILABLE_ZONE_SCRIPTS: Array<{ zoneId: number; name: string; hundreds: number[]; stepLabels: string[] }> = [
-  {
-    zoneId: 258,
-    name: "Лес (зона 258)",
-    hundreds: [258],
-    stepLabels: [
-      "Идти на 25804",
-      "Открыть дверь",
-      "Идти на 25805",
-      "Ждать сообщение про лавочку",
-      "Идти назад на 25804",
-      "Двигать лавочку",
-      "Взять ключ",
-      "Идти на 25805",
-      "Отпереть и открыть дверь",
-      "Открыть дверь",
-      "Идти на 25806",
-      "Ждать реплику старика про шар",
-      "Ответить: помогу",
-      "Идти на 25807",
-      "Раздвинуть ветки",
-      "Идти на 25837",
-      "Лезть на дуб",
-      "Ждать появления духа леса",
-      "Спросить про карликов",
-      "Согласиться на задание духа",
-      "Спуститься к дубу (25837)",
-      "Лезть вниз",
-      "Нырнуть в озеро",
-    ],
-  },
-  {
-    zoneId: 280,
-    name: "Стоянка половцев",
-    hundreds: [280],
-    stepLabels: [
-      "Идти к входу в стоянку (28000)",
-      "Зачистить стоянку половцев",
-    ],
-  },
-  {
-    zoneId: 286,
-    name: "Птичий бор (286)",
-    hundreds: [286],
-    stepLabels: [
-      "Идти к входу в зону (28664)",
-      "Зачистить основную часть зоны (без камыша)",
-      "Идти к камышу (28629)",
-      "Раздвинуть камыш",
-      "Зачистить камышовую часть (стелс)",
-      "Вернуться к входу (28664)",
-    ],
-  },
-  {
-    zoneId: 111,
-    name: "Лесная зона (111)",
-    hundreds: [111],
-    stepLabels: [
-      "Идти к входу в лесную зону (11186)",
-      "Зачистить лесную зону (стелс)",
-    ],
-  },
-  {
-    zoneId: 102,
-    name: "Дубрава (102)",
-    hundreds: [102],
-    stepLabels: [
-      "Идти к входу в дубраву (10200)",
-      "Зачистить дубраву (стелс)",
-    ],
-  },
-  {
-    zoneId: 103,
-    name: "Латинский монастырь (103)",
-    hundreds: [103],
-    stepLabels: [
-      "Идти к входу в монастырь (10300)",
-      "Зачистить латинский монастырь (стелс)",
-    ],
-  },
-  {
-    zoneId: 104,
-    name: "Купеческая усадьба (104)",
-    hundreds: [104],
-    stepLabels: [
-      "Идти к входу в усадьбу (10400)",
-      "Зачистить купеческую усадьбу (стелс)",
-    ],
-  },
-];
 
 function getScriptForVnum(vnum: number): { zoneId: number; name: string; stepLabels: string[] } | undefined {
   const hundred = Math.floor(vnum / 100);
@@ -1613,40 +805,10 @@ const ansiState = {
 
 // ── Grid map renderer ────────────────────────────────────────────────────────
 
-const DIR_DELTA: Record<string, [number, number]> = {
-  north: [0, 1],
-  south: [0, -1],
-  east: [1, 0],
-  west: [-1, 0],
-};
-
-const OPPOSITE_DIR: Record<string, string> = {
-  north: "south",
-  south: "north",
-  east: "west",
-  west: "east",
-};
-
-const DIRECTION_PRIORITY: Record<string, number> = {
-  north: 0,
-  east: 1,
-  south: 2,
-  west: 3,
-  up: 4,
-  down: 5,
-};
 
 const CELL = 56;
 const TILE = 40;
 const PAD = 2;
-
-interface GridCell {
-  vnum: number;
-  gridX: number;
-  gridY: number;
-  zoneId: number;
-  zLevel: number;
-}
 
 const gridLayout = new Map<number, GridCell>();
 const collisionDisplacedVnums = new Set<number>();
@@ -2596,20 +1758,6 @@ function updateMap(snapshot: MapSnapshotPayload, fullReset: boolean): void {
   renderNavPanel();
 }
 
-interface ZoneNode {
-  zoneId: number;
-  roomCount: number;
-  visitedCount: number;
-  gridX: number;
-  gridY: number;
-}
-
-interface ZoneEdge {
-  fromZone: number;
-  toZone: number;
-  direction: string;
-}
-
 function loadZoneNames(): Map<number, string> {
   try {
     const raw = localStorage.getItem("zoneNames");
@@ -3527,13 +2675,6 @@ function renderFarmButton(): void {
   farmToggleButton.classList.toggle("button-toggle-active", farm2Enabled);
 }
 
-const SCRIPT_STEP_ICONS: Record<string, string> = {
-  pending: "○",
-  active: "▶",
-  done: "✓",
-  error: "✗",
-  skipped: "–",
-};
 
 function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; steps: Array<{ index: number; label: string; status: string; error?: string }>; errorMessage: string | null }): void {
   scriptPanelTitle.textContent = state.zoneName ? `Скрипт: ${state.zoneName}` : "Скрипт";
@@ -3733,17 +2874,7 @@ function createSocket(): WebSocket {
         break;
       }
       case "triggers_state":
-        currentTriggerState = message.payload;
-        triggerDodgeCheckbox.checked = message.payload.dodge;
-        triggerStandUpCheckbox.checked = message.payload.standUp;
-        triggerRearmCheckbox.checked = message.payload.rearm;
-        triggerCurseCheckbox.checked = message.payload.curse;
-        triggerLightCheckbox.checked = message.payload.light;
-        triggerFollowLeaderCheckbox.checked = message.payload.followLeader;
-        triggerAssistCheckbox.checked = message.payload.assist ?? false;
-        if (!triggersModal.classList.contains("farm-modal--hidden")) {
-          renderAssistTanks(message.payload.assistTanks ?? []);
-        }
+        bus.emit("triggers_state", message.payload);
         break;
       case "map_recording_state":
         mapRecordingEnabled = message.payload.enabled;
@@ -3760,16 +2891,16 @@ function createSocket(): WebSocket {
         hotkeysInCombat = message.payload.inCombat;
         break;
       case "items_data":
-        renderItemDbTable(message.payload.items);
+        bus.emit("items_data", message.payload);
         break;
       case "room_auto_commands_snapshot":
         currentRoomAutoCommands = new Map(message.payload.entries.map((e) => [e.vnum, e.command]));
         break;
       case "compare_scan_progress":
-        compareAdvisorStatus.textContent = message.payload.message;
+        bus.emit("compare_scan_progress", message.payload);
         break;
       case "compare_scan_result":
-        renderComparePanel(message.payload);
+        bus.emit("compare_scan_result", message.payload);
         break;
       case "repair_state":
         repairBtn.disabled = message.payload.running;
@@ -3777,25 +2908,11 @@ function createSocket(): WebSocket {
           ? `Починка: ${message.payload.message}`
           : "Починить снаряжение";
         break;
-      case "wiki_item_search_result": {
-        const p = message.payload;
-        itemDbWikiBtn.disabled = false;
-        if (!p.found) {
-          itemDbWikiResult.classList.add("items-modal__wiki-result--error");
-          itemDbWikiResult.textContent = p.error ?? `«${p.query}» — не найдено на вики`;
-        } else {
-          itemDbWikiResult.classList.remove("items-modal__wiki-result--error");
-          const parts: string[] = [];
-          if (p.name) parts.push(`${p.name}${p.itemType ? ` (${p.itemType})` : ""}`);
-          if (p.text) parts.push(p.text);
-          if (p.loadLocation) parts.push(`Лоад: ${p.loadLocation}`);
-          itemDbWikiResult.textContent = parts.join("\n\n") || "Найдено, но карточка пуста";
-          sendClientEvent({ type: "item_db_get" });
-        }
+      case "wiki_item_search_result":
+        bus.emit("wiki_item_search_result", message.payload);
         break;
-      }
       case "vorozhe_route_result": {
-        renderVorozheResult(message.payload);
+        bus.emit("vorozhe_route_result", message.payload);
         break;
       }
       case "container_contents": {
@@ -4178,26 +3295,13 @@ repairBtn.addEventListener("click", () => {
   sendClientEvent({ type: "repair_start" });
 });
 
-triggersButton.addEventListener("click", openTriggersModal);
-triggersModalClose.addEventListener("click", closeTriggersModal);
-triggersModalCancel.addEventListener("click", closeTriggersModal);
-triggersModalBackdrop.addEventListener("click", closeTriggersModal);
-
-itemDbButton.addEventListener("click", openItemDbModal);
-itemDbModalClose.addEventListener("click", closeItemDbModal);
-itemDbModalBackdrop.addEventListener("click", closeItemDbModal);
-
-itemDbTableBody.addEventListener("click", (e) => {
-  const tr = (e.target as HTMLElement).closest<HTMLTableRowElement>("tr.items-modal__row");
-  if (!tr) return;
-  const item = itemDbRowMap.get(tr);
-  if (!item) return;
-  openItemDetailModal(item);
+triggersButton.addEventListener("click", () => {
+  void import("./modals/triggers.ts").then((m) => m.openTriggersModal());
 });
 
-itemDetailModalClose.addEventListener("click", closeItemDetailModal);
-itemDetailModalCloseFooter.addEventListener("click", closeItemDetailModal);
-itemDetailModalBackdrop.addEventListener("click", closeItemDetailModal);
+itemDbButton.addEventListener("click", () => {
+  void import("./modals/item-db.ts").then((m) => m.openItemDbModal());
+});
 
 mapRecordingButton.addEventListener("click", () => {
   mapRecordingEnabled = !mapRecordingEnabled;
@@ -4278,319 +3382,14 @@ requireElement<HTMLButtonElement>("#refresh-all-containers-btn").addEventListene
   sendClientEvent({ type: "send", payload: { command: "инв" } });
 });
 
-compareButton.addEventListener("click", openCompareAdvisor);
-compareAdvisorClose.addEventListener("click", closeCompareAdvisor);
-
-vorozheButton.addEventListener("click", openVorozheModal);
-vorozheModalClose.addEventListener("click", closeVorozheModal);
-vorozheModalCancel.addEventListener("click", closeVorozheModal);
-vorozheModalBackdrop.addEventListener("click", closeVorozheModal);
-
-itemDbTabs.addEventListener("click", (e) => {
-  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
-  if (!btn) return;
-  itemDbActiveTab = btn.dataset.tab!;
-  itemDbTabs.querySelectorAll(".items-modal__tab").forEach(b => b.classList.remove("items-modal__tab--active"));
-  btn.classList.add("items-modal__tab--active");
-  applyItemDbFilter();
+compareButton.addEventListener("click", () => {
+  void import("./modals/compare.ts").then((m) => m.openCompareAdvisor());
 });
 
-itemDbSearch.addEventListener("input", applyItemDbFilter);
+vorozheButton.addEventListener("click", () => {
+  void import("./modals/vorozhe.ts").then((m) => m.openVorozheModal());
+});
 
-// ─── Compare Advisor ──────────────────────────────────────────────────────────
-
-function openCompareAdvisor(): void {
-  compareAdvisorPanel.classList.remove("compare-advisor-panel--hidden");
-  compareAdvisorStatus.textContent = "Сканирование...";
-  compareAdvisorTableBody.innerHTML = "";
-  sendClientEvent({ type: "compare_scan_start" });
-}
-
-function closeCompareAdvisor(): void {
-  compareAdvisorPanel.classList.add("compare-advisor-panel--hidden");
-}
-
-type CompareScanPayload = {
-  hasShop: boolean;
-  coins: number;
-  slots: Array<{
-    slot: string;
-    currentItemName: string | null;
-    currentScore: number;
-    currentCard: {
-      id: number;
-      name: string;
-      itemType: string;
-      ac: number;
-      armor: number;
-      damageAvg: number;
-      affects: string[];
-      properties: string[];
-      material: string;
-      wearSlots: string[];
-    } | null;
-    candidates: Array<{
-      itemId: number;
-      itemName: string;
-      price: number;
-      listNumber: number;
-      score: number;
-      source: "shop" | "bazaar" | "inventory" | "guild_storage";
-      hasGameData: boolean;
-      card: {
-        id: number;
-        name: string;
-        itemType: string;
-        ac: number;
-        armor: number;
-        damageAvg: number;
-        affects: string[];
-        properties: string[];
-        material: string;
-        wearSlots: string[];
-      };
-    }>;
-  }>;
-  notFound: Array<{
-    name: string;
-    price: number;
-    listNumber: number;
-    source: "shop" | "bazaar" | "inventory" | "guild_storage";
-  }>;
-};
-
-function buildTooltip(card: CompareScanPayload["slots"][0]["candidates"][0]["card"] | null): string {
-  if (!card) return "";
-  const lines: string[] = [];
-  if (card.itemType) lines.push(`Тип: ${card.itemType}`);
-  if (card.material) lines.push(`Материал: ${card.material}`);
-  if (card.ac) lines.push(`Защита: ${card.ac}`);
-  if (card.armor) lines.push(`Броня: ${card.armor}`);
-  if (card.damageAvg) lines.push(`Урон (avg): ${card.damageAvg}`);
-  if (card.affects.length > 0) lines.push("", ...card.affects.map((a) => `+ ${a}`));
-  if (card.properties.length > 0) lines.push("", ...card.properties.map((p) => `• ${p}`));
-  return lines.join("\n");
-}
-
-function attachTooltip(el: HTMLElement, text: string): void {
-  if (!text) return;
-  const tip = document.createElement("div");
-  tip.className = "compare-advisor__tooltip";
-  tip.textContent = text;
-  el.appendChild(tip);
-  el.addEventListener("mouseenter", () => {
-    const rect = el.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom;
-    tip.classList.toggle("compare-advisor__tooltip--above", spaceBelow < 160);
-    tip.classList.add("compare-advisor__tooltip--visible");
-  });
-  el.addEventListener("mouseleave", () => {
-    tip.classList.remove("compare-advisor__tooltip--visible");
-  });
-}
-
-function toStorageKeyword(name: string): string {
-  const words = name
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((w) => w.length > 3)
-    .map((w) => w.slice(0, -2));
-  if (words.length === 0) return name.toLowerCase().trim().slice(0, 4);
-  return words.join(".");
-}
-
-function renderComparePanel(payload: CompareScanPayload): void {
-  compareAdvisorPanel.classList.remove("compare-advisor-panel--hidden");
-  compareAdvisorCoins.textContent = payload.hasShop
-    ? `Монет: ${payload.coins}`
-    : `Монет: ${payload.coins} (магазина нет)`;
-
-  compareAdvisorTableBody.innerHTML = "";
-
-  for (const slot of payload.slots) {
-    if (slot.candidates.length === 0) continue;
-
-    // Current item row
-    const currentRow = document.createElement("tr");
-    currentRow.className = "compare-advisor__current-row";
-
-    const slotTd = document.createElement("td");
-    slotTd.className = "compare-advisor__slot-cell";
-    slotTd.textContent = slot.slot;
-
-    const currentNameTd = document.createElement("td");
-    currentNameTd.className = "compare-advisor__current-item compare-advisor__item-name";
-    currentNameTd.colSpan = 4;
-    currentNameTd.textContent = slot.currentItemName
-      ? `${slot.currentItemName} (${Math.round(slot.currentScore)} оч.)`
-      : "— пусто —";
-    if (slot.currentCard) attachTooltip(currentNameTd, buildTooltip(slot.currentCard));
-
-    currentRow.appendChild(slotTd);
-    currentRow.appendChild(currentNameTd);
-    currentRow.appendChild(document.createElement("td"));
-    compareAdvisorTableBody.appendChild(currentRow);
-
-    // Candidate rows
-    for (const c of slot.candidates) {
-      const sourceLabel =
-        c.source === "shop" ? `м:${c.listNumber}` :
-        c.source === "bazaar" ? `б:${c.listNumber}` :
-        c.source === "guild_storage" ? "хр" : "инв";
-      const scoreDiff = Math.round(c.score - slot.currentScore);
-      const diffText = scoreDiff > 0 ? `+${scoreDiff}` : `${scoreDiff}`;
-      const diffClass = scoreDiff > 0 ? "compare-advisor__diff--better" : "compare-advisor__diff--worse";
-
-      const tr = document.createElement("tr");
-      tr.className = "compare-advisor__candidate-row";
-
-      const nameCell = document.createElement("td");
-      nameCell.className = "compare-advisor__name-cell compare-advisor__item-name compare-advisor__name-cell--indent";
-      nameCell.colSpan = 2;
-      nameCell.textContent = c.itemName;
-      attachTooltip(nameCell, buildTooltip(c.card));
-
-      const priceCell = document.createElement("td");
-      priceCell.textContent = (c.source === "inventory" || c.source === "guild_storage") ? "—" : `${c.price}`;
-
-      const sourceCell = document.createElement("td");
-      sourceCell.textContent = sourceLabel;
-
-      const scoreCell = document.createElement("td");
-      scoreCell.innerHTML = `${Math.round(c.score)} <span class="${diffClass}">(${diffText})</span>`;
-
-      const actionCell = document.createElement("td");
-      if (!c.hasGameData) {
-        const charBtn = document.createElement("button");
-        charBtn.type = "button";
-        charBtn.className = "compare-advisor__char-btn button-secondary button-small";
-        charBtn.textContent = "хар";
-        charBtn.title = "Запросить характеристики из игры";
-        charBtn.addEventListener("click", () => {
-          const charCmd = c.source === "bazaar"
-            ? `базар характ ${c.listNumber}`
-            : c.source === "guild_storage"
-            ? `хранилище характ ${toStorageKeyword(c.itemName)}`
-            : `характ ${c.listNumber}`;
-          sendClientEvent({ type: "send", payload: { command: charCmd } });
-        });
-        actionCell.appendChild(charBtn);
-      }
-      if (c.source !== "inventory") {
-        const applyBtn = document.createElement("button");
-        applyBtn.type = "button";
-        applyBtn.className = "compare-advisor__apply-btn button-secondary button-small";
-        applyBtn.textContent = "Взять";
-        applyBtn.addEventListener("click", () => {
-          const commands: string[] = [];
-          if (c.source === "shop") commands.push(`купить ${c.listNumber}`);
-          else if (c.source === "bazaar") commands.push(`bazaar buy ${c.listNumber}`);
-          else if (c.source === "guild_storage") commands.push(`хранилище взять ${toStorageKeyword(c.itemName)}`);
-          sendClientEvent({ type: "compare_apply", payload: { commands } });
-        });
-        actionCell.appendChild(applyBtn);
-      }
-
-      tr.appendChild(nameCell);
-      tr.appendChild(priceCell);
-      tr.appendChild(sourceCell);
-      tr.appendChild(scoreCell);
-      tr.appendChild(actionCell);
-      compareAdvisorTableBody.appendChild(tr);
-    }
-  }
-
-  const notFoundStorage = payload.notFound.filter((i) => i.source === "guild_storage");
-  if (notFoundStorage.length > 0) {
-    const headerRow = document.createElement("tr");
-    headerRow.className = "compare-advisor__notfound-header-row";
-    const headerTd = document.createElement("td");
-    headerTd.colSpan = 5;
-    headerTd.className = "compare-advisor__notfound-header";
-    headerTd.textContent = `Не в базе — хранилище (${notFoundStorage.length})`;
-    headerRow.appendChild(headerTd);
-    compareAdvisorTableBody.appendChild(headerRow);
-
-    for (const item of notFoundStorage) {
-      const tr = document.createElement("tr");
-      tr.className = "compare-advisor__notfound-row";
-
-      const nameTd = document.createElement("td");
-      nameTd.className = "compare-advisor__name-cell compare-advisor__item-name compare-advisor__name-cell--indent";
-      nameTd.colSpan = 2;
-      nameTd.textContent = item.name;
-
-      const priceTd = document.createElement("td");
-      priceTd.textContent = "—";
-
-      const sourceTd = document.createElement("td");
-      sourceTd.textContent = `хр:${item.listNumber}`;
-
-      const actionTd = document.createElement("td");
-      const charBtn = document.createElement("button");
-      charBtn.type = "button";
-      charBtn.className = "compare-advisor__char-btn button-secondary button-small";
-      charBtn.textContent = "хар";
-      charBtn.addEventListener("click", () => {
-        const kw = toStorageKeyword(item.name);
-        sendClientEvent({ type: "send", payload: { command: `хранилище опознать ${kw}` } });
-        tr.style.display = "none";
-      });
-      actionTd.appendChild(charBtn);
-
-      tr.appendChild(nameTd);
-      tr.appendChild(priceTd);
-      tr.appendChild(sourceTd);
-      tr.appendChild(actionTd);
-      compareAdvisorTableBody.appendChild(tr);
-    }
-  }
-
-  const notFoundShop = payload.notFound.filter((i) => i.source === "shop");
-  if (payload.hasShop && notFoundShop.length > 0) {
-    const headerRow = document.createElement("tr");
-    headerRow.className = "compare-advisor__notfound-header-row";
-    const headerTd = document.createElement("td");
-    headerTd.colSpan = 5;
-    headerTd.className = "compare-advisor__notfound-header";
-    headerTd.textContent = `Не в базе — магазин (${notFoundShop.length})`;
-    headerRow.appendChild(headerTd);
-    compareAdvisorTableBody.appendChild(headerRow);
-
-    for (const item of notFoundShop) {
-      const tr = document.createElement("tr");
-      tr.className = "compare-advisor__notfound-row";
-
-      const nameTd = document.createElement("td");
-      nameTd.className = "compare-advisor__name-cell compare-advisor__item-name compare-advisor__name-cell--indent";
-      nameTd.colSpan = 2;
-      nameTd.textContent = item.name;
-
-      const priceTd = document.createElement("td");
-      priceTd.textContent = `${item.price}`;
-
-      const sourceTd = document.createElement("td");
-      sourceTd.textContent = `м:${item.listNumber}`;
-
-      const actionTd = document.createElement("td");
-      const charBtn = document.createElement("button");
-      charBtn.type = "button";
-      charBtn.className = "compare-advisor__char-btn button-secondary button-small";
-      charBtn.textContent = `хар ${item.listNumber}`;
-      charBtn.addEventListener("click", () => {
-        sendClientEvent({ type: "send", payload: { command: `характ ${item.listNumber}` } });
-        tr.style.display = "none";
-      });
-      actionTd.appendChild(charBtn);
-
-      tr.appendChild(nameTd);
-      tr.appendChild(priceTd);
-      tr.appendChild(sourceTd);
-      tr.appendChild(actionTd);
-      compareAdvisorTableBody.appendChild(tr);
-    }
-  }
-}
 
 // ─── Container / Inventory lists ──────────────────────────────────────────────
 
@@ -4814,164 +3613,7 @@ function renderInventoryList(
   }
 }
 
-// ─── Vorozhe modal ────────────────────────────────────────────────────────────
 
-function maybeRequestVorozheRoute(): void {
-  if (!vorozheFrom || !vorozheTo) return;
-  sendClientEvent({ type: "vorozhe_route_find", payload: { from: vorozheFrom, to: vorozheTo } });
-}
-
-function openVorozheModal(): void {
-  vorozheModal.classList.remove("farm-modal--hidden");
-}
-
-function closeVorozheModal(): void {
-  vorozheModal.classList.add("farm-modal--hidden");
-}
-
-function renderVorozheResult(payload: {
-  from: string;
-  to: string;
-  found: boolean;
-  steps: Array<{ from: string; to: string; items: string[] }>;
-  totalItems: Record<string, number>;
-}): void {
-  vorozheResult.classList.remove("vorozhe-modal__result--hidden");
-
-  if (!payload.found || payload.steps.length === 0) {
-    vorozheNoRoute.classList.remove("vorozhe-modal__no-route--hidden");
-    vorozheNoRoute.textContent =
-      payload.from === payload.to ? "Вы уже в этом городе" : "Маршрут не найден";
-    vorozheRouteTable.classList.add("vorozhe-modal__table--hidden");
-    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
-    return;
-  }
-
-  vorozheNoRoute.classList.add("vorozhe-modal__no-route--hidden");
-  vorozheRouteTable.classList.remove("vorozhe-modal__table--hidden");
-  vorozheTotal.classList.remove("vorozhe-modal__total--hidden");
-
-  vorozheRouteTbody.innerHTML = "";
-  for (const step of payload.steps) {
-    const tr = document.createElement("tr");
-    const tdFrom = document.createElement("td");
-    tdFrom.textContent = step.from;
-    const tdTo = document.createElement("td");
-    tdTo.textContent = step.to;
-    const tdItems = document.createElement("td");
-    for (const item of step.items) {
-      const badge = document.createElement("span");
-      badge.className = "vorozhe-item-badge";
-      badge.textContent = item;
-      tdItems.appendChild(badge);
-    }
-    tr.appendChild(tdFrom);
-    tr.appendChild(tdTo);
-    tr.appendChild(tdItems);
-    vorozheRouteTbody.appendChild(tr);
-  }
-
-  const totalEntries = Object.entries(payload.totalItems);
-  if (totalEntries.length > 0) {
-    vorozheTotal.textContent = `Итого нужно: ${totalEntries.map(([item, count]) => `${item} ×${count}`).join(", ")}`;
-  } else {
-    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
-  }
-}
-
-function initVorozheModal(): void {
-  VOROZHE_CITIES.forEach((city) => {
-    const fromBtn = document.createElement("button");
-    fromBtn.type = "button";
-    fromBtn.className = "vorozhe-city-btn";
-    fromBtn.textContent = city;
-    fromBtn.addEventListener("click", () => {
-      vorozheFrom = city;
-      vororozheFromButtons.forEach((b) => b.classList.remove("vorozhe-city-btn--active"));
-      fromBtn.classList.add("vorozhe-city-btn--active");
-      maybeRequestVorozheRoute();
-    });
-    vorozheFromButtons.appendChild(fromBtn);
-    vororozheFromButtons.push(fromBtn);
-
-    const toBtn = document.createElement("button");
-    toBtn.type = "button";
-    toBtn.className = "vorozhe-city-btn";
-    toBtn.textContent = city;
-    toBtn.addEventListener("click", () => {
-      vorozheTo = city;
-      vorozheToButtonsList.forEach((b) => b.classList.remove("vorozhe-city-btn--active"));
-      toBtn.classList.add("vorozhe-city-btn--active");
-      maybeRequestVorozheRoute();
-    });
-    vorozheToButtons.appendChild(toBtn);
-    vorozheToButtonsList.push(toBtn);
-  });
-}
-
-function doWikiSearch(): void {
-  const query = itemDbWikiInput.value.trim();
-  if (!query) return;
-  itemDbWikiResult.textContent = "Ищу...";
-  itemDbWikiResult.classList.remove("items-modal__wiki-result--hidden", "items-modal__wiki-result--error");
-  itemDbWikiBtn.disabled = true;
-  sendClientEvent({ type: "wiki_item_search", payload: { query } });
-}
-
-itemDbWikiBtn.addEventListener("click", doWikiSearch);
-itemDbWikiInput.addEventListener("keydown", (e: KeyboardEvent) => {
-  if (e.key === "Enter") doWikiSearch();
-});
-
-triggerDodgeCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, dodge: triggerDodgeCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { dodge: triggerDodgeCheckbox.checked } });
-});
-
-triggerStandUpCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, standUp: triggerStandUpCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { standUp: triggerStandUpCheckbox.checked } });
-});
-
-triggerRearmCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, rearm: triggerRearmCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { rearm: triggerRearmCheckbox.checked } });
-});
-
-triggerCurseCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, curse: triggerCurseCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { curse: triggerCurseCheckbox.checked } });
-});
-
-triggerLightCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, light: triggerLightCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { light: triggerLightCheckbox.checked } });
-});
-
-triggerFollowLeaderCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, followLeader: triggerFollowLeaderCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { followLeader: triggerFollowLeaderCheckbox.checked } });
-});
-
-triggerAssistCheckbox.addEventListener("change", () => {
-  currentTriggerState = { ...currentTriggerState, assist: triggerAssistCheckbox.checked };
-  sendClientEvent({ type: "triggers_toggle", payload: { assist: triggerAssistCheckbox.checked } });
-});
-
-assistTankAddBtn.addEventListener("click", () => {
-  const name = assistTankInput.value.trim();
-  if (!name) return;
-  if (currentTriggerState.assistTanks.includes(name)) return;
-  const updated = [...currentTriggerState.assistTanks, name];
-  currentTriggerState = { ...currentTriggerState, assistTanks: updated };
-  sendClientEvent({ type: "triggers_toggle", payload: { assistTanks: updated } });
-  renderAssistTanks(updated);
-  assistTankInput.value = "";
-});
-
-assistTankInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") assistTankAddBtn.click();
-});
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !farmSettingsModal.classList.contains("farm-modal--hidden")) {
@@ -4980,26 +3622,11 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !survivalSettingsModal.classList.contains("farm-modal--hidden")) {
     closeSurvivalSettingsModal();
   }
-  if (e.key === "Escape" && !triggersModal.classList.contains("farm-modal--hidden")) {
-    closeTriggersModal();
-  }
-  if (e.key === "Escape" && !itemDbModal.classList.contains("farm-modal--hidden")) {
-    closeItemDbModal();
-  }
-  if (e.key === "Escape" && !itemDetailModal.classList.contains("farm-modal--hidden")) {
-    closeItemDetailModal();
-  }
   if (e.key === "Escape" && !mapContextMenu.classList.contains("map-context-menu--hidden")) {
     closeMapContextMenu();
   }
   if (e.key === "Escape" && !autoCmdPopup.classList.contains("alias-popup--hidden")) {
     closeAutoCmdPopup();
-  }
-  if (e.key === "Escape" && !compareAdvisorPanel.classList.contains("compare-advisor-panel--hidden")) {
-    closeCompareAdvisor();
-  }
-  if (e.key === "Escape" && !vorozheModal.classList.contains("farm-modal--hidden")) {
-    closeVorozheModal();
   }
 });
 
@@ -5118,29 +3745,6 @@ document.addEventListener("click", (e) => {
 const HOTKEYS_STORAGE_KEY = "mud_hotkeys";
 const LAST_PROFILE_KEY = "mud_last_profile";
 
-interface HotkeyEntry {
-  key: string;            // e.g. "ArrowUp", "Ctrl+ArrowUp", "KeyW", "F1"
-  command: string;        // MUD command to send (out of combat)
-  combatCommand?: string; // MUD command to send when in combat (optional)
-  label: string;          // Human-readable key label shown in UI
-}
-
-const DEFAULT_HOTKEYS: HotkeyEntry[] = [
-  { key: "ArrowUp",        command: "север",   label: "↑" },
-  { key: "ArrowDown",      command: "юг",      label: "↓" },
-  { key: "ArrowLeft",      command: "запад",   label: "←" },
-  { key: "ArrowRight",     command: "восток",  label: "→" },
-  { key: "Opt+ArrowUp",    command: "#go с",   label: "Opt+↑" },
-  { key: "Opt+ArrowDown",  command: "#go ю",   label: "Opt+↓" },
-  { key: "Opt+ArrowLeft",  command: "#go з",   label: "Opt+←" },
-  { key: "Opt+ArrowRight", command: "#go в",   label: "Opt+→" },
-  { key: "KeyZ",           command: "карта",   label: "Я" },
-  { key: "KeyX",           command: "огл",     label: "Ч" },
-  { key: "KeyW",           command: "заколоть $target", label: "Ц" },
-  { key: "KeyA",           command: "освеж тр", label: "Ф" },
-  { key: "KeyQ",           command: "взя все.тр;;взя все все.тр;;бро все.тр", label: "Й" },
-  { key: "Digit5",         command: "взя возвр склад;;зачит возвр;;держ лев.рук", label: "5" },
-];
 
 function loadHotkeys(): HotkeyEntry[] {
   try {
@@ -5206,178 +3810,23 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// ── Hotkey modal ───────────────────────────────────────────────────────────────
+// ── Hotkey modal (lazy-loaded) ────────────────────────────────────────────────
 
 const hotkeysButton = requireElement<HTMLButtonElement>("#hotkeys-button");
-const hotkeysModal = requireElement<HTMLDivElement>("#hotkeys-modal");
-const hotkeysModalBackdrop = requireElement<HTMLDivElement>("#hotkeys-modal .farm-modal__backdrop");
-const hotkeysModalClose = requireElement<HTMLButtonElement>("#hotkeys-modal-close");
-const hotkeysModalCancel = requireElement<HTMLButtonElement>("#hotkeys-modal-cancel");
-const hotkeysModalSave = requireElement<HTMLButtonElement>("#hotkeys-modal-save");
-const hotkeysModalAddRow = requireElement<HTMLButtonElement>("#hotkeys-modal-add-row");
-const hotkeysTableBody = requireElement<HTMLTableSectionElement>("#hotkeys-table-body");
 
-// Capture mode state
-let capturingCell: { rowIndex: number; keyEl: HTMLInputElement } | null = null;
-
-function renderHotkeysTable(entries: HotkeyEntry[]): void {
-  hotkeysTableBody.innerHTML = "";
-
-  entries.forEach((entry, idx) => {
-    const tr = document.createElement("tr");
-    tr.className = "hotkeys-modal__row";
-
-    // Key cell
-    const tdKey = document.createElement("td");
-    tdKey.className = "hotkeys-modal__cell";
-    const keyInput = document.createElement("input");
-    keyInput.type = "text";
-    keyInput.className = "topbar__input hotkeys-modal__key-input";
-    keyInput.value = entry.label;
-    keyInput.readOnly = true;
-    keyInput.placeholder = "Нажмите кнопку…";
-    keyInput.dataset.rowIndex = String(idx);
-    keyInput.title = `Код: ${entry.key}`;
-
-    keyInput.addEventListener("click", () => {
-      // Enter capture mode
-      capturingCell = { rowIndex: idx, keyEl: keyInput };
-      keyInput.value = "…";
-      keyInput.classList.add("hotkeys-modal__key-input--capturing");
-    });
-
-    tdKey.appendChild(keyInput);
-    tr.appendChild(tdKey);
-
-    // Command cell
-    const tdCmd = document.createElement("td");
-    tdCmd.className = "hotkeys-modal__cell";
-    const cmdInput = document.createElement("input");
-    cmdInput.type = "text";
-    cmdInput.className = "topbar__input hotkeys-modal__cmd-input";
-    cmdInput.value = entry.command;
-    cmdInput.placeholder = "команда";
-    cmdInput.autocomplete = "off";
-    cmdInput.dataset.rowIndex = String(idx);
-    tdCmd.appendChild(cmdInput);
-    tr.appendChild(tdCmd);
-
-    // Delete button
-    const tdDel = document.createElement("td");
-    tdDel.className = "hotkeys-modal__cell hotkeys-modal__cell--delete";
-    const delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.className = "button-secondary button-small";
-    delBtn.textContent = "✕";
-    delBtn.addEventListener("click", () => {
-      const currentEntries = readHotkeysFromTable();
-      currentEntries.splice(idx, 1);
-      renderHotkeysTable(currentEntries);
-    });
-    tdDel.appendChild(delBtn);
-    tr.appendChild(tdDel);
-
-    hotkeysTableBody.appendChild(tr);
-  });
-}
-
-function readHotkeysFromTable(): HotkeyEntry[] {
-  const entries: HotkeyEntry[] = [];
-  const rows = hotkeysTableBody.querySelectorAll<HTMLTableRowElement>(".hotkeys-modal__row");
-  rows.forEach((row) => {
-    const keyInput = row.querySelector<HTMLInputElement>(".hotkeys-modal__key-input");
-    const cmdInput = row.querySelector<HTMLInputElement>(".hotkeys-modal__cmd-input");
-    if (!keyInput || !cmdInput) return;
-    // key is stored in title as "Код: <key>"
-    const keyCode = keyInput.title.replace(/^Код: /, "");
-    const label = keyInput.value;
-    const command = cmdInput.value.trim();
-    if (keyCode) {
-      entries.push({ key: keyCode, label, command });
-    }
-  });
-  return entries;
-}
-
-// Capture keydown inside modal for key assignment
-hotkeysModal.addEventListener("keydown", (e) => {
-  if (!capturingCell) return;
-
-  // Escape cancels capture
-  if (e.key === "Escape") {
-    const prev = hotkeys[capturingCell.rowIndex];
-    capturingCell.keyEl.value = prev?.label ?? "";
-    capturingCell.keyEl.title = `Код: ${prev?.key ?? ""}`;
-    capturingCell.keyEl.classList.remove("hotkeys-modal__key-input--capturing");
-    capturingCell = null;
-    e.stopPropagation();
-    return;
-  }
-
-  e.preventDefault();
-  e.stopPropagation();
-
-  const label = keyToLabel(e);
-  const modifier = e.metaKey ? "Cmd+" : e.altKey ? "Opt+" : e.ctrlKey ? "Ctrl+" : "";
-  const keyCode = modifier + (e.code || e.key);
-  capturingCell.keyEl.value = label;
-  capturingCell.keyEl.title = `Код: ${keyCode}`;
-  capturingCell.keyEl.classList.remove("hotkeys-modal__key-input--capturing");
-  capturingCell = null;
+bus.on("hotkeys_request", () => {
+  bus.emit("hotkeys_state", hotkeys);
 });
 
-function keyToLabel(e: KeyboardEvent): string {
-  const labels: Record<string, string> = {
-    ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
-    Enter: "Enter", Escape: "Esc", Tab: "Tab", Backspace: "⌫",
-    Delete: "Del", Home: "Home", End: "End", PageUp: "PgUp", PageDown: "PgDn",
-    Insert: "Ins", Space: "Пробел",
-  };
-  const base = labels[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : (/^F\d+$/.test(e.key) ? e.key : e.code || e.key));
-  const prefix = e.metaKey ? "Cmd+" : e.altKey ? "Opt+" : e.ctrlKey ? "Ctrl+" : "";
-  return prefix + base;
-}
-
-function openHotkeysModal(): void {
-  capturingCell = null;
-  renderHotkeysTable([...hotkeys]);
-  hotkeysModal.classList.remove("farm-modal--hidden");
-}
-
-function closeHotkeysModal(): void {
-  capturingCell = null;
-  hotkeysModal.classList.add("farm-modal--hidden");
-}
-
-function commitHotkeys(): void {
-  hotkeys = readHotkeysFromTable();
+bus.on("hotkeys_save", (entries) => {
+  hotkeys = entries as HotkeyEntry[];
   saveHotkeys(hotkeys);
-  closeHotkeysModal();
-}
-
-hotkeysButton.addEventListener("click", openHotkeysModal);
-hotkeysModalClose.addEventListener("click", closeHotkeysModal);
-hotkeysModalCancel.addEventListener("click", closeHotkeysModal);
-hotkeysModalBackdrop.addEventListener("click", closeHotkeysModal);
-hotkeysModalSave.addEventListener("click", commitHotkeys);
-
-hotkeysModalAddRow.addEventListener("click", () => {
-  const currentEntries = readHotkeysFromTable();
-  currentEntries.push({ key: "", label: "", command: "" });
-  renderHotkeysTable(currentEntries);
-  const rows = hotkeysTableBody.querySelectorAll<HTMLTableRowElement>(".hotkeys-modal__row");
-  const lastRow = rows[rows.length - 1];
-  lastRow?.querySelector<HTMLInputElement>(".hotkeys-modal__key-input")?.click();
 });
 
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !hotkeysModal.classList.contains("farm-modal--hidden")) {
-    if (capturingCell) return;
-    closeHotkeysModal();
-  }
+hotkeysButton.addEventListener("click", () => {
+  void import("./modals/hotkeys.ts").then((m) => m.openHotkeysModal());
 });
 
-initVorozheModal();
 
 navPanel.addEventListener("scroll", () => {
   if (navPanel.scrollTop + navPanel.clientHeight >= navPanel.scrollHeight - 100) {
