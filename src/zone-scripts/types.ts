@@ -93,7 +93,29 @@ export type ScriptStep =
       entryVnum: number;
       /** Ordered route to cycle through. Required — must be non-empty. */
       routeVnums: number[];
-      targetValues: string[];
+      /**
+       * Keywords to match against room description lines. Used as a filter by
+       * parseMobsFromRoomDescription. Optional when mobNameMap is provided — in
+       * that case the map keys serve as the filter instead.
+       */
+      targetValues?: string[];
+      /**
+       * Explicit mapping from room description line (lowercase) to combat keyword.
+       * When provided, the executor uses this map instead of spamming all targetValues:
+       * for each visible mob whose room line matches a key, the corresponding
+       * combat keyword is sent as "закол <keyword>". Mobs with no matching key
+       * are skipped (not attacked).
+       *
+       * Keys must be lowercase substrings of the room description line as returned
+       * by parseMobsFromRoomDescription (after ANSI stripping and trimming).
+       *
+       * Example:
+       *   mobNameMap: {
+       *     "бобёр стоит здесь.": "бобёр",
+       *     "кротенок роет землю здесь.": "кротенок",
+       *   }
+       */
+      mobNameMap?: Record<string, string>;
       /**
        * Vnums to pass through without attacking. Useful for transit rooms that
        * contain dangerous mobs (e.g. охотник за черепами) — the bot moves through
@@ -108,6 +130,7 @@ export type ScriptStep =
        * When omitted, only idleTimeoutMs limits the run.
        */
       maxPassCount?: number;
+      skinCorpses?: boolean;
     };
 
 // ---------------------------------------------------------------------------
@@ -176,6 +199,7 @@ export interface ZoneScriptDeps {
   stealthMove(direction: Direction): Promise<StealthMoveResult>;
   combatState: CombatState;
   getVisibleTargets(): Map<string, string>;
+  getCorpseCount(): number;
   reinitRoom(): void;
   mobResolver: MobResolverDeps;
   isStealthProfile(): boolean;

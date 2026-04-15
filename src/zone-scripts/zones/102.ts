@@ -33,4 +33,9 @@ export const zone102Steps: ScriptStep[] = [
     idleTimeoutMs: 30_000,
     maxPassCount: 1,
   },
+  {
+    kind: "navigate",
+    label: "Вернуться в 34349",
+    targetVnum: 34349,
+  },
 ];

@@ -14,17 +14,18 @@ const COMMAND_DELAY_MS = 800;
 interface ZoneScript {
   zoneId: number;
   zoneName: string;
+  hundreds: number[];
   steps: ScriptStep[];
 }
 
 const ZONE_SCRIPTS: ZoneScript[] = [
-  { zoneId: ZONE_102_ID, zoneName: ZONE_102_NAME, steps: zone102Steps },
-  { zoneId: ZONE_103_ID, zoneName: ZONE_103_NAME, steps: zone103Steps },
-  { zoneId: ZONE_104_ID, zoneName: ZONE_104_NAME, steps: zone104Steps },
-  { zoneId: ZONE_111_ID, zoneName: ZONE_111_NAME, steps: zone111Steps },
-  { zoneId: ZONE_258_ID, zoneName: ZONE_258_NAME, steps: zone258Steps },
-  { zoneId: ZONE_280_ID, zoneName: ZONE_280_NAME, steps: zone280Steps },
-  { zoneId: ZONE_286_ID, zoneName: ZONE_286_NAME, steps: zone286Steps },
+  { zoneId: ZONE_102_ID, zoneName: ZONE_102_NAME, hundreds: [102], steps: zone102Steps },
+  { zoneId: ZONE_103_ID, zoneName: ZONE_103_NAME, hundreds: [103], steps: zone103Steps },
+  { zoneId: ZONE_104_ID, zoneName: ZONE_104_NAME, hundreds: [104], steps: zone104Steps },
+  { zoneId: ZONE_111_ID, zoneName: ZONE_111_NAME, hundreds: [111], steps: zone111Steps },
+  { zoneId: ZONE_258_ID, zoneName: ZONE_258_NAME, hundreds: [258], steps: zone258Steps },
+  { zoneId: ZONE_280_ID, zoneName: ZONE_280_NAME, hundreds: [280], steps: zone280Steps },
+  { zoneId: ZONE_286_ID, zoneName: ZONE_286_NAME, hundreds: [286], steps: zone286Steps },
 ];
 
 interface RunnerState {
@@ -137,9 +138,11 @@ async function executeStep(
           entryVnum: step.entryVnum,
           routeVnums: step.routeVnums,
           targetValues: step.targetValues,
+          mobNameMap: step.mobNameMap,
           skipVnums: step.skipVnums,
           idleTimeoutMs: step.idleTimeoutMs,
           maxPassCount: step.maxPassCount,
+          skinCorpses: step.skinCorpses,
         },
         deps,
         signal,
@@ -247,6 +250,15 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
   return {
     getState(): ZoneScriptStateSnapshot {
       return getSnapshot(state);
+    },
+
+    getZoneList(): Array<{ zoneId: number; zoneName: string; hundreds: number[]; stepLabels: string[] }> {
+      return ZONE_SCRIPTS.map((s) => ({
+        zoneId: s.zoneId,
+        zoneName: s.zoneName,
+        hundreds: s.hundreds,
+        stepLabels: s.steps.map((step) => step.label),
+      }));
     },
 
     setEnabled(enabled: boolean, zoneId?: number): void {
