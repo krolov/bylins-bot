@@ -3,7 +3,7 @@ import type { FarmZoneSettings } from "./types.ts";
 
 export function defaultConfig(): Farm2Config {
   return {
-    attackCommand: "заколоть",
+    attackCommand: "закол",
     targetValues: [],
     skinningSalvoEnabled: false,
     skinningSkinVerb: "освеж",

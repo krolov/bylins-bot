@@ -81,6 +81,7 @@ export async function runTick(state: Farm2State, deps: Farm2ControllerDependenci
     const target = await resolveAttackTarget(state.probe, state.currentVisibleTargets, currentRoomId, deps);
 
     if (target !== null) {
+      deps.sendCommand("спрят");
       deps.sendCommand(`${state.config.attackCommand} ${target}`);
       state.attackSentAt = Date.now();
       schedule(DEFAULT_RETRY_DELAY_MS);
