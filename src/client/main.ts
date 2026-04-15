@@ -26,7 +26,6 @@ import type {
   ClientEvent,
 } from "./types.ts";
 import {
-  VOROZHE_CITIES,
   WEAPON_COLUMNS,
   ARMOR_COLUMNS,
   AVAILABLE_ZONE_SCRIPTS,
@@ -36,6 +35,11 @@ import {
   SCRIPT_STEP_ICONS,
   DEFAULT_HOTKEYS,
 } from "./constants.ts";
+import * as bus from "./bus.ts";
+
+// Modal chunks emit outbound messages via the bus to avoid importing main.ts
+// (which would force the bundler to keep them on the critical path).
+bus.on("client_send", (ev) => sendClientEvent(ev as ClientEvent));
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -208,17 +212,6 @@ const compareAdvisorTableBody = requireElement<HTMLTableSectionElement>("#compar
 const compareAdvisorCoins = requireElement<HTMLParagraphElement>("#compare-advisor-coins");
 
 const vorozheButton = requireElement<HTMLButtonElement>("#vorozhe-button");
-const vorozheModal = requireElement<HTMLDivElement>("#vorozhe-modal");
-const vorozheModalClose = requireElement<HTMLButtonElement>("#vorozhe-modal-close");
-const vorozheModalCancel = requireElement<HTMLButtonElement>("#vorozhe-modal-cancel");
-const vorozheModalBackdrop = requireElement<HTMLDivElement>("#vorozhe-modal .farm-modal__backdrop");
-const vorozheFromButtons = requireElement<HTMLDivElement>("#vorozhe-from-buttons");
-const vorozheToButtons = requireElement<HTMLDivElement>("#vorozhe-to-buttons");
-const vorozheResult = requireElement<HTMLDivElement>("#vorozhe-result");
-const vorozheNoRoute = requireElement<HTMLDivElement>("#vorozhe-no-route");
-const vorozheRouteTable = requireElement<HTMLTableElement>("#vorozhe-route-table");
-const vorozheRouteTbody = requireElement<HTMLTableSectionElement>("#vorozhe-route-tbody");
-const vorozheTotal = requireElement<HTMLDivElement>("#vorozhe-total");
 
 const gatherToggleButton = requireElement<HTMLButtonElement>("#gather-toggle-button");
 const gatherSellButton = requireElement<HTMLButtonElement>("#gather-sell-button");
@@ -235,10 +228,6 @@ const junkSellAllBtn = requireElement<HTMLButtonElement>("#junk-sell-all-btn");
 const inventoryPanelList = requireElement<HTMLTableSectionElement>("#inventory-panel-list");
 
 
-let vorozheFrom: string | null = null;
-let vororozheFromButtons: HTMLButtonElement[] = [];
-let vorozheTo: string | null = null;
-let vorozheToButtonsList: HTMLButtonElement[] = [];
 
 let farmModalZoneId: number | null = null;
 let currentSurvivalSettings: SurvivalSettings = defaultSurvivalSettings();
@@ -3275,7 +3264,7 @@ function createSocket(): WebSocket {
         break;
       }
       case "vorozhe_route_result": {
-        renderVorozheResult(message.payload);
+        bus.emit("vorozhe_route_result", message.payload);
         break;
       }
       case "container_contents": {
@@ -3761,10 +3750,9 @@ requireElement<HTMLButtonElement>("#refresh-all-containers-btn").addEventListene
 compareButton.addEventListener("click", openCompareAdvisor);
 compareAdvisorClose.addEventListener("click", closeCompareAdvisor);
 
-vorozheButton.addEventListener("click", openVorozheModal);
-vorozheModalClose.addEventListener("click", closeVorozheModal);
-vorozheModalCancel.addEventListener("click", closeVorozheModal);
-vorozheModalBackdrop.addEventListener("click", closeVorozheModal);
+vorozheButton.addEventListener("click", () => {
+  void import("./modals/vorozhe.ts").then((m) => m.openVorozheModal());
+});
 
 itemDbTabs.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
@@ -4245,105 +4233,6 @@ function renderInventoryList(
   }
 }
 
-// ─── Vorozhe modal ────────────────────────────────────────────────────────────
-
-function maybeRequestVorozheRoute(): void {
-  if (!vorozheFrom || !vorozheTo) return;
-  sendClientEvent({ type: "vorozhe_route_find", payload: { from: vorozheFrom, to: vorozheTo } });
-}
-
-function openVorozheModal(): void {
-  initVorozheModal();
-  vorozheModal.classList.remove("farm-modal--hidden");
-}
-
-function closeVorozheModal(): void {
-  vorozheModal.classList.add("farm-modal--hidden");
-}
-
-function renderVorozheResult(payload: {
-  from: string;
-  to: string;
-  found: boolean;
-  steps: Array<{ from: string; to: string; items: string[] }>;
-  totalItems: Record<string, number>;
-}): void {
-  vorozheResult.classList.remove("vorozhe-modal__result--hidden");
-
-  if (!payload.found || payload.steps.length === 0) {
-    vorozheNoRoute.classList.remove("vorozhe-modal__no-route--hidden");
-    vorozheNoRoute.textContent =
-      payload.from === payload.to ? "Вы уже в этом городе" : "Маршрут не найден";
-    vorozheRouteTable.classList.add("vorozhe-modal__table--hidden");
-    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
-    return;
-  }
-
-  vorozheNoRoute.classList.add("vorozhe-modal__no-route--hidden");
-  vorozheRouteTable.classList.remove("vorozhe-modal__table--hidden");
-  vorozheTotal.classList.remove("vorozhe-modal__total--hidden");
-
-  vorozheRouteTbody.innerHTML = "";
-  for (const step of payload.steps) {
-    const tr = document.createElement("tr");
-    const tdFrom = document.createElement("td");
-    tdFrom.textContent = step.from;
-    const tdTo = document.createElement("td");
-    tdTo.textContent = step.to;
-    const tdItems = document.createElement("td");
-    for (const item of step.items) {
-      const badge = document.createElement("span");
-      badge.className = "vorozhe-item-badge";
-      badge.textContent = item;
-      tdItems.appendChild(badge);
-    }
-    tr.appendChild(tdFrom);
-    tr.appendChild(tdTo);
-    tr.appendChild(tdItems);
-    vorozheRouteTbody.appendChild(tr);
-  }
-
-  const totalEntries = Object.entries(payload.totalItems);
-  if (totalEntries.length > 0) {
-    vorozheTotal.textContent = `Итого нужно: ${totalEntries.map(([item, count]) => `${item} ×${count}`).join(", ")}`;
-  } else {
-    vorozheTotal.classList.add("vorozhe-modal__total--hidden");
-  }
-}
-
-let vorozheModalInitialized = false;
-function initVorozheModal(): void {
-  if (vorozheModalInitialized) return;
-  vorozheModalInitialized = true;
-  VOROZHE_CITIES.forEach((city) => {
-    const fromBtn = document.createElement("button");
-    fromBtn.type = "button";
-    fromBtn.className = "vorozhe-city-btn";
-    fromBtn.textContent = city;
-    fromBtn.addEventListener("click", () => {
-      vorozheFrom = city;
-      vororozheFromButtons.forEach((b) => b.classList.remove("vorozhe-city-btn--active"));
-      fromBtn.classList.add("vorozhe-city-btn--active");
-      maybeRequestVorozheRoute();
-    });
-    vorozheFromButtons.appendChild(fromBtn);
-    vororozheFromButtons.push(fromBtn);
-
-    const toBtn = document.createElement("button");
-    toBtn.type = "button";
-    toBtn.className = "vorozhe-city-btn";
-    toBtn.textContent = city;
-    toBtn.addEventListener("click", () => {
-      vorozheTo = city;
-      vorozheToButtonsList.forEach((b) => b.classList.remove("vorozhe-city-btn--active"));
-      toBtn.classList.add("vorozhe-city-btn--active");
-      maybeRequestVorozheRoute();
-    });
-    vorozheToButtons.appendChild(toBtn);
-    vorozheToButtonsList.push(toBtn);
-  });
-}
-
 function doWikiSearch(): void {
   const query = itemDbWikiInput.value.trim();
   if (!query) return;
@@ -4432,9 +4321,6 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape" && !compareAdvisorPanel.classList.contains("compare-advisor-panel--hidden")) {
     closeCompareAdvisor();
-  }
-  if (e.key === "Escape" && !vorozheModal.classList.contains("farm-modal--hidden")) {
-    closeVorozheModal();
   }
 });
 
