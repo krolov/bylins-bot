@@ -4822,6 +4822,7 @@ function maybeRequestVorozheRoute(): void {
 }
 
 function openVorozheModal(): void {
+  initVorozheModal();
   vorozheModal.classList.remove("farm-modal--hidden");
 }
 
@@ -4879,7 +4880,10 @@ function renderVorozheResult(payload: {
   }
 }
 
+let vorozheModalInitialized = false;
 function initVorozheModal(): void {
+  if (vorozheModalInitialized) return;
+  vorozheModalInitialized = true;
   VOROZHE_CITIES.forEach((city) => {
     const fromBtn = document.createElement("button");
     fromBtn.type = "button";
@@ -5376,8 +5380,6 @@ document.addEventListener("keydown", (e) => {
     closeHotkeysModal();
   }
 });
-
-initVorozheModal();
 
 navPanel.addEventListener("scroll", () => {
   if (navPanel.scrollTop + navPanel.clientHeight >= navPanel.scrollHeight - 100) {
