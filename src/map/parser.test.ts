@@ -195,6 +195,43 @@ describe("feedText", () => {
     ]);
   });
 
+  test("parses room header in [vnum] Name [flag] format", () => {
+    const state = createParserState();
+    const events = feedText(state, "[42163] Среди пшеницы [телепортация в комнату запрещена]\n[ Exits: n e s w ]\n");
+
+    expect(events).toEqual([
+      {
+        kind: "room",
+        room: {
+          vnum: 42163,
+          name: "Среди пшеницы",
+          exits: ["north", "east", "south", "west"],
+          closedExits: [],
+        },
+      },
+    ]);
+  });
+
+  test("parses [vnum] Name [flag] format with prompt prefix", () => {
+    const state = createParserState();
+    const events = feedText(
+      state,
+      "713H 301M 20397420o Зауч:0 ОЗ:0 25L 6619G Вых:СВЮЗ> [42163] Среди пшеницы [телепортация в комнату запрещена]\n[ Exits: n e s w ]\n",
+    );
+
+    expect(events).toEqual([
+      {
+        kind: "room",
+        room: {
+          vnum: 42163,
+          name: "Среди пшеницы",
+          exits: ["north", "east", "south", "west"],
+          closedExits: [],
+        },
+      },
+    ]);
+  });
+
   test("strips combat prompt prefix (with mob status) from room name", () => {
     const state = createParserState();
     const events = feedText(

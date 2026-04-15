@@ -1,7 +1,7 @@
 import type { Direction, ParsedEvent, ParsedRoom, ParserState } from "./types";
 
 const ANSI_SEQUENCE_REGEXP = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
-const ROOM_HEADER_REGEXP = /^(.+?)\s+\[(\d{3,})\]\s*$/;
+const ROOM_HEADER_REGEXP = /^(.+?)\s+\[(\d{3,})\]\s*$|^\[(\d{3,})\]\s+(.+?)\s*\[(?:[^\]]*)\]\s*$|^\[(\d{3,})\]\s+([^.[]+?)\s*$/;
 const EXITS_LINE_REGEXP = /^\[\s*(?:exits?|выходы?)\s*:\s*(.*?)\s*\]\s*$/i;
 const MOVEMENT_BLOCKED_REGEXP = /Вы не сможете туда пройти|Вам сюда нельзя|Нет такого выхода|Вы не можете идти/i;
 const FLEE_REGEXP = /Вы быстро убежали с поля битвы|ПАНИКА ОВЛАДЕЛА ВАМИ|Ни за что! Вы сражаетесь за свою жизнь/i;
@@ -72,13 +72,16 @@ export function feedText(state: ParserState, text: string): ParsedEvent[] {
       continue;
     }
 
-    const roomHeaderMatch = ROOM_HEADER_REGEXP.exec(line);
+    const strippedLine = stripPromptPrefix(line);
+    const roomHeaderMatch = ROOM_HEADER_REGEXP.exec(strippedLine);
 
     if (roomHeaderMatch) {
       flushPendingRoomHeader(state, events, [], []);
+      const rawName = roomHeaderMatch[1] ?? roomHeaderMatch[4] ?? roomHeaderMatch[6];
+      const rawVnum = roomHeaderMatch[2] ?? roomHeaderMatch[3] ?? roomHeaderMatch[5];
       state.pendingRoomHeader = {
-        name: sanitizeRoomName(roomHeaderMatch[1]),
-        vnum: Number(roomHeaderMatch[2]),
+        name: rawName.trim(),
+        vnum: Number(rawVnum),
       };
       continue;
     }
@@ -136,8 +139,8 @@ function extractUnfinishedAnsiTail(rawText: string): string {
   return tail;
 }
 
-function sanitizeRoomName(name: string): string {
-  return name.replace(ROOM_NAME_STATUS_PREFIX_REGEXP, "").trim();
+function stripPromptPrefix(line: string): string {
+  return line.replace(ROOM_NAME_STATUS_PREFIX_REGEXP, "").trim();
 }
 
 function extractMobsFromRaw(rawText: string, mobs: string[]): void {
