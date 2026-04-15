@@ -199,6 +199,10 @@ export type ServerEvent =
     }
   | { type: "gather_state"; payload: GatherState }
   | { type: "zone_script_state"; payload: ZoneScriptStateSnapshot }
+  | {
+      type: "zone_script_list";
+      payload: Array<{ zoneId: number; zoneName: string; hundreds: number[]; stepLabels: string[] }>;
+    }
   | { type: "debug_log_state"; payload: { enabled: boolean } }
   | {
       type: "inventory_sort_result";
@@ -238,7 +242,8 @@ export type ServerEvent =
       payload: {
         messages: Array<{ text: string; timestamp: number }>;
       };
-    };
+    }
+  | { type: "equip_all" };
 
 export type {
   FarmZoneSettings,

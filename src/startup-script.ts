@@ -10,6 +10,6 @@ export const startupConnectionScript: StartupConnectionScript = {
   host: "bylins.su",
   port: 7000,
   tls: false,
-  startupCommands: ["5", "воинмир", "respect1"],
+  startupCommands: ["5", "воинмир", "respect1", ""],
   commandDelayMs: 150,
 };

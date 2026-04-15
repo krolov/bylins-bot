@@ -2,7 +2,7 @@ import type { FarmZoneSettings, SurvivalSettings } from "./map/store.ts";
 
 export function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZoneSettings {
   return {
-    attackCommand: typeof raw.attackCommand === "string" && raw.attackCommand.trim().length > 0 ? raw.attackCommand.trim() : "заколоть",
+    attackCommand: typeof raw.attackCommand === "string" && raw.attackCommand.trim().length > 0 ? raw.attackCommand.trim() : "закол",
     skinningSalvoEnabled: raw.skinningSalvoEnabled === true,
     skinningSkinVerb: typeof raw.skinningSkinVerb === "string" && raw.skinningSkinVerb.trim().length > 0 ? raw.skinningSkinVerb.trim() : "освеж",
     lootMeatCommand: typeof raw.lootMeatCommand === "string" ? raw.lootMeatCommand.trim() : "бро все.мяс",

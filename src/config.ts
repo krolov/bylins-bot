@@ -16,6 +16,8 @@ export interface RuntimeConfig {
   wikiProxies: string[];
   profiles: CharacterProfile[];
   defaultProfileId: string;
+  telegramBotToken: string;
+  telegramChatId: string;
 }
 
 function readString(name: string, fallback: string): string {
@@ -100,6 +102,8 @@ export const runtimeConfig: RuntimeConfig = {
   wikiProxies: readWikiProxies(),
   profiles,
   defaultProfileId,
+  telegramBotToken: readString("TELEGRAM_BOT_TOKEN", ""),
+  telegramChatId: readString("TELEGRAM_CHAT_ID", ""),
 };
 
 if (!runtimeConfig.databaseUrl) {
