@@ -5,6 +5,7 @@ export const merchantConfig: CharacterConfig = {
   classKeywords: ["купец"],
 
   remorts: 0,
+  forbiddenClasses: ["купец"],
 
   acWeight: 5,
   armorWeight: 2,

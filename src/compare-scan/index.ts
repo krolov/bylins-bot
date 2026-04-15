@@ -38,9 +38,21 @@ const BAZAAR_END_RE = /список\s+пуст|нет\s+предметов|не�
 // [ 125]   покрытый пылью свиток                           5000  плоховато
 const BAZAAR_LINE_RE = /^\s*\[\s*(\d+)\]\s+(.+?)\s{2,}(\d+)\s+\S+\s*$/;
 
-const TOP_N = 5;
+// Guild storage ("хранилище все") format (NO vnum prefix):
+// руна благости [4] [25 кун]
+// стальная подкова [50 кун]
+// руна "Йера" [3] [72 куны]
+// сияющий небесный венец ..блестит! [50 кун]
+// мрачный капюшон (невидим) [283 куны]
+// Price is always the LAST [N кун/куны/кун] bracket
+const GUILD_STORAGE_START_RE = /хранилище вашей дружины/i;
+const GUILD_STORAGE_LINE_RE = /^(.+?)\s+\[(\d+)\s+кун[ыа]?\]\s*$/;
+const GUILD_STORAGE_PAGER_RE = /Листать\s*:/i;
+const GUILD_STORAGE_END_RE = /конец\s+списка|хранилище\s+пусто/i;
 
-export type CandidateSource = "shop" | "bazaar" | "inventory";
+const TOP_N = 10;
+
+export type CandidateSource = "shop" | "bazaar" | "inventory" | "guild_storage";
 
 export interface CompareCandidate {
   itemId: number;
@@ -102,6 +114,12 @@ function meetsReqs(reqs: StatRequirement[], stats: CharStats): boolean {
   return reqs.every((r) => (stats[r.stat] ?? 0) >= r.value);
 }
 
+function isAllowedForClass(card: GearItemCard, cfg: CharacterConfig): boolean {
+  if (card.remorts > cfg.remorts) return false;
+  if (card.forbidden.length === 0) return true;
+  return !card.forbidden.some((f) => cfg.forbiddenClasses.includes(f.toLowerCase()));
+}
+
 function parseCoins(text: string): number {
   const handM = /у вас на руках\s+(\d+)\s+кун/i.exec(text);
   const inHand = handM ? parseInt(handM[1]) : 0;
@@ -156,7 +174,7 @@ function createOutputWaiter(): {
 
   function tryResolve(): void {
     const s = stripped();
-    const ready = PROMPT_RE.test(s) || (stopRe !== undefined && stopRe.test(s));
+    const ready = (stopRe !== undefined ? stopRe.test(s) : PROMPT_RE.test(s));
     if (!ready || !resolve) return;
     if (timer) clearTimeout(timer);
     timer = null;
@@ -169,6 +187,7 @@ function createOutputWaiter(): {
 
   return {
     feed(text: string) {
+      if (resolve === null) return;
       buf += text;
       tryResolve();
     },
@@ -301,7 +320,18 @@ export function toEquipKeyword(name: string): string {
     .filter((w) => w.length > 3)
     .map((w) => w.slice(0, 4));
   if (words.length === 0) {
-    // fallback: just take first 4 chars of first word
+    return name.toLowerCase().trim().slice(0, 4);
+  }
+  return words.join(".");
+}
+
+export function toStorageKeyword(name: string): string {
+  const words = name
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 3)
+    .map((w) => w.slice(0, -2));
+  if (words.length === 0) {
     return name.toLowerCase().trim().slice(0, 4);
   }
   return words.join(".");
@@ -410,6 +440,47 @@ async function fetchInventoryItems(
   return items;
 }
 
+function parseGuildStorageLine(line: string): { name: string; price: number } | null {
+  const m = GUILD_STORAGE_LINE_RE.exec(line.trim());
+  if (!m) return null;
+  const rawName = m[1]!.trim();
+  const name = rawName
+    .replace(/\s*\*[^*]*\*\s*/g, " ")
+    .replace(/\s*\(невидим[оа]?\)\s*/g, " ")
+    .replace(/\s+\[\d+\]\s*/g, " ")
+    .replace(/\s*\.\.[а-яёa-zA-Z!]+!?\s*/g, " ")
+    .trim();
+  return { name, price: parseInt(m[2]!) };
+}
+
+async function fetchGuildStorageItems(
+  sendCommand: (cmd: string) => void,
+  waitFor: (ms: number, re?: RegExp) => Promise<string>,
+  onProgress: (msg: string) => void,
+): Promise<ListItem[]> {
+  const items: ListItem[] = [];
+  sendCommand("хранилище все");
+  let pageText = await waitFor(5000, GUILD_STORAGE_PAGER_RE);
+  if (!GUILD_STORAGE_START_RE.test(pageText)) return items;
+  let pageCount = 0;
+  while (true) {
+    pageCount++;
+    for (const line of pageText.split("\n")) {
+      const stripped = line.replace(STRIP_ANSI, "").replace(STRIP_CR, "");
+      const parsed = parseGuildStorageLine(stripped);
+      if (parsed) {
+        items.push({ name: parsed.name, price: parsed.price, listNumber: 0, source: "guild_storage" });
+      }
+    }
+    if (pageCount % 5 === 0) onProgress(`Хранилище: страница ${pageCount}, найдено ${items.length}...`);
+    if (GUILD_STORAGE_END_RE.test(pageText)) break;
+    if (!GUILD_STORAGE_PAGER_RE.test(pageText)) break;
+    sendCommand("");
+    pageText = await waitFor(5000, GUILD_STORAGE_PAGER_RE);
+  }
+  return items;
+}
+
 type CandidateEntry = { item: ListItem; card: GearItemCard; hasGameData: boolean };
 
 function buildSlotResults(
@@ -430,6 +501,7 @@ function buildSlotResults(
 
   for (const entry of allCandidates) {
     const { card } = entry;
+    if (!isAllowedForClass(card, cfg)) continue;
     if (card.itemType === "ОРУЖИЕ") {
       if (card.canWearRight && meetsReqs(card.rightHandReqs, charStats)) rightWeaponCands.push(entry);
       if (card.canWearLeft && meetsReqs(card.leftHandReqs, charStats)) leftWeaponCands.push(entry);
@@ -677,13 +749,16 @@ export async function runCompareScan(
     onProgress(`Базар: ${bazaarItems.length} лотов по деньгам. Проверяю инвентарь...`);
 
     const inventoryItems = await fetchInventoryItems(sendCommand, (ms, re) => waiter.waitFor(ms, re));
-    onProgress(`Инвентарь: ${inventoryItems.length} предметов.`);
+    onProgress(`Инвентарь: ${inventoryItems.length} предметов. Проверяю хранилище дружины...`);
+
+    const guildStorageItems = await fetchGuildStorageItems(sendCommand, (ms, re) => waiter.waitFor(ms, re), onProgress);
+    onProgress(`Хранилище: ${guildStorageItems.length} предметов.`);
 
     const equippedNames = new Set<string>(
       [...equipped.values()].flat().map((n) => n.toLowerCase()),
     );
 
-    const allItems = [...shopItems, ...bazaarItems, ...inventoryItems];
+    const allItems = [...shopItems, ...bazaarItems, ...inventoryItems, ...guildStorageItems];
 
     const cheapestByKey = new Map<string, ListItem>();
     for (const item of allItems) {
@@ -712,7 +787,7 @@ export async function runCompareScan(
     );
     const notFound: NotFoundItem[] = uniqueItems
       .filter((_, i) => cards[i] === null)
-      .filter((item) => item.source === "shop")
+      .filter((item) => item.source === "shop" || item.source === "guild_storage")
       .sort((a, b) => b.price - a.price);
     onProgress(`Найдено в вики: ${validCandidates.length}.`);
 

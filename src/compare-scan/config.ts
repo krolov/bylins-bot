@@ -17,6 +17,7 @@ export interface CharacterConfig {
   id: string;
   classKeywords: string[];
   remorts: number;
+  forbiddenClasses: string[];
 
   acWeight: number;
   armorWeight: number;

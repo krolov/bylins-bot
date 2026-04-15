@@ -5,6 +5,7 @@ export const thiefConfig: CharacterConfig = {
   classKeywords: ["тать"],
 
   remorts: 7,
+  forbiddenClasses: ["тать"],
 
   acWeight: 5,
   armorWeight: 2,
