@@ -25,6 +25,7 @@ import { normalizeFarmZoneSettings, normalizeSurvivalSettings } from "./settings
 import { createMudConnection } from "./mud-connection.ts";
 import type { Session } from "./mud-connection.ts";
 import { findVorozheRoute } from "./vorozhe-graph.ts";
+import { createBazaarNotifier } from "./bazaar-notifier.ts";
 
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
 const LOG_DIR = "/var/log/bylins-bot";
@@ -61,6 +62,7 @@ const mudConnection = createMudConnection({
     containerTracker.feedEquippedScan(text);
     containerTracker.feedPendingInspect(text);
     for (const handler of mudTextHandlers) handler(text);
+    bazaarNotifier.handleMudText(text);
     rememberOutput(text);
     broadcastServerEvent({ type: "output", payload: { text } });
     const chatLines = extractChatLines(text);
@@ -249,6 +251,7 @@ let debugLogEnabled = false;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
 const currentRoomMobs = new Map<string, string>();
+let currentRoomCorpseCount = 0;
 const farm2Controller = createFarm2Controller({
   getCurrentRoomId: () => trackerState.currentRoomId,
   isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
@@ -391,7 +394,12 @@ const triggers = createTriggers({
   getCharLevel: () => statsLevel,
   getCharDsu: () => statsDsu,
   getCharRazb: () => statsRazb,
+  onEquipAll: () => {
+     broadcastServerEvent({ type: "equip_all" });
+  },
 });
+
+
 
 interface NavigationState {
   active: boolean;
@@ -488,6 +496,7 @@ const zoneScriptController = createZoneScriptController({
   stealthMove: (direction) => mover.stealthMove(direction, trackerState.currentRoomId),
   combatState,
   getVisibleTargets: () => new Map(currentRoomMobs),
+  getCorpseCount: () => currentRoomCorpseCount,
   reinitRoom: () => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
     mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "zone-script");
@@ -510,6 +519,29 @@ const zoneScriptController = createZoneScriptController({
   },
 });
 sessionTeardownHooks.add(() => zoneScriptController.handleSessionClosed());
+
+const bazaarNotifier = createBazaarNotifier({
+  telegramBotToken: runtimeConfig.telegramBotToken,
+  telegramChatId: runtimeConfig.telegramChatId,
+  getCurrentRoomId: () => trackerState.currentRoomId,
+  getPathLength: async (fromVnum: number, toVnum: number) => {
+    const snapshot = await mapStore.getSnapshot(fromVnum);
+    const path = findPath(snapshot, fromVnum, toVnum);
+    return path !== null ? path.length : null;
+  },
+  resolveAlias: (alias: string) => mapStore.resolveAliasAll(alias),
+  navigateTo: (vnum: number) => startNavigation(null, vnum),
+  onceRoomChanged: (timeoutMs: number) => onceRoomChanged(timeoutMs),
+  isNavigating: () => navigationState.active,
+  isInCombat: () => combatState.getInCombat(),
+  sendCommand: (command: string) => {
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "bazaar-notifier");
+  },
+  onLog: (message: string) => {
+    logEvent(null, "session", message);
+  },
+});
 
 async function autoSortInventory(): Promise<void> {
   if (!sharedSession.tcpSocket || !sharedSession.connected) return;
@@ -763,6 +795,11 @@ function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "zone_script_state",
     payload: zoneScriptController.getState(),
+  });
+
+  sendServerEvent(ws, {
+    type: "zone_script_list",
+    payload: zoneScriptController.getZoneList(),
   });
 
   sendServerEvent(ws, {
@@ -1190,6 +1227,7 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     for (const name of mobsInRoom) {
       currentRoomMobs.set(name.toLowerCase(), name);
     }
+    currentRoomCorpseCount = corpseCount;
     logEvent(
       null,
       "session",
@@ -1491,7 +1529,8 @@ const server = Bun.serve({
           if (currentRoomId !== null && sharedSession.tcpSocket && sharedSession.connected) {
             const target = await farm2Controller.resolveAttackTarget(currentRoomId);
             if (target !== null) {
-              mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `заколоть ${target}`, "attack-nearest");
+              mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, "спрят", "attack-nearest");
+              mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `закол ${target}`, "attack-nearest");
             }
           }
           break;

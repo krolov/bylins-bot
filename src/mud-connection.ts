@@ -336,8 +336,7 @@ export function createMudConnection(deps: MudConnectionDeps) {
       tls: payload?.tls ?? runtimeConfig.mudTls,
       startupCommands:
         payload?.startupCommands
-          ?.map((command) => command.trim())
-          .filter((command) => command.length > 0) ?? defaultStartupCommands,
+          ?.map((command) => command.trim()) ?? defaultStartupCommands,
       commandDelayMs:
         typeof payload?.commandDelayMs === "number" && payload.commandDelayMs >= 0
           ? payload.commandDelayMs
