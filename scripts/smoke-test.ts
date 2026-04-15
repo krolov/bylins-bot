@@ -150,7 +150,22 @@ await page.waitForSelector("#hotkeys-modal:not(.farm-modal--hidden)", { timeout:
 });
 await page.click("#hotkeys-modal-cancel").catch(() => { /* may auto-close */ });
 
-// 4. Item-DB modal opens (sends item_db_get)
+// 4. Compare advisor opens (dynamic chunk loads) and renders status text
+await page.click("#compare-button");
+await page.waitForFunction(
+  () => {
+    const p = document.getElementById("compare-advisor-panel");
+    return p !== null && !p.classList.contains("compare-advisor-panel--hidden");
+  },
+  { timeout: 3000 },
+).catch(() => failures.push("compare advisor did not show"));
+const compareStatus = await page.evaluate(() => document.getElementById("compare-advisor-status")?.textContent);
+if (compareStatus !== "Сканирование...") {
+  failures.push(`compare status expected "Сканирование...", got ${JSON.stringify(compareStatus)}`);
+}
+await page.click("#compare-advisor-close");
+
+// 5. Item-DB modal opens (sends item_db_get)
 await page.click("#item-db-button");
 await page.waitForSelector("#item-db-modal:not(.farm-modal--hidden)", { timeout: 2000 }).catch(() => {
   failures.push("item-db modal did not open");
