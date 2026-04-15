@@ -385,7 +385,7 @@ const TATY_BAD_PROPS = new Set(["попадание", "воля"]);
 
 // Количество ремортов текущего персонажа — захардкожено.
 // Предметы с remorts > PLAYER_REMORTS недоступны и исключаются из анализа.
-const PLAYER_REMORTS = 4;
+const PLAYER_REMORTS = 10;
 
 interface GearItem {
   id: number;
