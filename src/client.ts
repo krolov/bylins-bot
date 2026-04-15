@@ -212,7 +212,7 @@ type ServerEvent =
             price: number;
             listNumber: number;
             score: number;
-            source: "shop" | "bazaar" | "inventory";
+            source: "shop" | "bazaar" | "inventory" | "guild_storage";
             hasGameData: boolean;
             card: {
               id: number;
@@ -232,7 +232,7 @@ type ServerEvent =
           name: string;
           price: number;
           listNumber: number;
-          source: "shop" | "bazaar" | "inventory";
+          source: "shop" | "bazaar" | "inventory" | "guild_storage";
         }>;
       };
     }
@@ -4335,7 +4335,7 @@ type CompareScanPayload = {
       price: number;
       listNumber: number;
       score: number;
-      source: "shop" | "bazaar" | "inventory";
+      source: "shop" | "bazaar" | "inventory" | "guild_storage";
       hasGameData: boolean;
       card: {
         id: number;
@@ -4355,7 +4355,7 @@ type CompareScanPayload = {
     name: string;
     price: number;
     listNumber: number;
-    source: "shop" | "bazaar" | "inventory";
+    source: "shop" | "bazaar" | "inventory" | "guild_storage";
   }>;
 };
 
@@ -4387,6 +4387,16 @@ function attachTooltip(el: HTMLElement, text: string): void {
   el.addEventListener("mouseleave", () => {
     tip.classList.remove("compare-advisor__tooltip--visible");
   });
+}
+
+function toStorageKeyword(name: string): string {
+  const words = name
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 3)
+    .map((w) => w.slice(0, -2));
+  if (words.length === 0) return name.toLowerCase().trim().slice(0, 4);
+  return words.join(".");
 }
 
 function renderComparePanel(payload: CompareScanPayload): void {
@@ -4425,7 +4435,8 @@ function renderComparePanel(payload: CompareScanPayload): void {
     for (const c of slot.candidates) {
       const sourceLabel =
         c.source === "shop" ? `м:${c.listNumber}` :
-        c.source === "bazaar" ? `б:${c.listNumber}` : "инв";
+        c.source === "bazaar" ? `б:${c.listNumber}` :
+        c.source === "guild_storage" ? "хр" : "инв";
       const scoreDiff = Math.round(c.score - slot.currentScore);
       const diffText = scoreDiff > 0 ? `+${scoreDiff}` : `${scoreDiff}`;
       const diffClass = scoreDiff > 0 ? "compare-advisor__diff--better" : "compare-advisor__diff--worse";
@@ -4440,7 +4451,7 @@ function renderComparePanel(payload: CompareScanPayload): void {
       attachTooltip(nameCell, buildTooltip(c.card));
 
       const priceCell = document.createElement("td");
-      priceCell.textContent = c.source === "inventory" ? "—" : `${c.price}`;
+      priceCell.textContent = (c.source === "inventory" || c.source === "guild_storage") ? "—" : `${c.price}`;
 
       const sourceCell = document.createElement("td");
       sourceCell.textContent = sourceLabel;
@@ -4458,6 +4469,8 @@ function renderComparePanel(payload: CompareScanPayload): void {
         charBtn.addEventListener("click", () => {
           const charCmd = c.source === "bazaar"
             ? `базар характ ${c.listNumber}`
+            : c.source === "guild_storage"
+            ? `хранилище характ ${toStorageKeyword(c.itemName)}`
             : `характ ${c.listNumber}`;
           sendClientEvent({ type: "send", payload: { command: charCmd } });
         });
@@ -4472,6 +4485,7 @@ function renderComparePanel(payload: CompareScanPayload): void {
           const commands: string[] = [];
           if (c.source === "shop") commands.push(`купить ${c.listNumber}`);
           else if (c.source === "bazaar") commands.push(`bazaar buy ${c.listNumber}`);
+          else if (c.source === "guild_storage") commands.push(`хранилище взять ${toStorageKeyword(c.itemName)}`);
           sendClientEvent({ type: "compare_apply", payload: { commands } });
         });
         actionCell.appendChild(applyBtn);
@@ -4486,17 +4500,64 @@ function renderComparePanel(payload: CompareScanPayload): void {
     }
   }
 
-  if (payload.hasShop && payload.notFound.length > 0) {
+  const notFoundStorage = payload.notFound.filter((i) => i.source === "guild_storage");
+  if (notFoundStorage.length > 0) {
     const headerRow = document.createElement("tr");
     headerRow.className = "compare-advisor__notfound-header-row";
     const headerTd = document.createElement("td");
     headerTd.colSpan = 5;
     headerTd.className = "compare-advisor__notfound-header";
-    headerTd.textContent = `Не в базе (${payload.notFound.length})`;
+    headerTd.textContent = `Не в базе — хранилище (${notFoundStorage.length})`;
     headerRow.appendChild(headerTd);
     compareAdvisorTableBody.appendChild(headerRow);
 
-    for (const item of payload.notFound) {
+    for (const item of notFoundStorage) {
+      const tr = document.createElement("tr");
+      tr.className = "compare-advisor__notfound-row";
+
+      const nameTd = document.createElement("td");
+      nameTd.className = "compare-advisor__name-cell compare-advisor__item-name compare-advisor__name-cell--indent";
+      nameTd.colSpan = 2;
+      nameTd.textContent = item.name;
+
+      const priceTd = document.createElement("td");
+      priceTd.textContent = "—";
+
+      const sourceTd = document.createElement("td");
+      sourceTd.textContent = `хр:${item.listNumber}`;
+
+      const actionTd = document.createElement("td");
+      const charBtn = document.createElement("button");
+      charBtn.type = "button";
+      charBtn.className = "compare-advisor__char-btn button-secondary button-small";
+      charBtn.textContent = "хар";
+      charBtn.addEventListener("click", () => {
+        const kw = toStorageKeyword(item.name);
+        sendClientEvent({ type: "send", payload: { command: `хранилище опознать ${kw}` } });
+        tr.style.display = "none";
+      });
+      actionTd.appendChild(charBtn);
+
+      tr.appendChild(nameTd);
+      tr.appendChild(priceTd);
+      tr.appendChild(sourceTd);
+      tr.appendChild(actionTd);
+      compareAdvisorTableBody.appendChild(tr);
+    }
+  }
+
+  const notFoundShop = payload.notFound.filter((i) => i.source === "shop");
+  if (payload.hasShop && notFoundShop.length > 0) {
+    const headerRow = document.createElement("tr");
+    headerRow.className = "compare-advisor__notfound-header-row";
+    const headerTd = document.createElement("td");
+    headerTd.colSpan = 5;
+    headerTd.className = "compare-advisor__notfound-header";
+    headerTd.textContent = `Не в базе — магазин (${notFoundShop.length})`;
+    headerRow.appendChild(headerTd);
+    compareAdvisorTableBody.appendChild(headerRow);
+
+    for (const item of notFoundShop) {
       const tr = document.createElement("tr");
       tr.className = "compare-advisor__notfound-row";
 
@@ -5078,7 +5139,7 @@ const DEFAULT_HOTKEYS: HotkeyEntry[] = [
   { key: "KeyW",           command: "заколоть $target", label: "Ц" },
   { key: "KeyA",           command: "освеж тр", label: "Ф" },
   { key: "KeyQ",           command: "взя все.тр;;взя все все.тр;;бро все.тр", label: "Й" },
-  { key: "Digit5",         command: "взя возвр склад1;;зачит возвр", label: "5" },
+  { key: "Digit5",         command: "взя возвр склад;;зачит возвр;;держ лев.рук", label: "5" },
 ];
 
 function loadHotkeys(): HotkeyEntry[] {
