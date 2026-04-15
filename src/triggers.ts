@@ -54,6 +54,9 @@ const LIGHT_EQUIPPED_REGEXP = /^<для освещения>\s+светящийс
 // Заклинание света ушло в резы
 const LIGHT_MEMORIZING_REGEXP = /Вы занесли заклинание "[^"]*создать свет[^"]*" в свои резы/i;
 
+// Меню выбора персонажа после логина (переход в игру = вариант 1)
+const CHARACTER_MENU_REGEXP = /Чего ваша душа желает\?/;
+
 // Follow-leader: лидеры клана, чьи команды выполняются
 const FOLLOW_LEADER_NAMES = new Set([
   "Магуша", "Аделя", "Куруш", "Нимрок", "Цисса", "Экзар", "Берест",
@@ -88,6 +91,7 @@ interface TriggerDependencies {
   getCharLevel(): number;
   getCharDsu(): number;
   getCharRazb(): number;
+  onEquipAll(): void;
 }
 
 export function createTriggers(deps: TriggerDependencies) {
@@ -135,6 +139,10 @@ export function createTriggers(deps: TriggerDependencies) {
 
   function handleMudText(text: string): void {
     const stripped = text.replace(ANSI_ESCAPE_REGEXP, "").replace(/\r/g, "");
+
+    if (CHARACTER_MENU_REGEXP.test(stripped)) {
+      deps.sendCommand("1");
+    }
 
     if (enabled.standUp && stripped.includes("Вам лучше встать на ноги!")) {
       deps.sendCommand("встать");
@@ -322,6 +330,11 @@ export function createTriggers(deps: TriggerDependencies) {
     if (lower === "автобаш нет") {
       setEnabled({ assist: false });
       deps.onLog("[triggers] assist: disabled via follow-leader");
+      return true;
+    }
+    if (lower === "одеться") {
+      deps.onLog("[triggers] equip-all triggered via follow-leader");
+      deps.onEquipAll();
       return true;
     }
     return false;
