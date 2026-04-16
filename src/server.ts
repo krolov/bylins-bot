@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { runtimeConfig } from "./config.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
-import { createFarm2Controller } from "./farm2/index.ts";
+import { createFarmController } from "./farm/index.ts";
 import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands, parseInspectItems, parseInventoryItems } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
 import type { PathStep } from "./map/pathfinder.ts";
@@ -19,7 +19,6 @@ import { createContainerTracker } from "./container-tracker.ts";
 import { createItemIdentifier } from "./item-identify.ts";
 import { createRepairController } from "./repair-script.ts";
 import { createGatherController } from "./gather-script.ts";
-import { createZoneScriptController } from "./zone-scripts/index.ts";
 import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, TriggerState, MapAlias, MapSnapshot, GameItem } from "./events.type.ts";
 import { normalizeFarmZoneSettings, normalizeSurvivalSettings } from "./settings-normalizers.ts";
 import { createMudConnection } from "./mud-connection.ts";
@@ -252,33 +251,62 @@ const mapStore = createMapStore(sql);
 const combatState = createCombatState();
 const currentRoomMobs = new Map<string, string>();
 let currentRoomCorpseCount = 0;
-const farm2Controller = createFarm2Controller({
+const farmController = createFarmController({
+  // ── Shared plumbing ────────────────────────────────────────────────────
   getCurrentRoomId: () => trackerState.currentRoomId,
   isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
   getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
   combatState,
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "farm2-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "farm");
   },
   move: (direction) => mover.move(direction, trackerState.currentRoomId),
   reinitRoom: () => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "farm2-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "farm");
   },
+  onLog: (message) => {
+    logEvent(null, "session", message);
+  },
+  // ── Loop-mode deps (formerly createFarm2Controller) ────────────────────
   getZoneSettings: (zoneId) => mapStore.getFarmSettings(activeProfileId, zoneId),
   getMobCombatNamesByZone: (zoneId) => mapStore.getMobCombatNamesByZone(zoneId),
   getCombatNameByRoomName: (roomName) => mapStore.getCombatNameByRoomName(roomName),
   isRoomNameBlacklisted: (roomName) => mapStore.isRoomNameBlacklisted(roomName),
   linkMobRoomAndCombatName: (roomName, combatName, vnum) => mapStore.saveMobRoomName(roomName, vnum, combatName),
-  onStateChange: (farm2State) => {
-    broadcastServerEvent({ type: "farm2_state", payload: farm2State });
-  },
-  onLog: (message) => {
-    logEvent(null, "session", message);
+  onLoopStateChange: (loopState) => {
+    broadcastServerEvent({ type: "farm2_state", payload: loopState });
   },
   onDebugLog: (message) => {
     appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+  },
+  // ── Script-mode deps (formerly createZoneScriptController) ─────────────
+  navigateTo: (targetVnum) => startNavigation(null, targetVnum),
+  onMudTextOnce: (pattern, timeoutMs) => onceMudText(pattern, timeoutMs),
+  onceRoomChanged: (timeoutMs) => onceRoomChanged(timeoutMs),
+  refreshCurrentRoom: (timeoutMs) => refreshCurrentRoom(timeoutMs),
+  stealthMove: (direction) => mover.stealthMove(direction, trackerState.currentRoomId),
+  getVisibleTargets: () => new Map(currentRoomMobs),
+  getCorpseCount: () => currentRoomCorpseCount,
+  isStealthProfile: () => {
+    const profile = runtimeConfig.profiles.find((p) => p.id === activeProfileId);
+    return profile?.stealthCombat === true;
+  },
+  mobResolver: {
+    getMobCombatNamesByZone: (zoneId) => mapStore.getMobCombatNamesByZone(zoneId),
+    getCombatNameByRoomName: (roomName) => mapStore.getCombatNameByRoomName(roomName),
+    isRoomNameBlacklisted: (roomName) => mapStore.isRoomNameBlacklisted(roomName),
+    linkMobRoomAndCombatName: (roomName, combatName, vnum) => mapStore.saveMobRoomName(roomName, vnum, combatName),
+    onDebugLog: (message) => {
+      appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
+    },
+  },
+  autoSortInventory: async () => {
+    await autoSortInventory();
+  },
+  onScriptStateChange: (scriptState) => {
+    broadcastServerEvent({ type: "zone_script_state", payload: scriptState });
   },
 });
 const survivalController = createSurvivalController({
@@ -474,51 +502,7 @@ function refreshCurrentRoom(timeoutMs: number): Promise<number | null> {
   });
 }
 
-const zoneScriptController = createZoneScriptController({
-  getCurrentRoomId: () => trackerState.currentRoomId,
-  isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
-  navigateTo: (targetVnum) => startNavigation(null, targetVnum),
-  sendCommand: (command) => {
-    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "zone-script");
-  },
-  onMudTextOnce: (pattern, timeoutMs) => onceMudText(pattern, timeoutMs),
-  onceRoomChanged: (timeoutMs) => onceRoomChanged(timeoutMs),
-  refreshCurrentRoom: (timeoutMs) => refreshCurrentRoom(timeoutMs),
-  onStateChange: (scriptState) => {
-    broadcastServerEvent({ type: "zone_script_state", payload: scriptState });
-  },
-  onLog: (message) => {
-    logEvent(null, "session", message);
-  },
-  getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
-  move: (direction) => mover.move(direction, trackerState.currentRoomId),
-  stealthMove: (direction) => mover.stealthMove(direction, trackerState.currentRoomId),
-  combatState,
-  getVisibleTargets: () => new Map(currentRoomMobs),
-  getCorpseCount: () => currentRoomCorpseCount,
-  reinitRoom: () => {
-    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "zone-script");
-  },
-  isStealthProfile: () => {
-    const profile = runtimeConfig.profiles.find((p) => p.id === activeProfileId);
-    return profile?.stealthCombat === true;
-  },
-  mobResolver: {
-    getMobCombatNamesByZone: (zoneId) => mapStore.getMobCombatNamesByZone(zoneId),
-    getCombatNameByRoomName: (roomName) => mapStore.getCombatNameByRoomName(roomName),
-    isRoomNameBlacklisted: (roomName) => mapStore.isRoomNameBlacklisted(roomName),
-    linkMobRoomAndCombatName: (roomName, combatName, vnum) => mapStore.saveMobRoomName(roomName, vnum, combatName),
-    onDebugLog: (message) => {
-      appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
-    },
-  },
-  autoSortInventory: async () => {
-    await autoSortInventory();
-  },
-});
-sessionTeardownHooks.add(() => zoneScriptController.handleSessionClosed());
+sessionTeardownHooks.add(() => farmController.handleSessionClosed("Session closed."));
 
 const bazaarNotifier = createBazaarNotifier({
   telegramBotToken: runtimeConfig.telegramBotToken,
@@ -713,7 +697,7 @@ function parseAndBroadcastStats(text: string): void {
       },
     });
 
-    farm2Controller.updateStats({
+    farmController.updateStats({
       hp: statsHp,
       hpMax: statsHpMax,
       energy: statsEnergy,
@@ -764,7 +748,7 @@ function sendDefaults(ws: BunServerWebSocket): void {
 
   sendServerEvent(ws, {
     type: "farm2_state",
-    payload: farm2Controller.getState(),
+    payload: farmController.getLoopState(),
   });
 
   sendServerEvent(ws, {
@@ -794,12 +778,12 @@ function sendDefaults(ws: BunServerWebSocket): void {
 
   sendServerEvent(ws, {
     type: "zone_script_state",
-    payload: zoneScriptController.getState(),
+    payload: farmController.getScriptState(),
   });
 
   sendServerEvent(ws, {
     type: "zone_script_list",
-    payload: zoneScriptController.getZoneList(),
+    payload: farmController.getZoneList(),
   });
 
   sendServerEvent(ws, {
@@ -929,7 +913,7 @@ function resetMapState(): void {
   parserState.pendingRoomHeader = null;
   trackerState.currentRoomId = null;
   trackerState.pendingMove = null;
-  farm2Controller.setEnabled(false);
+  farmController.setLoopEnabled(false);
 }
 
 async function getCurrentMapSnapshot(): Promise<MapSnapshot> {
@@ -1256,7 +1240,7 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
   }
 
   if (events.length === 0) {
-    farm2Controller.handleMudText(text, {
+    farmController.handleMudText(text, {
       roomChanged: false,
       roomDescriptionReceived: false,
       currentRoomId: trackerState.currentRoomId,
@@ -1305,7 +1289,7 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
     );
   }
 
-  farm2Controller.handleMudText(text, {
+  farmController.handleMudText(text, {
     roomChanged: previousRoomId !== trackerState.currentRoomId,
     roomDescriptionReceived: result.rooms.length > 0,
     currentRoomId: trackerState.currentRoomId,
@@ -1520,14 +1504,14 @@ const server = Bun.serve({
         case "farm2_toggle": {
           const enabled = event.payload?.enabled === true;
           logEvent(ws, "browser-in", "farm2_toggle", { enabled });
-          farm2Controller.setEnabled(enabled);
+          farmController.setLoopEnabled(enabled);
           break;
         }
         case "attack_nearest": {
           logEvent(ws, "browser-in", "attack_nearest");
           const currentRoomId = trackerState.currentRoomId;
           if (currentRoomId !== null && sharedSession.tcpSocket && sharedSession.connected) {
-            const target = await farm2Controller.resolveAttackTarget(currentRoomId);
+            const target = await farmController.resolveAttackTarget(currentRoomId);
             if (target !== null) {
               mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, "спрят", "attack-nearest");
               mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `закол ${target}`, "attack-nearest");
@@ -1539,14 +1523,14 @@ const server = Bun.serve({
           const enabled = event.payload?.enabled === true;
           const zoneId = typeof event.payload?.zoneId === "number" ? event.payload.zoneId : undefined;
           logEvent(ws, "browser-in", "zone_script_toggle", { enabled, zoneId });
-          zoneScriptController.setEnabled(enabled, zoneId);
+          farmController.setScriptEnabled(enabled, zoneId);
           break;
         }
         case "farming_toggle": {
           const enabled = event.payload?.enabled === true;
           const zoneId = typeof event.payload?.zoneId === "number" ? event.payload.zoneId : 280;
           logEvent(ws, "browser-in", "farming_toggle", { enabled, zoneId });
-          zoneScriptController.setEnabled(enabled, zoneId);
+          farmController.setScriptEnabled(enabled, zoneId);
           break;
         }
         case "alias_set": {
