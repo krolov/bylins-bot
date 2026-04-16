@@ -83,6 +83,35 @@ export function normalizeSurvivalConfig(config: SurvivalConfig): SurvivalConfig 
   };
 }
 
+/**
+ * Converts the persisted / UI-facing `SurvivalSettings` shape (comma-separated
+ * strings for food/flask items) into a controller-ready `SurvivalConfig`.
+ * Used both at startup (bootstrap from DB) and when the client saves new
+ * settings.
+ */
+export function survivalSettingsToConfig(settings: {
+  container: string;
+  foodItems: string;
+  flaskItems: string;
+  buyFoodItem: string;
+  buyFoodMax: number;
+  buyFoodAlias: string;
+  fillFlaskAlias: string;
+  fillFlaskSource: string;
+}): SurvivalConfig {
+  return normalizeSurvivalConfig({
+    enabled: settings.foodItems.trim().length > 0 || settings.flaskItems.trim().length > 0,
+    container: settings.container,
+    foodItems: settings.foodItems.split("\n").map((s) => s.trim()).filter(Boolean),
+    flaskItems: settings.flaskItems.split("\n").map((s) => s.trim()).filter(Boolean),
+    buyFoodItem: settings.buyFoodItem,
+    buyFoodMax: settings.buyFoodMax,
+    buyFoodAlias: settings.buyFoodAlias,
+    fillFlaskAlias: settings.fillFlaskAlias,
+    fillFlaskSource: settings.fillFlaskSource,
+  });
+}
+
 export function createSurvivalController(deps: SurvivalControllerDependencies) {
   const state: SurvivalState = {
     hungry: false,

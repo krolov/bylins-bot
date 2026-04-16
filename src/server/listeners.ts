@@ -27,6 +27,12 @@ export interface ListenerHub {
   readonly sessionTeardownHooks: Set<SessionTeardownHook>;
   onceMudText(pattern: RegExp, timeoutMs: number): Promise<void>;
   onceRoomChanged(timeoutMs: number): Promise<number | null>;
+  /**
+   * Waits for the next room-refresh event (parser re-processed the current
+   * room). Resolves with the vnum (may be `null` if tracker hasn't anchored
+   * yet) or with `null` on timeout.
+   */
+  onceRoomRefresh(timeoutMs: number): Promise<number | null>;
 }
 
 export function createListenerHub(): ListenerHub {
@@ -77,6 +83,26 @@ export function createListenerHub(): ListenerHub {
     });
   }
 
+  function onceRoomRefresh(timeoutMs: number): Promise<number | null> {
+    return new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        roomRefreshListeners.delete(listener);
+        resolve(null);
+      }, timeoutMs);
+      const listener: RoomRefreshListener = (vnum) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        roomRefreshListeners.delete(listener);
+        resolve(vnum);
+      };
+      roomRefreshListeners.add(listener);
+    });
+  }
+
   return {
     mudTextHandlers,
     roomChangedListeners,
@@ -84,5 +110,6 @@ export function createListenerHub(): ListenerHub {
     sessionTeardownHooks,
     onceMudText,
     onceRoomChanged,
+    onceRoomRefresh,
   };
 }

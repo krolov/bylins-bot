@@ -18,7 +18,7 @@ import type { TrackerState } from "../map/types";
 import type { Session } from "../mud-connection.ts";
 import type { TriggerState } from "../triggers.ts";
 import { normalizeFarmZoneSettings, normalizeSurvivalSettings } from "../settings-normalizers.ts";
-import { normalizeSurvivalConfig, resolveSurvivalCommands } from "../survival-script.ts";
+import { normalizeSurvivalConfig, resolveSurvivalCommands, survivalSettingsToConfig } from "../survival-script.ts";
 import { runCompareScan } from "../compare-scan/index.ts";
 import { searchAndCacheWikiItem } from "../wiki.ts";
 import { findVorozheRoute } from "../vorozhe-graph.ts";
@@ -359,17 +359,7 @@ export function createClientMessageRouter(
           const settings = normalizeSurvivalSettings(raw);
           logEvent(ws, "browser-in", "survival_settings_save");
           await mapStore.setSurvivalSettings(settings);
-          survivalController.updateConfig(normalizeSurvivalConfig({
-            enabled: settings.foodItems.trim().length > 0 || settings.flaskItems.trim().length > 0,
-            container: settings.container,
-            foodItems: settings.foodItems.split("\n").map((s) => s.trim()).filter(Boolean),
-            flaskItems: settings.flaskItems.split("\n").map((s) => s.trim()).filter(Boolean),
-            buyFoodItem: settings.buyFoodItem,
-            buyFoodMax: settings.buyFoodMax,
-            buyFoodAlias: settings.buyFoodAlias,
-            fillFlaskAlias: settings.fillFlaskAlias,
-            fillFlaskSource: settings.fillFlaskSource,
-          }));
+          survivalController.updateConfig(survivalSettingsToConfig(settings));
         }
         break;
       }
