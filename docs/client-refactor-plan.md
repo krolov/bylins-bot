@@ -267,13 +267,62 @@ src/client/
 - container-табы переключаются;
 - нет `console.error` и `pageerror` во время bootstrap.
 
+### Сессия #2 (ветка `claude/continue-frontend-refactor-7Mvnx`)
+
+Добавлены чанки + CSS минификация. Плюс preload-хинт.
+
+```
+src/client/
+  modals/
+    farm-settings.ts       (122) — dynamic chunk, открытие через bus replay
+    survival.ts            (123) — dynamic chunk, settings state остаётся в main
+    global-map.ts          (684) — dynamic chunk, ZONE GRAPH/RENAME (самый большой)
+```
+
+Изменения в `main.ts`:
+- Удалены `defaultFarmSettings`, `normalizeFarmSettings`, `fillFarmModal`, `openFarmSettingsModal`, `closeFarmSettingsModal`, `commitFarmSettings`, `farmModalZoneId`, все DOM refs `farmModal*`.
+- Удалены `fillSurvivalModal`, `openSurvivalSettingsModal`, `closeSurvivalSettingsModal`, `commitSurvivalSettings`, все DOM refs `survivalModal*`.
+- Удалены `buildZoneGraph`, `layoutZoneGraph`, `routeZoneEdge`, `renderZoneMap`, `openGlobalMap`, `closeGlobalMap`, `applyGlobalMapSearch`, `updateGlobalMapZoomLabel`, `openZoneRenamePopup`, `closeZoneRenamePopup`, `saveZoneRename`, `globalMapZoom`, `globalMapOpen`, `globalMapSearchQuery`, `globalMapZoneRenameId`, `globalMapDragOrigin`, `globalMapDidDrag`, `ZONE_CELL/TILE/PAD`, все DOM refs `globalMap*`/`zoneRename*`.
+- В `updateMap`: добавлены `bus.emit("zone_names", zoneNames)` (когда меняется) и `bus.emit("map_full_snapshot", latestFullSnapshot)`.
+- Новый bus listener: `zone_name_set_local` — main мутирует свою `zoneNames` Map и сохраняет в localStorage.
+- На `globalMapButton.click`: emit current snapshot+zoneNames в bus, затем dynamic import.
+
+`scripts/build-client.ts`: добавлен второй проход — `Bun.build({entrypoints:["./public/styles.css"], minify:true, naming:"styles.min.css"})`. Размер: 51460 → 36746 байт (−28.6%).
+
+`public/index.html`: cache-bumped с `?v=6` на `?v=7`, добавлен `<link rel="preload" as="script">` для client.js, `<link rel="stylesheet">` переключён на `/styles.min.css`.
+
+`.gitignore`: добавлен `public/styles.min.css`.
+
+### Достигнутый bundle layout (сессия #2)
+
+| Чанк | Размер | Когда грузится |
+|---|---|---|
+| `client.js` | 53.9 KB | Eager (старт) |
+| `styles.min.css` | 36.7 KB | Eager (preload) |
+| chunk-shared (bus + const) | 5.4 KB | Eager (импортирован main.ts) |
+| chunk-global-map | 10.6 KB | На клик 🗺️ |
+| chunk-item-db | 7.6 KB | На клик 📦 |
+| chunk-compare | 7.1 KB | На клик ⚖️ |
+| chunk-hotkeys | 3.6 KB | На клик 🎹 |
+| chunk-triggers | 3.0 KB | На клик ⚡ |
+| chunk-farm-settings | 2.8 KB | На клик 🌾⚙️ |
+| chunk-vorozhe | 2.8 KB | На клик 🧙 |
+| chunk-survival | 2.6 KB | На клик 🍞⚙️ |
+
+**Критический путь: 67.1 KB → 53.9 KB (−19.7%)** + минифицированный CSS экономит ещё ~14.7 KB.
+Bootstrap в headless Chromium: ~100–220 мс.
+
+### main.ts по сессиям
+
+| Метрика | Сессия #1 (после Triggers) | Сессия #2 (после Global Map) |
+|---|---|---|
+| `src/client/main.ts` LOC | 3974 | 3174 |
+| Дельта | базовый снимок | **−800 строк** |
+
 ### Что осталось (для будущей сессии)
 
-1. **Global Map / Zone Graph** (`buildZoneGraph`, `layoutZoneGraph`, `routeZoneEdge`, `renderZoneMap` + popup зоны-rename — ~700 LOC). Сложность: зависит от `latestFullSnapshot` и мутабельного `zoneNames` Map. План — через bus пробросить три потока: `map_full_snapshot` (replay), `zone_names` (replay, обновляется из main.ts при записи), `zone_name_set` (write-back от модалки).
-2. **Survival settings + Farm settings** — связаны с action-кнопками buy-food/fill-flask, `currentRoomAutoCommands`, `findAliasVnums`. Требуется аккуратная развязка navigation-логики.
-3. **Map grid / Nav-panel / Inventory renderers** — это не модалки, code-splitting там ничего не даст, но структурное разбиение на файлы улучшит читаемость.
-4. **CSS минификация** — `public/styles.css` 2735 строк не минифицирован. Отдельная задача (через lightningcss или Bun CSS-build).
-5. **Preload for hashed chunks** — `<link rel="modulepreload">` в `index.html` сейчас покрывает только `client.js`. Shared chunk подгружается вторым HTTP-запросом. Чтобы убрать этот hop, нужно генерировать HTML из билд-шага с реальными hash-именами чанков (или пере-именовать в стабильные имена).
+1. **Map grid / Nav-panel / Inventory renderers** — это не модалки, code-splitting там не даст эффекта, но структурное разбиение `src/client/main.ts` (~3170 строк) на 4–5 файлов улучшит читаемость. Кандидаты: `terminal.ts` (ANSI + appendOutput + chat), `net.ts` (createSocket + reconnect + dispatcher), `map-grid.ts` (integrateSnapshot + renderGridMap + updateMap), `nav-panel.ts`, `inventory.ts`.
+2. **Preload for hashed chunks** — `<link rel="modulepreload">` в `index.html` сейчас покрывает только `client.js`. Shared chunk подгружается вторым HTTP-запросом. Чтобы убрать этот hop, нужно генерировать HTML из билд-шага с реальными hash-именами чанков (или пере-именовать в стабильные имена).
 
 ### Коммиты в ветке `claude/refactor-client-performance-YQZmB`
 
@@ -284,3 +333,7 @@ src/client/
 5. `409e787` refactor(client): extract Item DB / wiki-search modal as dynamic chunk
 6. `696173a` refactor(client): extract Hotkeys modal as dynamic chunk
 7. `51d4056` refactor(client): extract Triggers modal as dynamic chunk
+
+### Коммиты в ветке `claude/continue-frontend-refactor-7Mvnx`
+
+(добавляются по мере коммитов в этой сессии)
