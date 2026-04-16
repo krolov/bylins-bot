@@ -1,5 +1,8 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { runtimeConfig } from "./config.ts";
+import { LOG_DIR, LOG_FILE, DEBUG_LOG_FILE, MAX_OUTPUT_CHUNKS, NAVIGATION_STEP_TIMEOUT_MS, ANSI_ESCAPE_RE } from "./server/constants.ts";
+import type { BunServerWebSocket } from "./server/constants.ts";
+import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
 import { createFarmController } from "./farm/index.ts";
@@ -25,31 +28,6 @@ import { createMudConnection } from "./mud-connection.ts";
 import type { Session } from "./mud-connection.ts";
 import { findVorozheRoute } from "./vorozhe-graph.ts";
 import { createBazaarNotifier } from "./bazaar-notifier.ts";
-
-type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
-const LOG_DIR = "/var/log/bylins-bot";
-const LOG_FILE = `${LOG_DIR}/mud-traffic.log`;
-const DEBUG_LOG_FILE = `${LOG_DIR}/debug.log`;
-const LAST_PROFILE_FILE = `${LOG_DIR}/last-profile.txt`;
-const MAX_OUTPUT_CHUNKS = 200;
-const ANSI_ESCAPE_RE = /\u001b\[[0-9;]*m/g;
-const NAVIGATION_STEP_TIMEOUT_MS = 3000;
-
-function readLastProfileId(): string {
-  try {
-    return readFileSync(LAST_PROFILE_FILE, "utf8").trim();
-  } catch {
-    return runtimeConfig.defaultProfileId;
-  }
-}
-
-function saveLastProfileId(profileId: string): void {
-  try {
-    writeFileSync(LAST_PROFILE_FILE, profileId, "utf8");
-  } catch {
-  }
-}
-
 
 const browserClients = new Set<BunServerWebSocket>();
 const mudConnection = createMudConnection({
