@@ -2,6 +2,9 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { runtimeConfig } from "./config.ts";
 import { LOG_DIR, LOG_FILE, DEBUG_LOG_FILE, MAX_OUTPUT_CHUNKS, NAVIGATION_STEP_TIMEOUT_MS, ANSI_ESCAPE_RE } from "./server/constants.ts";
 import type { BunServerWebSocket } from "./server/constants.ts";
+import { extractChatLines } from "./server/chat.ts";
+import { extractMarketSales } from "./server/market.ts";
+import { LOOT_FROM_CORPSE_RE, PICKUP_FROM_GROUND_RE } from "./server/loot.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
@@ -105,112 +108,8 @@ const sharedSession = mudConnection.session;
 let activeProfileId: string = readLastProfileId();
 const recentOutputChunks: string[] = [];
 
-const CHAT_FILTER_NAMES = [
-  "Незнакомец", "Ворожея", "Кузнец", "Хитрый лавочник", "Здоровый дядька", "Владелец двора",
-  "Раненый воин", "Травник", "Старец", "Пленник", "Девка для утех", "Леха Небокоптитель",
-  "Боярин Вейдеров", "Старик", "Варяг", "Вальгрим", "Седовласый старик", "Пастух",
-  "Краснодеревщик", "Староста", "Полуслепой немощный колдун",
-  "Голодный зверюга", "Дружинник", "Желтоглазый дух леса", "Наворопник", "Нарочный",
-  "Отшельник", "Боевой конь", "Ослик Иа", "Полосатый пчел", "Молодой цыган",
-  "Юрий, сын Антонов", "страж лагеря", "Страж лагеря", "Старейшина",
-  "Волх", "Глашатай", "Зажиточный муж", "Знахарь", "Корчмарь", "Латинский рыцарь",
-  "Лихой человек", "Мастер Будулай", "Мясник", "Нищий странник", "Обеспокоенный кузнец",
-  "Опытный охотник", "Перевозчик", "Переяславльский стражник", "Перун", "Святогор",
-  "Сгорбленный старик", "Седой воин", "Седой паромщик", "Седой старец", "Старичок-болотник",
-  "Страж ворот", "Странный тип", "Странствующий волхв Онуфрий", "Странствующий волшебник Петро",
-  "Тюремщик", "Уставший рыбак", "Уставший старик", "Уцелевший купец", "Хмурый охотник",
-  "десятник Никифор", "кладовщик Степан", "конюх Митроха", "трактирщик Жиртрестос",
-  "Неприметный старичок", "Индус", "Луцкий сторож", "Хозяин двора",
-  "Сухонькая старушка", "Рыжий трактирщик", "Пьяный медведь", "Леший",
-  "Рыжий муравьишка", "Старый цыган", "сказитель", "Старый охотник", "Гадалка",
-];
-
-function isChatLine(text: string): boolean {
-  if (CHAT_FILTER_NAMES.some((name) => text.includes(name))) return false;
-  return (
-    /сказал[аи]?\s+вам\s*[:'"]/.test(text) ||
-    /сказал[аи]?\s*:\s*'/.test(text) ||
-    /Вы сказали\s*:\s*'/.test(text) ||
-    /Вы сказали\s+\S+\s*:\s*'/.test(text) ||
-    /Услышали вы голос/.test(text) ||
-    /шепнул[аи]?\s+вам/.test(text) ||
-    /дружине\s*:\s*'/.test(text) ||
-    /Вы дружине\s*:\s*'/.test(text) ||
-    /сообщил[аи]? группе\s*:\s*'/.test(text) ||
-    /Вы сообщили группе\s*:\s*'/.test(text) ||
-    /союзникам\s*:\s*'/.test(text) ||
-    /Вы союзникам\s*:\s*'/.test(text)
-  );
-}
-
-function extractChatLines(mudText: string): string[] {
-  const stripped = mudText.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
-  const lines = stripped.split("\n");
-  return lines.filter((line) => isChatLine(line.trim()));
-}
-
-// Regex for: "Базар : лот 76(белый камушек) продан за 45000 кун."
-const BAZAAR_SALE_RE = /Базар\s*:\s*лот\s+(\d+)\(([^)]+)\)\s+продан\S*\s+за\s+(\d+)\s+кун/;
-// Regex for: "Базар : лот 14(дымчатый ...) продан. 1000 кун переведено на ваш счет."  (our sale)
-const BAZAAR_OUR_SALE_RE = /Базар\s*:\s*лот\s+(\d+)\(([^)]+)\)\s+продан[^.]*\.\s+(\d+)\s+кун\s+переведено\s+на\s+ваш\s+счет/;
-// Regex for: "Аукцион : лот 0(царская книга знаний) продан с аукциона за 12312 кун"
-const AUCTION_SALE_RE = /Аукцион\s*:\s*лот\s+(\d+)\(([^)]+)\)\s+продан\S*\s+с\s+аукциона\s+за\s+(\d+)\s+кун/;
-// Trigger auto-sort whenever player loots a corpse (manual or scripted)
-const LOOT_FROM_CORPSE_RE = /Вы взяли (.+?) из трупа /gi;
-// Trigger auto-sort whenever player picks up from ground
-const PICKUP_FROM_GROUND_RE = /Вы подняли (?!труп\b)(.+?)\./gi;
-
 const pendingLootItems = new Map<string, number>();
 let lootSortTimer: ReturnType<typeof setTimeout> | null = null;
-interface ParsedMarketSale {
-  source: "bazaar" | "auction";
-  lotNumber: number | null;
-  itemName: string;
-  price: number;
-  isOurs: boolean;
-}
-
-function extractMarketSales(mudText: string): ParsedMarketSale[] {
-  const stripped = mudText.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
-  const lines = stripped.split("\n");
-  const result: ParsedMarketSale[] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const bazaarOurs = BAZAAR_OUR_SALE_RE.exec(trimmed);
-    if (bazaarOurs) {
-      result.push({
-        source: "bazaar",
-        lotNumber: Number(bazaarOurs[1]),
-        itemName: bazaarOurs[2].trim(),
-        price: Number(bazaarOurs[3]),
-        isOurs: true,
-      });
-      continue;
-    }
-    const bazaar = BAZAAR_SALE_RE.exec(trimmed);
-    if (bazaar) {
-      result.push({
-        source: "bazaar",
-        lotNumber: Number(bazaar[1]),
-        itemName: bazaar[2].trim(),
-        price: Number(bazaar[3]),
-        isOurs: false,
-      });
-      continue;
-    }
-    const auction = AUCTION_SALE_RE.exec(trimmed);
-    if (auction) {
-      result.push({
-        source: "auction",
-        lotNumber: Number(auction[1]),
-        itemName: auction[2].trim(),
-        price: Number(auction[3]),
-        isOurs: false,
-      });
-    }
-  }
-  return result;
-}
 const parserState = createParserState();
 const trackerState = createTrackerState();
 const mover = createMover({
