@@ -2,10 +2,10 @@
 // Zone Script — shared types
 // ---------------------------------------------------------------------------
 
-import type { Direction, MapSnapshot } from "../map/types.ts";
-import type { MobResolverDeps } from "../mob-resolver.ts";
-import type { CombatState } from "../combat-state.ts";
-import type { MoveResult, StealthMoveResult } from "../map/mover.ts";
+import type { Direction, MapSnapshot } from "../../map/types.ts";
+import type { MobResolverDeps } from "../../mob-resolver.ts";
+import type { CombatState } from "../../combat-state.ts";
+import type { MoveResult, StealthMoveResult } from "../../map/mover.ts";
 
 /**
  * A single step in a zone script. Each step is a discriminated union so the

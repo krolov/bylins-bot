@@ -11,10 +11,10 @@
 // src/farm/loop/ and src/farm/script/.
 // ---------------------------------------------------------------------------
 
-import { createFarm2Controller } from "../farm2/index.ts";
-import { createZoneScriptController } from "../zone-scripts/index.ts";
-import type { Farm2ControllerDependencies, Farm2Stats } from "../farm2/types.ts";
-import type { ZoneScriptDeps } from "../zone-scripts/types.ts";
+import { createFarm2Controller } from "./loop/index.ts";
+import { createZoneScriptController } from "./script/index.ts";
+import type { Farm2ControllerDependencies, Farm2Stats } from "./loop/types.ts";
+import type { ZoneScriptDeps } from "./script/types.ts";
 import type { Farm2StateSnapshot, ZoneScriptStateSnapshot } from "./types.ts";
 
 /**

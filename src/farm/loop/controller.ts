@@ -2,7 +2,7 @@ import { defaultConfig } from "./config.ts";
 import { createInitialState, getStateSnapshot, setEnabled } from "./state.ts";
 import { scheduleTick, runTick } from "./tick.ts";
 import { handleMudText, handleSessionClosed } from "./mud-handler.ts";
-import { resolveAttackTarget } from "../mob-resolver.ts";
+import { resolveAttackTarget } from "../../mob-resolver.ts";
 import type { Farm2ControllerDependencies, Farm2StateSnapshot, Farm2Stats } from "./types.ts";
 
 export function createFarm2Controller(deps: Farm2ControllerDependencies) {

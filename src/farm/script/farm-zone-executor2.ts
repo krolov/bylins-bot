@@ -23,10 +23,10 @@
 // Completion — the loop exits when no combat has occurred for idleTimeoutMs ms.
 // ---------------------------------------------------------------------------
 
-import { OPPOSITE_DIRECTION } from "../farm2/types.ts";
-import { parseMobsFromRoomDescription } from "../mob-resolver.ts";
+import { OPPOSITE_DIRECTION } from "../loop/types.ts";
+import { parseMobsFromRoomDescription } from "../../mob-resolver.ts";
 import type { ZoneScriptDeps } from "./types.ts";
-import type { Direction } from "../map/types.ts";
+import type { Direction } from "../../map/types.ts";
 
 // ---------------------------------------------------------------------------
 // Constants

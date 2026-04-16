@@ -11,13 +11,13 @@
 // re-exported as-is so the WS contract in events.type.ts stays unchanged.
 // ---------------------------------------------------------------------------
 
-import type { Farm2StateSnapshot, Farm2Stats } from "../farm2/types.ts";
+import type { Farm2StateSnapshot, Farm2Stats } from "./loop/types.ts";
 import type {
   ScriptStep,
   StepState,
   StepStatus,
   ZoneScriptStateSnapshot,
-} from "../zone-scripts/types.ts";
+} from "./script/types.ts";
 
 export type { Farm2StateSnapshot, Farm2Stats, ScriptStep, StepState, StepStatus, ZoneScriptStateSnapshot };
 
