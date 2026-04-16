@@ -4,8 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>sc.kerat.ru MUD client</title>
-    <link rel="stylesheet" href="/styles.css" />
-    <link rel="modulepreload" href="/client.js?v=6" />
+    <link rel="preload" href="/client.js?v=7" as="script" crossorigin />
+    <link rel="modulepreload" href="/client.js?v=7" />
+    <link rel="stylesheet" href="/styles.min.css?v=7" />
   </head>
   <body>
     <header class="topbar">
@@ -589,7 +590,7 @@
       </div>
     </main>
 
-    <script type="module" src="/client.js?v=6"></script>
+    <script type="module" src="/client.js?v=7"></script>
 
       <div id="hotkeys-modal" class="farm-modal farm-modal--hidden" role="dialog" aria-modal="true" aria-labelledby="hotkeys-modal-title">
         <div class="farm-modal__backdrop"></div>
