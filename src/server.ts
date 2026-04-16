@@ -1,10 +1,10 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { runtimeConfig } from "./config.ts";
-import { LOG_DIR, LOG_FILE, NAVIGATION_STEP_TIMEOUT_MS, ANSI_ESCAPE_RE } from "./server/constants.ts";
+import { LOG_DIR, LOG_FILE } from "./server/constants.ts";
 import type { BunServerWebSocket } from "./server/constants.ts";
 import { extractChatLines } from "./server/chat.ts";
 import { extractMarketSales } from "./server/market.ts";
-import { LOOT_FROM_CORPSE_RE, PICKUP_FROM_GROUND_RE } from "./server/loot.ts";
+import { createLootSorter } from "./server/loot-sorter.ts";
 import { createBroadcaster } from "./server/broadcast.ts";
 import { createLogEvent, createStatusUpdater, sanitizeLogText, appendLogLine } from "./server/logging.ts";
 import { createStatsTracker } from "./server/stats.ts";
@@ -18,7 +18,7 @@ import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.t
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
 import { createFarmController } from "./farm/index.ts";
-import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands, parseInspectItems, parseInventoryItems } from "./survival-script.ts";
+import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
 import { createParserState, feedText } from "./map/parser.ts";
 import { createMapStore } from "./map/store.ts";
@@ -77,26 +77,7 @@ const mudConnection = createMudConnection({
         });
       }
     }
-    if (LOOT_FROM_CORPSE_RE.test(text)) {
-      const stripped = text.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
-      LOOT_FROM_CORPSE_RE.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = LOOT_FROM_CORPSE_RE.exec(stripped)) !== null) {
-        const name = m[1]?.trim();
-        if (name) pendingLootItems.set(name, (pendingLootItems.get(name) ?? 0) + 1);
-      }
-      scheduleLootSort();
-    }
-    if (PICKUP_FROM_GROUND_RE.test(text)) {
-      const stripped = text.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
-      PICKUP_FROM_GROUND_RE.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = PICKUP_FROM_GROUND_RE.exec(stripped)) !== null) {
-        const name = m[1]?.trim();
-        if (name) pendingLootItems.set(name, (pendingLootItems.get(name) ?? 0) + 1);
-      }
-      scheduleLootSort();
-    }
+    lootSorter.handleMudText(text);
     void persistParsedMapData(text, ws).catch((error: unknown) => {
       logEvent(ws, "error", error instanceof Error ? `Automapper error: ${error.message}` : "Automapper error.");
     });
@@ -120,8 +101,6 @@ const sharedSession = mudConnection.session;
 const updateSessionStatus = createStatusUpdater({ session: sharedSession, broadcastServerEvent });
 let activeProfileId: string = readLastProfileId();
 
-const pendingLootItems = new Map<string, number>();
-let lootSortTimer: ReturnType<typeof setTimeout> | null = null;
 const parserState = createParserState();
 const trackerState = createTrackerState();
 const mover = createMover({
@@ -191,7 +170,7 @@ const farmController = createFarmController({
     },
   },
   autoSortInventory: async () => {
-    await autoSortInventory();
+    await lootSorter.autoSortInventory();
   },
   onScriptStateChange: (scriptState) => {
     broadcastServerEvent({ type: "zone_script_state", payload: scriptState });
@@ -335,6 +314,17 @@ const broadcastNavigationState = navigationController.broadcastNavigationState;
 const listenerHub = createListenerHub();
 const { mudTextHandlers, roomChangedListeners, roomRefreshListeners, sessionTeardownHooks, onceMudText, onceRoomChanged } = listenerHub;
 
+const lootSorter = createLootSorter({
+  session: sharedSession,
+  writeAndLogMudCommand: (ws, socket, cmd, origin) =>
+    mudConnection.writeAndLogMudCommand(ws, socket, cmd, origin),
+  registerTextHandler: (h) => mudTextHandlers.add(h),
+  unregisterTextHandler: (h) => mudTextHandlers.delete(h),
+  getMarketMaxPrice: (itemName) => mapStore.getMarketMaxPrice(itemName),
+  waitForInspectResult: (ms) => containerTracker.waitForInspectResult(ms),
+  onError: (message) => logEvent(null, "error", message),
+});
+
 function refreshCurrentRoom(timeoutMs: number): Promise<number | null> {
   return new Promise((resolve) => {
     let done = false;
@@ -387,77 +377,6 @@ const bazaarNotifier = createBazaarNotifier({
     logEvent(null, "session", message);
   },
 });
-
-async function autoSortInventory(): Promise<void> {
-  if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-  const resultPromise = containerTracker.waitForInspectResult(3000);
-  mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "инв", "zone-script");
-  const inventoryText = await resultPromise;
-  const items = parseInventoryItems(inventoryText);
-  for (const item of items) {
-    const maxPrice = await mapStore.getMarketMaxPrice(item.name);
-    const kw = item.name.split(/\s+/)[0] ?? item.name;
-    const target = maxPrice !== null ? "базар" : "хлам";
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, `пол ${kw} ${target}`, "zone-script");
-  }
-}
-
-async function sortLootedItems(lootedNames: Map<string, number>): Promise<void> {
-  if (!sharedSession.tcpSocket || !sharedSession.connected) return;
-
-  const inventoryText = await new Promise<string>((resolve) => {
-    let buf = "";
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      mudTextHandlers.delete(handler);
-      resolve(buf);
-    }, 3000);
-    const handler = (raw: string) => {
-      if (done) return;
-      const stripped = raw.replace(ANSI_ESCAPE_RE, "").replace(/\r/g, "");
-      buf += stripped;
-      if (/Вы несете:/i.test(stripped) && /\d+H\s+\d+M/i.test(stripped)) {
-        done = true;
-        clearTimeout(timer);
-        mudTextHandlers.delete(handler);
-        resolve(buf);
-      }
-    };
-    mudTextHandlers.add(handler);
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "инв", "zone-script");
-  });
-
-  const inventoryItems = parseInventoryItems(inventoryText);
-
-  const mobKey = (name: string) => name.split(/\s+/).map((w) => w.slice(0, 4)).join(".");
-
-  const lootedKeys = new Set<string>();
-  for (const [name] of lootedNames) {
-    lootedKeys.add(mobKey(name).toLowerCase());
-  }
-
-  for (const item of inventoryItems) {
-    if (!lootedKeys.has(mobKey(item.name).toLowerCase())) continue;
-    const first = item.name.split(/\s+/)[0] ?? item.name;
-    const maxPrice = await mapStore.getMarketMaxPrice(item.name);
-    const target = maxPrice !== null ? "базар" : "хлам";
-    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, `пол ${first} ${target}`, "zone-script");
-  }
-}
-
-function scheduleLootSort(): void {
-  if (lootSortTimer !== null) clearTimeout(lootSortTimer);
-  lootSortTimer = setTimeout(() => {
-    lootSortTimer = null;
-    const items = new Map(pendingLootItems);
-    pendingLootItems.clear();
-    void sortLootedItems(items).catch((error: unknown) => {
-      logEvent(null, "error", error instanceof Error ? `Loot sort error: ${error.message}` : "Loot sort error.");
-    });
-  }, 1500);
-}
 
 // Character stats tracker — parses MUD prompt / max-stats phrase and
 // broadcasts stats_update + feeds farmController. Details live in ./server/stats.ts.
