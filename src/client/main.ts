@@ -21,10 +21,7 @@ import { initSplitters } from "./splitters.ts";
 import { createPopups } from "./popups.ts";
 import { createNavPanel } from "./nav-panel.ts";
 import { createMapGrid } from "./map-grid.ts";
-
-// Modal chunks emit outbound messages via the bus to avoid importing main.ts
-// (which would force the bundler to keep them on the critical path).
-bus.on("client_send", (ev) => sendClientEvent(ev as ClientEvent));
+import { createNet } from "./net.ts";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -189,14 +186,7 @@ function updateStatsBar(hp: number, hpMax: number, energy: number, energyMax: nu
   energyBarLabel.textContent = `${energy}/${energyMax}`;
 }
 
-let socket: WebSocket | null = null;
-let pendingOpenPromise: Promise<void> | null = null;
 let autoConnectEnabled = false;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let reconnectDelay = 1000;
-let reconnectEnabled = false;
-const pendingQueue: ClientEvent[] = [];
-const RECONNECT_DELAY_MAX = 30000;
 let mapRecordingEnabled = true;
 let pendingEquippedAction: "scratch" | "equip" | null = null;
 
@@ -357,313 +347,216 @@ function readStartupCommands(): string[] {
     .filter((command) => command.length > 0);
 }
 
-function getSocketUrl(): string {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws`;
-}
-
-function scheduleReconnect(): void {
-  if (reconnectTimer !== null || !reconnectEnabled) {
-    return;
-  }
-
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    socket = createSocket();
-  }, reconnectDelay);
-
-  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_DELAY_MAX);
-}
-
-function flushPendingQueue(): void {
-  while (pendingQueue.length > 0 && socket?.readyState === WebSocket.OPEN) {
-    const event = pendingQueue.shift()!;
-    socket.send(JSON.stringify(event));
-  }
-}
-
-function createSocket(): WebSocket {
-  const nextSocket = new WebSocket(getSocketUrl());
-
-  nextSocket.addEventListener("open", () => {
-    reconnectDelay = 1000;
-    flushPendingQueue();
-    sendClientEvent({ type: "send", payload: { command: "осм склад1" } });
-    sendClientEvent({ type: "send", payload: { command: "осм склад2" } });
-    sendClientEvent({ type: "send", payload: { command: "инв" } });
-  });
-
-  nextSocket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data)) as ServerEvent;
-
-    switch (message.type) {
-      case "defaults":
-        autoConnectEnabled = message.payload.autoConnect;
-        hostInput.value = message.payload.host;
-        portInput.value = String(message.payload.port);
-        tlsInput.checked = message.payload.tls;
-        startupCommandsInput.value = message.payload.startupCommands.join("\n");
-        commandDelayInput.value = String(message.payload.commandDelayMs);
-        break;
-      case "status":
-        appendSystemLine(message.payload.message);
-        updateConnectButton(message.payload.state);
-        break;
-      case "output":
-        appendOutput(message.payload.text);
-        break;
-      case "error":
-        appendSystemLine(`error: ${message.payload.message}`);
-        break;
-      case "map_snapshot":
-        trackerCurrentVnum = message.payload.currentVnum;
-        mapGrid.updateMap(message.payload, true);
-        if (zoneScriptState && !zoneScriptState.payload.enabled) {
-          renderScriptSteps(zoneScriptState.payload);
-        }
-        break;
-      case "map_update":
-        trackerCurrentVnum = message.payload.currentVnum;
-        mapGrid.updateMap(message.payload, false);
-        if (zoneScriptState && !zoneScriptState.payload.enabled) {
-          renderScriptSteps(zoneScriptState.payload);
-        }
-        break;
-      case "farm2_state":
-        farm2Enabled = message.payload.enabled;
-        farm2ZoneId = message.payload.zoneId;
-        farm2PendingActivation = message.payload.pendingActivation;
-        renderFarmButton();
-        break;
-      case "zone_script_state":
-        zoneScriptState = message;
-        renderScriptSteps(message.payload);
-        if (message.payload.enabled) {
-          switchContainerTab("script");
-        }
-        break;
-      case "stats_update":
-        currentStats = message.payload;
-        updateStatsBar(message.payload.hp, message.payload.hpMax, message.payload.energy, message.payload.energyMax);
-        break;
-      case "aliases_snapshot":
-        currentAliases = message.payload.aliases;
-        renderNavPanel();
-        mapGrid.forceFullRerender();
-        break;
-      case "navigation_state":
-        currentNavState = message.payload;
-        renderNavStatus(message.payload);
-        break;
-      case "survival_status":
-        currentSurvivalStatus = message.payload;
-        updateActionBadges();
-        break;
-      case "farm_settings_data":
-        bus.emit("farm_settings_data", message.payload);
-        break;
-      case "survival_settings_data": {
-        const raw = message.payload;
-        if (raw !== null) {
-          currentSurvivalSettings = normalizeSurvivalSettings(raw);
-          updateActionButtons();
-        }
-        bus.emit("survival_settings_data", message.payload);
-        break;
+function handleServerEvent(message: ServerEvent): void {
+  switch (message.type) {
+    case "defaults":
+      autoConnectEnabled = message.payload.autoConnect;
+      hostInput.value = message.payload.host;
+      portInput.value = String(message.payload.port);
+      tlsInput.checked = message.payload.tls;
+      startupCommandsInput.value = message.payload.startupCommands.join("\n");
+      commandDelayInput.value = String(message.payload.commandDelayMs);
+      break;
+    case "status":
+      appendSystemLine(message.payload.message);
+      updateConnectButton(message.payload.state);
+      break;
+    case "output":
+      appendOutput(message.payload.text);
+      break;
+    case "error":
+      appendSystemLine(`error: ${message.payload.message}`);
+      break;
+    case "map_snapshot":
+      trackerCurrentVnum = message.payload.currentVnum;
+      mapGrid.updateMap(message.payload, true);
+      if (zoneScriptState && !zoneScriptState.payload.enabled) {
+        renderScriptSteps(zoneScriptState.payload);
       }
-      case "triggers_state":
-        bus.emit("triggers_state", message.payload);
-        break;
-      case "map_recording_state":
-        mapRecordingEnabled = message.payload.enabled;
-        renderMapRecordingButton();
-        break;
-      case "gather_state":
-        gatherToggleButton.classList.toggle("button-toggle-active", message.payload.enabled);
-        break;
-      case "debug_log_state":
-        debugLogButton.classList.toggle("button-toggle-active", message.payload.enabled);
-        debugLogButton.title = message.payload.enabled ? "Дебаг лог: вкл" : "Дебаг лог: выкл";
-        break;
-      case "combat_state":
-        hotkeysInCombat = message.payload.inCombat;
-        break;
-      case "items_data":
-        bus.emit("items_data", message.payload);
-        break;
-      case "room_auto_commands_snapshot":
-        currentRoomAutoCommands = new Map(message.payload.entries.map((e) => [e.vnum, e.command]));
-        break;
-      case "compare_scan_progress":
-        bus.emit("compare_scan_progress", message.payload);
-        break;
-      case "compare_scan_result":
-        bus.emit("compare_scan_result", message.payload);
-        break;
-      case "repair_state":
-        repairBtn.disabled = message.payload.running;
-        repairBtn.title = message.payload.running
-          ? `Починка: ${message.payload.message}`
-          : "Починить снаряжение";
-        break;
-      case "wiki_item_search_result":
-        bus.emit("wiki_item_search_result", message.payload);
-        break;
-      case "vorozhe_route_result": {
-        bus.emit("vorozhe_route_result", message.payload);
-        break;
+      break;
+    case "map_update":
+      trackerCurrentVnum = message.payload.currentVnum;
+      mapGrid.updateMap(message.payload, false);
+      if (zoneScriptState && !zoneScriptState.payload.enabled) {
+        renderScriptSteps(zoneScriptState.payload);
       }
-      case "container_contents": {
-        const containerPanelMap = {
-          склад: storagePanelList,
-          расход: расходPanelList,
-          базар: bazaarPanelList,
-          хлам: junkPanelList,
-        };
-        const panelList = containerPanelMap[message.payload.container];
-        if (panelList) {
-          renderContainerList(panelList, message.payload.items, message.payload.container);
+      break;
+    case "farm2_state":
+      farm2Enabled = message.payload.enabled;
+      farm2ZoneId = message.payload.zoneId;
+      farm2PendingActivation = message.payload.pendingActivation;
+      renderFarmButton();
+      break;
+    case "zone_script_state":
+      zoneScriptState = message;
+      renderScriptSteps(message.payload);
+      if (message.payload.enabled) {
+        switchContainerTab("script");
+      }
+      break;
+    case "stats_update":
+      currentStats = message.payload;
+      updateStatsBar(message.payload.hp, message.payload.hpMax, message.payload.energy, message.payload.energyMax);
+      break;
+    case "aliases_snapshot":
+      currentAliases = message.payload.aliases;
+      renderNavPanel();
+      mapGrid.forceFullRerender();
+      break;
+    case "navigation_state":
+      currentNavState = message.payload;
+      renderNavStatus(message.payload);
+      break;
+    case "survival_status":
+      currentSurvivalStatus = message.payload;
+      updateActionBadges();
+      break;
+    case "farm_settings_data":
+      bus.emit("farm_settings_data", message.payload);
+      break;
+    case "survival_settings_data": {
+      const raw = message.payload;
+      if (raw !== null) {
+        currentSurvivalSettings = normalizeSurvivalSettings(raw);
+        updateActionButtons();
+      }
+      bus.emit("survival_settings_data", message.payload);
+      break;
+    }
+    case "triggers_state":
+      bus.emit("triggers_state", message.payload);
+      break;
+    case "map_recording_state":
+      mapRecordingEnabled = message.payload.enabled;
+      renderMapRecordingButton();
+      break;
+    case "gather_state":
+      gatherToggleButton.classList.toggle("button-toggle-active", message.payload.enabled);
+      break;
+    case "debug_log_state":
+      debugLogButton.classList.toggle("button-toggle-active", message.payload.enabled);
+      debugLogButton.title = message.payload.enabled ? "Дебаг лог: вкл" : "Дебаг лог: выкл";
+      break;
+    case "combat_state":
+      hotkeysInCombat = message.payload.inCombat;
+      break;
+    case "items_data":
+      bus.emit("items_data", message.payload);
+      break;
+    case "room_auto_commands_snapshot":
+      currentRoomAutoCommands = new Map(message.payload.entries.map((e) => [e.vnum, e.command]));
+      break;
+    case "compare_scan_progress":
+      bus.emit("compare_scan_progress", message.payload);
+      break;
+    case "compare_scan_result":
+      bus.emit("compare_scan_result", message.payload);
+      break;
+    case "repair_state":
+      repairBtn.disabled = message.payload.running;
+      repairBtn.title = message.payload.running
+        ? `Починка: ${message.payload.message}`
+        : "Починить снаряжение";
+      break;
+    case "wiki_item_search_result":
+      bus.emit("wiki_item_search_result", message.payload);
+      break;
+    case "vorozhe_route_result": {
+      bus.emit("vorozhe_route_result", message.payload);
+      break;
+    }
+    case "container_contents": {
+      const containerPanelMap = {
+        склад: storagePanelList,
+        расход: расходPanelList,
+        базар: bazaarPanelList,
+        хлам: junkPanelList,
+      };
+      const panelList = containerPanelMap[message.payload.container];
+      if (panelList) {
+        renderContainerList(panelList, message.payload.items, message.payload.container);
+      }
+      break;
+    }
+    case "inventory_contents": {
+      renderInventoryList(inventoryPanelList, message.payload.items);
+      if (pendingEquippedAction === "equip") {
+        pendingEquippedAction = null;
+        const commands: string[] = [];
+        for (const item of message.payload.items) {
+          const slotMatch = /\*Ринли\s+\*([^*]+)\*+/i.exec(item.name);
+          if (!slotMatch) continue;
+          const slot = slotMatch[1]?.trim() ?? "";
+          const wearCmd = INVENTORY_WEAR_CMD[slot] ?? "над";
+          const cleanName = item.name.replace(/\*+[^*]*\*+/g, "").replace(/<[^>]+>/g, "").trim();
+          const keyword = cleanName.split(/\s+/)[0] ?? cleanName;
+          if (keyword) commands.push(`${wearCmd} ${keyword}`);
         }
-        break;
-      }
-      case "inventory_contents": {
-        renderInventoryList(inventoryPanelList, message.payload.items);
-        if (pendingEquippedAction === "equip") {
-          pendingEquippedAction = null;
-          const commands: string[] = [];
-          for (const item of message.payload.items) {
-            const slotMatch = /\*Ринли\s+\*([^*]+)\*+/i.exec(item.name);
-            if (!slotMatch) continue;
-            const slot = slotMatch[1]?.trim() ?? "";
-            const wearCmd = INVENTORY_WEAR_CMD[slot] ?? "над";
-            const cleanName = item.name.replace(/\*+[^*]*\*+/g, "").replace(/<[^>]+>/g, "").trim();
-            const keyword = cleanName.split(/\s+/)[0] ?? cleanName;
-            if (keyword) commands.push(`${wearCmd} ${keyword}`);
-          }
-          if (commands.length > 0) {
-            sendClientEvent({ type: "compare_apply", payload: { commands } });
-          }
-        }
-        break;
-      }
-      case "equipped_contents": {
-        const items = message.payload.items;
-        if (pendingEquippedAction === "scratch") {
-          pendingEquippedAction = null;
-          const commands: string[] = [];
-          for (const item of items) {
-            commands.push(`сня ${item.keyword}`);
-            commands.push(`нацарапать клан ${item.keyword} Ринли *${item.slot}*`);
-            commands.push(`${item.wearCmd} ${item.keyword}`);
-          }
+        if (commands.length > 0) {
           sendClientEvent({ type: "compare_apply", payload: { commands } });
         }
-        break;
       }
-      case "chat_message": {
-        appendChatMessage(message.payload.text, message.payload.timestamp);
-        break;
-      }
-      case "chat_history": {
-        for (const msg of message.payload.messages) {
-          appendChatMessage(msg.text, msg.timestamp);
-        }
-        break;
-      }
-      case "inventory_sort_result": {
-        for (const { command } of message.payload.commands) {
-          sendClientEvent({ type: "send", payload: { command } });
-        }
-        break;
-      }
-      case "bazaar_max_price_response": {
-        const { itemName, maxPrice } = message.payload;
-        if (maxPrice === null) break;
-        const selector = `tr[data-item-name="${CSS.escape(itemName)}"]`;
-        const panelSources = [bazaarPanelList, расходPanelList];
-        for (const panel of panelSources) {
-          panel.querySelectorAll<HTMLTableRowElement>(selector).forEach((row) => {
-            const sellBtn = row.querySelector<HTMLButtonElement>(".container-panel__sell-btn");
-            if (sellBtn) {
-              sellBtn.dataset["sellPrice"] = String(maxPrice);
-              sellBtn.title = `Продать за ${maxPrice} кун`;
-            }
-          });
-        }
-        break;
-      }
+      break;
     }
-  });
-
-  nextSocket.addEventListener("close", () => {
-    socket = null;
-    pendingOpenPromise = null;
-    scheduleReconnect();
-  });
-
-  nextSocket.addEventListener("error", () => {
-  });
-
-  return nextSocket;
-}
-
-function ensureSocketOpen(): Promise<void> {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    return Promise.resolve();
-  }
-
-  if (!socket || socket.readyState === WebSocket.CLOSED) {
-    socket = createSocket();
-  }
-
-  if (socket.readyState === WebSocket.OPEN) {
-    return Promise.resolve();
-  }
-
-  if (!pendingOpenPromise) {
-    pendingOpenPromise = new Promise<void>((resolve, reject) => {
-      if (!socket) {
-        reject(new Error("Socket was not created."));
-        return;
+    case "equipped_contents": {
+      const items = message.payload.items;
+      if (pendingEquippedAction === "scratch") {
+        pendingEquippedAction = null;
+        const commands: string[] = [];
+        for (const item of items) {
+          commands.push(`сня ${item.keyword}`);
+          commands.push(`нацарапать клан ${item.keyword} Ринли *${item.slot}*`);
+          commands.push(`${item.wearCmd} ${item.keyword}`);
+        }
+        sendClientEvent({ type: "compare_apply", payload: { commands } });
       }
-
-      const handleOpen = () => {
-        cleanup();
-        pendingOpenPromise = null;
-        resolve();
-      };
-
-      const handleClose = () => {
-        cleanup();
-        pendingOpenPromise = null;
-        reject(new Error("Socket closed before opening."));
-      };
-
-      const cleanup = () => {
-        socket?.removeEventListener("open", handleOpen);
-        socket?.removeEventListener("close", handleClose);
-      };
-
-      socket.addEventListener("open", handleOpen);
-      socket.addEventListener("close", handleClose);
-    });
-  }
-
-  return pendingOpenPromise;
-}
-
-function sendClientEvent(message: ClientEvent): void {
-  if (socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(message));
-    return;
-  }
-
-  pendingQueue.push(message);
-
-  if (!socket || socket.readyState === WebSocket.CLOSED) {
-    socket = createSocket();
+      break;
+    }
+    case "chat_message": {
+      appendChatMessage(message.payload.text, message.payload.timestamp);
+      break;
+    }
+    case "chat_history": {
+      for (const msg of message.payload.messages) {
+        appendChatMessage(msg.text, msg.timestamp);
+      }
+      break;
+    }
+    case "inventory_sort_result": {
+      for (const { command } of message.payload.commands) {
+        sendClientEvent({ type: "send", payload: { command } });
+      }
+      break;
+    }
+    case "bazaar_max_price_response": {
+      const { itemName, maxPrice } = message.payload;
+      if (maxPrice === null) break;
+      const selector = `tr[data-item-name="${CSS.escape(itemName)}"]`;
+      const panelSources = [bazaarPanelList, расходPanelList];
+      for (const panel of panelSources) {
+        panel.querySelectorAll<HTMLTableRowElement>(selector).forEach((row) => {
+          const sellBtn = row.querySelector<HTMLButtonElement>(".container-panel__sell-btn");
+          if (sellBtn) {
+            sellBtn.dataset["sellPrice"] = String(maxPrice);
+            sellBtn.title = `Продать за ${maxPrice} кун`;
+          }
+        });
+      }
+      break;
+    }
   }
 }
+
+// Socket + reconnect + outbound queue live in net.ts. handleServerEvent is
+// hoisted (function declaration), so we can pass it to createNet even though
+// it references `sendClientEvent` below — by the time a WS message arrives,
+// destructuring has run.
+const net = createNet({ onMessage: handleServerEvent });
+const { sendClientEvent, ensureSocketOpen } = net;
+
+// Modal chunks emit outbound messages via the bus to avoid importing main.ts
+// (which would force the bundler to keep them on the critical path).
+bus.on("client_send", (ev) => sendClientEvent(ev as ClientEvent));
 
 async function loadDefaults(): Promise<void> {
   const [configResponse, profilesResponse] = await Promise.all([
@@ -1079,7 +972,7 @@ initSplitters();
 
 void loadDefaults()
   .then(() => {
-    reconnectEnabled = true;
+    net.enableReconnect();
     return ensureSocketOpen();
   })
   .catch((error) => {
