@@ -16,29 +16,25 @@ import { createContainerInspector } from "./server/containers.ts";
 import { createSendCommandHandler, normalizeTextMessage } from "./server/command-handler.ts";
 import { createMudTextPipeline } from "./server/mud-text-pipeline.ts";
 import { createHttpRoutes } from "./server/http-routes.ts";
+import { createClientMessageRouter } from "./server/client-message-router.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
 import { createFarmController } from "./farm/index.ts";
-import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands } from "./survival-script.ts";
+import { createSurvivalController, normalizeSurvivalConfig } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
 import { createParserState } from "./map/parser.ts";
 import { createMapStore } from "./map/store.ts";
-import type { MarketSale } from "./map/store.ts";
 import { createTrackerState, trackOutgoingCommand } from "./map/tracker.ts";
 import { createMover } from "./map/mover.ts";
 import { createTriggers } from "./triggers.ts";
-import { runCompareScan } from "./compare-scan/index.ts";
-import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache, searchAndCacheWikiItem } from "./wiki.ts";
 import { createContainerTracker } from "./container-tracker.ts";
 import { createItemIdentifier } from "./item-identify.ts";
 import { createRepairController } from "./repair-script.ts";
 import { createGatherController } from "./gather-script.ts";
-import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, TriggerState, MapAlias, MapSnapshot, GameItem } from "./events.type.ts";
-import { normalizeFarmZoneSettings, normalizeSurvivalSettings } from "./settings-normalizers.ts";
+import type { WsData, ClientEvent } from "./events.type.ts";
+import { normalizeSurvivalSettings } from "./settings-normalizers.ts";
 import { createMudConnection } from "./mud-connection.ts";
-import type { Session } from "./mud-connection.ts";
-import { findVorozheRoute } from "./vorozhe-graph.ts";
 import { createBazaarNotifier } from "./bazaar-notifier.ts";
 
 const broadcaster = createBroadcaster();
@@ -594,6 +590,43 @@ const httpRoutes = createHttpRoutes({
   getCurrentMapSnapshot: () => getCurrentMapSnapshot(),
 });
 
+const clientMessageRouter = createClientMessageRouter({
+  session: sharedSession,
+  mudConnection,
+  farmController,
+  triggers,
+  survivalController,
+  gatherController,
+  repairController,
+  containerTracker,
+  trackerState,
+  mapStore,
+  runtimeConfig,
+  getActiveProfileId: () => activeProfileId,
+  setActiveProfileId: (id) => {
+    activeProfileId = id;
+    saveLastProfileId(id);
+  },
+  getDebugLogEnabled: () => debugLogEnabled,
+  setDebugLogEnabled: (enabled) => { debugLogEnabled = enabled; },
+  getMapRecordingEnabled: () => mapRecordingEnabled,
+  setMapRecordingEnabled: (enabled) => { mapRecordingEnabled = enabled; },
+  sendServerEvent,
+  broadcastServerEvent,
+  logEvent,
+  sanitizeLogText,
+  mudTextHandlers,
+  inspectContainer,
+  startNavigationToNearest,
+  stopNavigation,
+  resetMapState,
+  broadcastMapSnapshot,
+  broadcastAliasesSnapshot,
+  broadcastRoomAutoCommandsSnapshot,
+  handleSendCommand,
+  sendSurvivalSettings,
+});
+
 const server = Bun.serve({
   hostname: runtimeConfig.host,
   port: runtimeConfig.port,
@@ -667,402 +700,7 @@ const server = Bun.serve({
         return;
       }
 
-      switch (event.type) {
-        case "connect":
-          logEvent(ws, "browser-in", "connect");
-          if (event.payload?.profileId) {
-            activeProfileId = event.payload.profileId;
-            saveLastProfileId(event.payload.profileId);
-          }
-          await mudConnection.connectToMud(ws, event.payload);
-          void mapStore.getTriggerSettings(activeProfileId).then((saved) => {
-            if (saved) triggers.setEnabled(saved);
-          }).catch((error: unknown) => {
-            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error loading trigger settings");
-          });
-          break;
-        case "send":
-          logEvent(ws, "browser-in", sanitizeLogText(event.payload?.command?.trim() || ""), {
-            type: "send",
-          });
-          handleSendCommand(ws, event.payload?.command);
-          break;
-        case "disconnect":
-          logEvent(ws, "browser-in", "disconnect");
-          mudConnection.teardownSession(ws, "Disconnected by user.");
-          break;
-        case "map_reset":
-          logEvent(ws, "browser-in", "map_reset");
-          resetMapState();
-          await mapStore.reset();
-          await broadcastMapSnapshot("map_snapshot");
-          break;
-        case "map_reset_area": {
-          logEvent(ws, "browser-in", "map_reset_area");
-          const currentVnum = trackerState.currentRoomId;
-          if (currentVnum !== null) {
-            const zoneId = Math.floor(currentVnum / 100);
-            await mapStore.deleteZone(zoneId);
-            trackerState.currentRoomId = null;
-            await broadcastMapSnapshot("map_snapshot");
-          }
-          break;
-        }
-        case "map_recording_toggle": {
-          mapRecordingEnabled = event.payload?.enabled ?? !mapRecordingEnabled;
-          logEvent(ws, "browser-in", "map_recording_toggle", { enabled: mapRecordingEnabled });
-          broadcastServerEvent({ type: "map_recording_state", payload: { enabled: mapRecordingEnabled } });
-          break;
-        }
-        case "debug_log_toggle": {
-          debugLogEnabled = event.payload?.enabled ?? !debugLogEnabled;
-          logEvent(ws, "browser-in", "debug_log_toggle", { enabled: debugLogEnabled });
-          broadcastServerEvent({ type: "debug_log_state", payload: { enabled: debugLogEnabled } });
-          break;
-        }
-        case "farm2_toggle": {
-          const enabled = event.payload?.enabled === true;
-          logEvent(ws, "browser-in", "farm2_toggle", { enabled });
-          farmController.setLoopEnabled(enabled);
-          break;
-        }
-        case "attack_nearest": {
-          logEvent(ws, "browser-in", "attack_nearest");
-          const currentRoomId = trackerState.currentRoomId;
-          if (currentRoomId !== null && sharedSession.tcpSocket && sharedSession.connected) {
-            const target = await farmController.resolveAttackTarget(currentRoomId);
-            if (target !== null) {
-              mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, "спрят", "attack-nearest");
-              mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `закол ${target}`, "attack-nearest");
-            }
-          }
-          break;
-        }
-        case "zone_script_toggle": {
-          const enabled = event.payload?.enabled === true;
-          const zoneId = typeof event.payload?.zoneId === "number" ? event.payload.zoneId : undefined;
-          logEvent(ws, "browser-in", "zone_script_toggle", { enabled, zoneId });
-          farmController.setScriptEnabled(enabled, zoneId);
-          break;
-        }
-        case "farming_toggle": {
-          const enabled = event.payload?.enabled === true;
-          const zoneId = typeof event.payload?.zoneId === "number" ? event.payload.zoneId : 280;
-          logEvent(ws, "browser-in", "farming_toggle", { enabled, zoneId });
-          farmController.setScriptEnabled(enabled, zoneId);
-          break;
-        }
-        case "alias_set": {
-          const vnum = event.payload?.vnum;
-          const alias = event.payload?.alias?.trim();
-          if (typeof vnum === "number" && alias) {
-            logEvent(ws, "browser-in", "alias_set", { vnum, alias });
-            await mapStore.setAlias(vnum, alias);
-            await broadcastAliasesSnapshot();
-          }
-          break;
-        }
-        case "alias_delete": {
-          const vnum = event.payload?.vnum;
-          if (typeof vnum === "number") {
-            logEvent(ws, "browser-in", "alias_delete", { vnum });
-            await mapStore.deleteAlias(vnum);
-            await broadcastAliasesSnapshot();
-          }
-          break;
-        }
-        case "navigate_to": {
-          const vnums = event.payload?.vnums;
-          if (Array.isArray(vnums) && vnums.length > 0) {
-            logEvent(ws, "browser-in", "navigate_to", { vnums: vnums.join(",") });
-            await startNavigationToNearest(ws, vnums);
-          }
-          break;
-        }
-        case "goto_and_run": {
-          const vnums = event.payload?.vnums;
-          const commands = event.payload?.commands;
-          if (Array.isArray(vnums) && vnums.length > 0) {
-            logEvent(ws, "browser-in", "goto_and_run", { vnums: vnums.join(","), commands: (commands ?? []).join(";") });
-            let resolvedCommands: string[] = Array.isArray(commands) ? commands : [];
-            const action = event.payload?.action;
-            if (action === "buy_food" || action === "fill_flask") {
-              const survival = await mapStore.getSurvivalSettings();
-              const ss = normalizeSurvivalSettings(survival ?? {});
-              const survivalConfig = normalizeSurvivalConfig({
-                enabled: true,
-                container: ss.container,
-                foodItems: ss.foodItems.split("\n").map((s) => s.trim()).filter(Boolean),
-                flaskItems: ss.flaskItems.split("\n").map((s) => s.trim()).filter(Boolean),
-                buyFoodItem: ss.buyFoodItem,
-                buyFoodMax: ss.buyFoodMax,
-                buyFoodAlias: ss.buyFoodAlias,
-                fillFlaskAlias: ss.fillFlaskAlias,
-                fillFlaskSource: ss.fillFlaskSource,
-              });
-              const result = await resolveSurvivalCommands(
-                action,
-                survivalConfig,
-                (container) => inspectContainer(ws, container),
-              );
-              if (result === null) {
-                const currentCount = "достаточно";
-                broadcastServerEvent({
-                  type: "status",
-                  payload: { state: sharedSession.state, message: `[survival] уже ${currentCount} еды` },
-                });
-                break;
-              }
-              resolvedCommands = result;
-            }
-            await startNavigationToNearest(ws, vnums);
-            for (const cmd of resolvedCommands) {
-              if (sharedSession.tcpSocket && sharedSession.connected) {
-                mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, cmd, "goto_and_run");
-                await new Promise<void>((resolve) => setTimeout(resolve, runtimeConfig.commandDelayMs));
-              }
-            }
-          }
-          break;
-        }
-        case "navigate_stop": {
-          logEvent(ws, "browser-in", "navigate_stop");
-          stopNavigation();
-          break;
-        }
-        case "farm_settings_get": {
-          const zoneId = event.payload?.zoneId;
-          if (typeof zoneId === "number") {
-            logEvent(ws, "browser-in", "farm_settings_get", { zoneId });
-            const settings = await mapStore.getFarmSettings(activeProfileId, zoneId);
-            sendServerEvent(ws, {
-              type: "farm_settings_data",
-              payload: { zoneId, settings },
-            });
-          }
-          break;
-        }
-        case "farm_settings_save": {
-          const zoneId = event.payload?.zoneId;
-          const raw = event.payload?.settings;
-          if (typeof zoneId === "number" && raw) {
-            const settings = normalizeFarmZoneSettings(raw);
-            logEvent(ws, "browser-in", "farm_settings_save", { zoneId });
-            await mapStore.setFarmSettings(activeProfileId, zoneId, settings);
-          }
-          break;
-        }
-        case "survival_settings_get": {
-          logEvent(ws, "browser-in", "survival_settings_get");
-          await sendSurvivalSettings(ws);
-          break;
-        }
-        case "survival_settings_save": {
-          const raw = event.payload;
-          if (raw) {
-            const settings = normalizeSurvivalSettings(raw);
-            logEvent(ws, "browser-in", "survival_settings_save");
-            await mapStore.setSurvivalSettings(settings);
-            survivalController.updateConfig(normalizeSurvivalConfig({
-              enabled: settings.foodItems.trim().length > 0 || settings.flaskItems.trim().length > 0,
-              container: settings.container,
-              foodItems: settings.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
-              flaskItems: settings.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
-              buyFoodItem: settings.buyFoodItem,
-              buyFoodMax: settings.buyFoodMax,
-              buyFoodAlias: settings.buyFoodAlias,
-              fillFlaskAlias: settings.fillFlaskAlias,
-              fillFlaskSource: settings.fillFlaskSource,
-            }));
-          }
-          break;
-        }
-        case "triggers_toggle": {
-          triggers.setEnabled(event.payload ?? {});
-          void mapStore.setTriggerSettings(activeProfileId, triggers.getState()).catch((error: unknown) => {
-            logEvent(ws, "error", error instanceof Error ? error.message : "Unknown error saving trigger settings");
-          });
-          break;
-        }
-        case "gather_toggle": {
-          const newEnabled = typeof event.payload?.enabled === "boolean"
-            ? event.payload.enabled
-            : !gatherController.getState().enabled;
-          gatherController.setEnabled(newEnabled);
-          logEvent(ws, "browser-in", `gather_toggle enabled=${String(newEnabled)}`);
-          broadcastServerEvent({ type: "gather_state", payload: gatherController.getState() });
-          break;
-        }
-        case "gather_sell_bag": {
-          logEvent(ws, "browser-in", "gather_sell_bag");
-          const { bag } = gatherController.getState();
-          if (sharedSession.tcpSocket && sharedSession.connected) {
-            mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket, `выставить все ${bag}`, "gather-script");
-          }
-          break;
-        }
-        case "inspect_container": {
-          const containerKey = event.payload?.container;
-          if (containerKey !== "склад" && containerKey !== "расход" && containerKey !== "базар" && containerKey !== "хлам") break;
-          logEvent(ws, "browser-in", `inspect_container: ${containerKey}`);
-          if (sharedSession.tcpSocket && sharedSession.connected) {
-            mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, `осм ${containerKey}`, "inspect-container");
-          }
-          break;
-        }
-        case "inspect_inventory": {
-          logEvent(ws, "browser-in", "inspect_inventory");
-          if (sharedSession.tcpSocket && sharedSession.connected) {
-            mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, "инв", "inspect-inventory");
-          }
-          break;
-        }
-        case "equipped_scan": {
-          logEvent(ws, "browser-in", "equipped_scan");
-          if (sharedSession.tcpSocket && sharedSession.connected) {
-            containerTracker.startEquippedScan();
-            mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket, "equipment", "equipped-scan");
-          }
-          break;
-        }
-        case "inventory_auto_sort": {
-          const items = event.payload?.items ?? [];
-          logEvent(ws, "browser-in", `inventory_auto_sort: ${items.length} items`);
-          const commands: Array<{ command: string }> = [];
-          for (const item of items) {
-            const maxPrice = await mapStore.getMarketMaxPrice(item.name);
-            const kw = item.name.split(/\s+/)[0] ?? item.name;
-            if (maxPrice !== null) {
-              commands.push({ command: `пол ${kw} базар` });
-            } else {
-              commands.push({ command: `пол ${kw} хлам` });
-            }
-          }
-          sendServerEvent(ws, { type: "inventory_sort_result", payload: { commands } });
-          break;
-        }
-        case "bazaar_max_price_request": {
-          const itemName = event.payload?.itemName ?? "";
-          const maxPrice = await mapStore.getMarketMaxPrice(itemName);
-          sendServerEvent(ws, { type: "bazaar_max_price_response", payload: { itemName, maxPrice } });
-          break;
-        }
-        case "zone_name_set": {
-          const { zoneId, name } = event.payload;
-          if (name === null || name === "") {
-            await mapStore.deleteZoneName(zoneId);
-            logEvent(ws, "browser-in", "zone_name_delete", { zoneId });
-          } else {
-            await mapStore.setZoneName(zoneId, name);
-            logEvent(ws, "browser-in", "zone_name_set", { zoneId, name });
-          }
-          break;
-        }
-        case "item_db_get": {
-          logEvent(ws, "browser-in", "item_db_get");
-          const items = await mapStore.getItems();
-          sendServerEvent(ws, { type: "items_data", payload: { items } });
-          break;
-        }
-        case "wiki_item_search": {
-          const query = event.payload?.query?.trim() ?? "";
-          logEvent(ws, "browser-in", `wiki_item_search: ${query}`);
-          if (!query) break;
-          try {
-            const result = await searchAndCacheWikiItem(query, mapStore, runtimeConfig.wikiProxies);
-            sendServerEvent(ws, { type: "wiki_item_search_result", payload: { query, ...result } });
-          } catch (err: unknown) {
-            sendServerEvent(ws, {
-              type: "wiki_item_search_result",
-              payload: { query, found: false, error: err instanceof Error ? err.message : "Ошибка поиска" },
-            });
-          }
-          break;
-        }
-        case "vorozhe_route_find": {
-          const from = event.payload?.from?.trim() ?? "";
-          const to = event.payload?.to?.trim() ?? "";
-          logEvent(ws, "browser-in", `vorozhe_route_find: ${from} → ${to}`);
-          if (!from || !to) break;
-          const result = findVorozheRoute(from, to);
-          sendServerEvent(ws, {
-            type: "vorozhe_route_result",
-            payload: {
-              from,
-              to,
-              found: result.found,
-              steps: result.steps,
-              totalItems: result.totalItems as Record<string, number>,
-            },
-          });
-          break;
-        }
-        case "room_auto_command_set": {
-          const vnum = event.payload?.vnum;
-          const command = event.payload?.command?.trim();
-          if (typeof vnum === "number" && command) {
-            logEvent(ws, "browser-in", "room_auto_command_set", { vnum, command });
-            await mapStore.setRoomAutoCommand(vnum, command);
-            await broadcastRoomAutoCommandsSnapshot();
-          }
-          break;
-        }
-        case "room_auto_command_delete": {
-          const vnum = event.payload?.vnum;
-          if (typeof vnum === "number") {
-            logEvent(ws, "browser-in", "room_auto_command_delete", { vnum });
-            await mapStore.deleteRoomAutoCommand(vnum);
-            await broadcastRoomAutoCommandsSnapshot();
-          }
-          break;
-        }
-        case "room_auto_commands_get": {
-          logEvent(ws, "browser-in", "room_auto_commands_get");
-          const entries = await mapStore.getRoomAutoCommands();
-          sendServerEvent(ws, { type: "room_auto_commands_snapshot", payload: { entries } });
-          break;
-        }
-        case "compare_scan_start": {
-          logEvent(ws, "browser-in", "compare_scan_start");
-          if (!sharedSession.tcpSocket || !sharedSession.connected) {
-            sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
-            break;
-          }
-          void runCompareScan({
-            sendCommand: (cmd) => mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, cmd, "compare-scan"),
-            registerTextHandler: (h) => mudTextHandlers.add(h),
-            unregisterTextHandler: (h) => mudTextHandlers.delete(h),
-            onProgress: (msg) => { logEvent(ws, "browser-out", `[compare-scan] ${msg}`); broadcastServerEvent({ type: "compare_scan_progress", payload: { message: msg } }); },
-            waitForOutput: (_ms) => Promise.resolve(""),
-            cancelWait: () => {},
-            getItemByName: (name) => mapStore.getItemByName(name),
-            upsertItem: (name, itemType, data, hasWikiData, hasGameData) => mapStore.upsertItem(name, itemType, data, hasWikiData, hasGameData),
-            wikiProxies: runtimeConfig.wikiProxies,
-          }).then((result) => {
-            broadcastServerEvent({ type: "compare_scan_result", payload: result });
-          }).catch((err: unknown) => {
-            broadcastServerEvent({ type: "error", payload: { message: err instanceof Error ? err.message : "Ошибка сравнятора." } });
-          });
-          break;
-        }
-        case "compare_apply": {
-          logEvent(ws, "browser-in", `compare_apply: ${event.payload.commands.join(" ; ")}`);
-          if (!sharedSession.tcpSocket || !sharedSession.connected) {
-            sendServerEvent(ws, { type: "error", payload: { message: "Не подключены к MUD." } });
-            break;
-          }
-          const compareSocket = sharedSession.tcpSocket;
-          for (const cmd of event.payload.commands) {
-            mudConnection.writeAndLogMudCommand(null, compareSocket, cmd, "compare-apply");
-          }
-          break;
-        }
-        case "repair_start": {
-          logEvent(ws, "browser-in", "repair_start");
-          void repairController.run();
-          break;
-        }
-      }
+      await clientMessageRouter.handleMessage(ws, event);
     },
     close(ws) {
       logEvent(ws, "session", "Browser WebSocket closed.");
