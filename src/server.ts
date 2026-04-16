@@ -8,6 +8,8 @@ import { LOOT_FROM_CORPSE_RE, PICKUP_FROM_GROUND_RE } from "./server/loot.ts";
 import { createBroadcaster } from "./server/broadcast.ts";
 import { createLogEvent, createStatusUpdater, sanitizeLogText, appendLogLine } from "./server/logging.ts";
 import { createStatsTracker } from "./server/stats.ts";
+import { createListenerHub } from "./server/listeners.ts";
+import type { RoomRefreshListener } from "./server/listeners.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
@@ -329,34 +331,8 @@ const navigationState: NavigationState = {
   abortController: null,
 };
 
-type RoomChangedListener = (vnum: number) => void;
-const roomChangedListeners = new Set<RoomChangedListener>();
-type RoomRefreshListener = (vnum: number | null) => void;
-const roomRefreshListeners = new Set<RoomRefreshListener>();
-const mudTextHandlers = new Set<(text: string) => void>();
-const sessionTeardownHooks = new Set<() => void>();
-
-function onceMudText(pattern: RegExp, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      mudTextHandlers.delete(handler);
-      reject(new Error(`wait_text timeout: ${pattern.source}`));
-    }, timeoutMs);
-    const handler = (text: string) => {
-      if (done) return;
-      if (pattern.test(text)) {
-        done = true;
-        clearTimeout(timer);
-        mudTextHandlers.delete(handler);
-        resolve();
-      }
-    };
-    mudTextHandlers.add(handler);
-  });
-}
+const listenerHub = createListenerHub();
+const { mudTextHandlers, roomChangedListeners, roomRefreshListeners, sessionTeardownHooks, onceMudText, onceRoomChanged } = listenerHub;
 
 function refreshCurrentRoom(timeoutMs: number): Promise<number | null> {
   return new Promise((resolve) => {
@@ -480,26 +456,6 @@ function scheduleLootSort(): void {
       logEvent(null, "error", error instanceof Error ? `Loot sort error: ${error.message}` : "Loot sort error.");
     });
   }, 1500);
-}
-
-function onceRoomChanged(timeoutMs: number): Promise<number | null> {
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      roomChangedListeners.delete(listener);
-      resolve(null);
-    }, timeoutMs);
-    const listener: RoomChangedListener = (vnum) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      roomChangedListeners.delete(listener);
-      resolve(vnum);
-    };
-    roomChangedListeners.add(listener);
-  });
 }
 
 // Character stats tracker — parses MUD prompt / max-stats phrase and
