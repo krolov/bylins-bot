@@ -7,6 +7,7 @@ import { extractMarketSales } from "./server/market.ts";
 import { LOOT_FROM_CORPSE_RE, PICKUP_FROM_GROUND_RE } from "./server/loot.ts";
 import { createBroadcaster } from "./server/broadcast.ts";
 import { createLogEvent, createStatusUpdater, sanitizeLogText, appendLogLine } from "./server/logging.ts";
+import { createStatsTracker } from "./server/stats.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
@@ -302,9 +303,9 @@ const triggers = createTriggers({
   getCharacterName: () => {
     return runtimeConfig.profiles.find((p) => p.id === activeProfileId)?.name ?? "";
   },
-  getCharLevel: () => statsLevel,
-  getCharDsu: () => statsDsu,
-  getCharRazb: () => statsRazb,
+  getCharLevel: () => statsTracker.getLevel(),
+  getCharDsu: () => statsTracker.getDsu(),
+  getCharRazb: () => statsTracker.getRazb(),
   onEquipAll: () => {
      broadcastServerEvent({ type: "equip_all" });
   },
@@ -501,93 +502,18 @@ function onceRoomChanged(timeoutMs: number): Promise<number | null> {
   });
 }
 
-// ── Character stats ──────────────────────────────────────────────────────────
-// Фраза максимумов: «Вы можете выдержать 50(50) единиц повреждения, и пройти 86(86) верст»
-const MAX_STATS_REGEXP = /Вы можете выдержать \d+\((\d+)\) единиц[а-я]* повреждения.*?пройти \d+\((\d+)\) верст/i;
-// Строка промпта после strip ANSI: «50H 86M 1421o Зауч:0 ОЗ:0 2L 5G Вых:СВЮЗ>»
-// Захватывает: (1)HP (2)Energy (3)DSU (4)Level — между ОЗ:N и L могут быть [mob:state] или Зс:N
-const PROMPT_STATS_REGEXP = /(\d+)H\s+(\d+)M\s+(\d+)o\s+Зауч:\d+\s+ОЗ:\d+.*?(\d+)L\s+\d+G/;
-// Уровень отдельным regex как fallback (L всегда перед G)
-const PROMPT_LEVEL_REGEXP = /(\d+)L\s+\d+G/;
+// Character stats tracker — parses MUD prompt / max-stats phrase and
+// broadcasts stats_update + feeds farmController. Details live in ./server/stats.ts.
+const statsTracker = createStatsTracker({
+  broadcastServerEvent,
+  onStatsChanged: (stats) => farmController.updateStats(stats),
+});
+
 const ANSI_ESCAPE_REGEXP = /\u001b\[[0-9;]*m/g;
 const COMBAT_PROMPT_MOB_REGEXP = /\[([^\]:]+):[^\]]+\]/g;
-// «вступить в группу с максимальной разницей в X уровней»
-const RAZB_REGEXP = /максимальной разницей в (\d+) уровн/i;
-
-let statsHp = 0;
-let statsHpMax = 0;
-let statsEnergy = 0;
-let statsEnergyMax = 0;
-let statsLevel = 0;
-let statsDsu = 0;
-let statsRazb = 5;
 
 let survivalTickTimer: ReturnType<typeof setTimeout> | null = null;
-
 let survivalTickRunning = false;
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-function parseAndBroadcastStats(text: string): void {
-  let changed = false;
-
-  const maxMatch = MAX_STATS_REGEXP.exec(text);
-  if (maxMatch) {
-    const newHpMax = Number(maxMatch[1]);
-    const newEnergyMax = Number(maxMatch[2]);
-    if (newHpMax !== statsHpMax || newEnergyMax !== statsEnergyMax) {
-      statsHpMax = newHpMax;
-      statsEnergyMax = newEnergyMax;
-      changed = true;
-    }
-  }
-
-  const stripped = text.replace(ANSI_ESCAPE_REGEXP, "");
-  const promptMatch = PROMPT_STATS_REGEXP.exec(stripped);
-  if (promptMatch) {
-    const newHp = Number(promptMatch[1]);
-    const newEnergy = Number(promptMatch[2]);
-    const newDsu = Number(promptMatch[3]);
-    const newLevel = Number(promptMatch[4]);
-    if (newHp !== statsHp || newEnergy !== statsEnergy) {
-      statsHp = newHp;
-      statsEnergy = newEnergy;
-      changed = true;
-    }
-    if (newDsu !== statsDsu) statsDsu = newDsu;
-    if (newLevel !== 0 && newLevel !== statsLevel) statsLevel = newLevel;
-  } else {
-    const levelMatch = PROMPT_LEVEL_REGEXP.exec(stripped);
-    if (levelMatch) {
-      const newLevel = Number(levelMatch[1]);
-      if (newLevel !== 0 && newLevel !== statsLevel) statsLevel = newLevel;
-    }
-  }
-
-  const razbMatch = RAZB_REGEXP.exec(stripped);
-  if (razbMatch) {
-    statsRazb = Number(razbMatch[1]);
-  }
-
-  if (changed) {
-    broadcastServerEvent({
-      type: "stats_update",
-      payload: {
-        hp: statsHp,
-        hpMax: statsHpMax,
-        energy: statsEnergy,
-        energyMax: statsEnergyMax,
-      },
-    });
-
-    farmController.updateStats({
-      hp: statsHp,
-      hpMax: statsHpMax,
-      energy: statsEnergy,
-      energyMax: statsEnergyMax,
-    });
-  }
-}
 
 async function sendSurvivalSettings(ws: BunServerWebSocket): Promise<void> {
   const survival = await mapStore.getSurvivalSettings();
@@ -652,14 +578,14 @@ function sendDefaults(ws: BunServerWebSocket): void {
     payload: { inCombat: combatState.getInCombat() },
   });
 
-  if (statsHpMax > 0 || statsEnergyMax > 0) {
+  if (statsTracker.getHpMax() > 0 || statsTracker.getEnergyMax() > 0) {
     sendServerEvent(ws, {
       type: "stats_update",
       payload: {
-        hp: statsHp,
-        hpMax: statsHpMax,
-        energy: statsEnergy,
-        energyMax: statsEnergyMax,
+        hp: statsTracker.getHp(),
+        hpMax: statsTracker.getHpMax(),
+        energy: statsTracker.getEnergy(),
+        energyMax: statsTracker.getEnergyMax(),
       },
     });
   }
@@ -698,8 +624,8 @@ function handleSendCommand(ws: BunServerWebSocket, command: string | undefined):
   }
 
   if (trimmedCommand.toLowerCase() === "дсу") {
-    const dsuFormatted = statsDsu.toLocaleString("ru-RU");
-    mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, `гг [ Разбег: ${statsRazb} -+- Уровень: ${statsLevel} -+- ДСУ: ${dsuFormatted} ]`, "browser");
+    const dsuFormatted = statsTracker.getDsu().toLocaleString("ru-RU");
+    mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, `гг [ Разбег: ${statsTracker.getRazb()} -+- Уровень: ${statsTracker.getLevel()} -+- ДСУ: ${dsuFormatted} ]`, "browser");
     return;
   }
 
@@ -970,7 +896,7 @@ function clearSurvivalTickTimer(): void {
 }
 
 async function persistParsedMapData(text: string, ws: BunServerWebSocket | null): Promise<void> {
-  parseAndBroadcastStats(text);
+  statsTracker.parseAndBroadcast(text);
 
   combatState.handleMudText(text);
   triggers.handleMudText(text);
