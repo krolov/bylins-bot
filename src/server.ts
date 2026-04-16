@@ -11,19 +11,18 @@ import { createStatsTracker } from "./server/stats.ts";
 import { createListenerHub } from "./server/listeners.ts";
 import type { RoomRefreshListener } from "./server/listeners.ts";
 import { createSnapshotBroadcaster } from "./server/snapshots.ts";
+import { createNavigationController } from "./server/navigation.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
 import { createFarmController } from "./farm/index.ts";
 import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands, parseInspectItems, parseInventoryItems } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
-import type { PathStep } from "./map/pathfinder.ts";
 import { createParserState, feedText } from "./map/parser.ts";
 import { createMapStore } from "./map/store.ts";
 import type { MarketSale } from "./map/store.ts";
 import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker.ts";
 import { createMover } from "./map/mover.ts";
-import type { Direction } from "./map/types.ts";
 import { createTriggers } from "./triggers.ts";
 import { runCompareScan } from "./compare-scan/index.ts";
 import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache, searchAndCacheWikiItem } from "./wiki.ts";
@@ -316,21 +315,20 @@ const triggers = createTriggers({
 
 
 
-interface NavigationState {
-  active: boolean;
-  targetVnum: number | null;
-  steps: PathStep[];
-  currentStep: number;
-  abortController: AbortController | null;
-}
-
-const navigationState: NavigationState = {
-  active: false,
-  targetVnum: null,
-  steps: [],
-  currentStep: 0,
-  abortController: null,
-};
+const navigationController = createNavigationController({
+  mapStore,
+  broadcastServerEvent,
+  getCurrentRoomId: () => trackerState.currentRoomId,
+  session: sharedSession,
+  writeAndLogMudCommand: (ws, socket, command, origin) =>
+    mudConnection.writeAndLogMudCommand(ws, socket, command, origin),
+  onceRoomChanged: (timeoutMs) => onceRoomChanged(timeoutMs),
+});
+const navigationState = navigationController.state;
+const startNavigation = navigationController.startNavigation;
+const startNavigationToNearest = navigationController.startNavigationToNearest;
+const stopNavigation = navigationController.stopNavigation;
+const broadcastNavigationState = navigationController.broadcastNavigationState;
 
 const listenerHub = createListenerHub();
 const { mudTextHandlers, roomChangedListeners, roomRefreshListeners, sessionTeardownHooks, onceMudText, onceRoomChanged } = listenerHub;
@@ -631,150 +629,6 @@ const {
   broadcastRoomAutoCommandsSnapshot,
 } = snapshots;
 const sendMapSnapshot = (ws: BunServerWebSocket) => snapshots.sendInitialSnapshot(ws);
-
-function broadcastNavigationState(): void {
-  broadcastServerEvent({
-    type: "navigation_state",
-    payload: {
-      active: navigationState.active,
-      targetVnum: navigationState.targetVnum,
-      totalSteps: navigationState.steps.length,
-      currentStep: navigationState.currentStep,
-    },
-  });
-}
-
-function stopNavigation(): void {
-  if (navigationState.abortController) {
-    navigationState.abortController.abort();
-    navigationState.abortController = null;
-  }
-  navigationState.active = false;
-  navigationState.targetVnum = null;
-  navigationState.steps = [];
-  navigationState.currentStep = 0;
-  broadcastNavigationState();
-}
-
-const DIRECTION_TO_COMMAND: Record<Direction, string> = {
-  north: "с",
-  south: "ю",
-  east: "в",
-  west: "з",
-  up: "вв",
-  down: "вн",
-};
-
-async function startNavigation(ws: BunServerWebSocket | null, targetVnum: number): Promise<void> {
-  stopNavigation();
-
-  const currentVnum = trackerState.currentRoomId;
-  if (currentVnum === null) {
-    broadcastServerEvent({
-      type: "status",
-      payload: { state: sharedSession.state, message: "Навигация: текущая комната неизвестна." },
-    });
-    return;
-  }
-
-  const snapshot = await mapStore.getSnapshot(currentVnum);
-  const path = findPath(snapshot, currentVnum, targetVnum);
-
-  if (!path || path.length === 0) {
-    broadcastServerEvent({
-      type: "status",
-      payload: { state: sharedSession.state, message: "Навигация: путь не найден." },
-    });
-    return;
-  }
-
-  const abort = new AbortController();
-  navigationState.active = true;
-  navigationState.targetVnum = targetVnum;
-  navigationState.steps = path;
-  navigationState.currentStep = 0;
-  navigationState.abortController = abort;
-  broadcastNavigationState();
-
-  for (let i = 0; i < path.length; i++) {
-    if (abort.signal.aborted) return;
-
-      const step = path[i]!;
-      navigationState.currentStep = i;
-      broadcastNavigationState();
-
-      if (!sharedSession.tcpSocket || !sharedSession.connected) {
-        stopNavigation();
-        return;
-      }
-
-      mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, DIRECTION_TO_COMMAND[step.direction], "navigation");
-
-      const arrived = await onceRoomChanged(NAVIGATION_STEP_TIMEOUT_MS);
-
-      if (abort.signal.aborted) return;
-
-      if (arrived === null) {
-        stopNavigation();
-        broadcastServerEvent({
-          type: "status",
-          payload: { state: sharedSession.state, message: "Навигация: нет ответа от сервера, остановлено." },
-        });
-        return;
-      }
-
-      if (arrived !== step.expectedVnum) {
-        stopNavigation();
-        broadcastServerEvent({
-          type: "status",
-          payload: {
-            state: sharedSession.state,
-            message: `Навигация: ожидалась комната ${step.expectedVnum}, оказались в ${arrived}. Остановлено.`,
-          },
-        });
-        return;
-      }
-    }
-
-    if (!abort.signal.aborted) {
-      navigationState.currentStep = path.length;
-      broadcastNavigationState();
-      broadcastServerEvent({
-        type: "status",
-        payload: { state: sharedSession.state, message: "Навигация: цель достигнута." },
-      });
-      navigationState.active = false;
-      navigationState.abortController = null;
-      broadcastNavigationState();
-    }
-}
-
-async function startNavigationToNearest(ws: BunServerWebSocket | null, targetVnums: number[]): Promise<void> {
-  const currentVnum = trackerState.currentRoomId;
-  if (currentVnum === null) {
-    broadcastServerEvent({ type: "status", payload: { state: sharedSession.state, message: "Навигация: текущая комната неизвестна." } });
-    return;
-  }
-  if (targetVnums.includes(currentVnum)) {
-    broadcastServerEvent({ type: "status", payload: { state: sharedSession.state, message: "Навигация: уже в целевой комнате." } });
-    return;
-  }
-  const snapshot = await mapStore.getSnapshot(currentVnum);
-  let bestVnum: number | null = null;
-  let bestLen = Infinity;
-  for (const vnum of targetVnums) {
-    const path = findPath(snapshot, currentVnum, vnum);
-    if (path !== null && path.length < bestLen) {
-      bestLen = path.length;
-      bestVnum = vnum;
-    }
-  }
-  if (bestVnum === null) {
-    broadcastServerEvent({ type: "status", payload: { state: sharedSession.state, message: "Навигация: путь не найден." } });
-    return;
-  }
-  await startNavigation(ws, bestVnum);
-}
 
 async function inspectContainer(ws: BunServerWebSocket | null, container: string): Promise<string> {
   if (!sharedSession.tcpSocket || !sharedSession.connected) {
