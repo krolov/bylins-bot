@@ -12,8 +12,6 @@ import type {
   GameItemPayload,
   FarmRuntimeStats,
   GridCell,
-  NeighborZone,
-  FarZone,
   ColumnDef,
   HotkeyEntry,
   ServerEvent,
@@ -33,6 +31,8 @@ import * as bus from "./bus.ts";
 import { createTerminal } from "./terminal.ts";
 import { renderContainerList, renderInventoryList } from "./inventory.ts";
 import { initSplitters } from "./splitters.ts";
+import { createPopups } from "./popups.ts";
+import { createNavPanel } from "./nav-panel.ts";
 
 // Modal chunks emit outbound messages via the bus to avoid importing main.ts
 // (which would force the bundler to keep them on the critical path).
@@ -85,41 +85,6 @@ const scriptStepsList = requireElement<HTMLUListElement>("#script-steps-list");
 const scriptPanelTitle = requireElement<HTMLSpanElement>("#script-panel-title");
 const scriptStatusLine = requireElement<HTMLDivElement>("#script-status-line");
 const scriptToggleBtn = requireElement<HTMLButtonElement>("#script-toggle-btn");
-const navAliasList = requireElement<HTMLUListElement>("#nav-alias-list");
-const navAliasListEmpty = requireElement<HTMLParagraphElement>("#nav-alias-list-empty");
-const navZoneList = requireElement<HTMLUListElement>("#nav-zone-list");
-const navZoneListEmpty = requireElement<HTMLParagraphElement>("#nav-zone-list-empty");
-const navFarZonesList = requireElement<HTMLUListElement>("#nav-far-zones-list");
-const navFarZonesListEmpty = requireElement<HTMLParagraphElement>("#nav-far-zones-list-empty");
-const navZoneAliasesTitle = requireElement<HTMLDivElement>("#nav-zone-aliases-title");
-const navZonesSearch = requireElement<HTMLInputElement>("#nav-zones-search");
-const navZonesSearchClear = requireElement<HTMLButtonElement>("#nav-zones-search-clear");
-const navPanel = requireElement<HTMLDivElement>("#nav-panel");
-const navNeighborZonesSection = requireElement<HTMLDivElement>("#nav-neighbor-zones");
-const navFarZonesSection = requireElement<HTMLDivElement>("#nav-far-zones");
-const navStatus = requireElement<HTMLDivElement>("#nav-status");
-const navCurrentRoom = requireElement<HTMLDivElement>("#nav-current-room");
-const aliasPopup = requireElement<HTMLDivElement>("#alias-popup");
-const aliasPopupTitle = requireElement<HTMLSpanElement>("#alias-popup-title");
-const aliasPopupInput = requireElement<HTMLInputElement>("#alias-popup-input");
-const aliasPopupSave = requireElement<HTMLButtonElement>("#alias-popup-save");
-const aliasPopupDelete = requireElement<HTMLButtonElement>("#alias-popup-delete");
-const aliasPopupClose = requireElement<HTMLButtonElement>("#alias-popup-close");
-
-const mapContextMenu = requireElement<HTMLDivElement>("#map-context-menu");
-const mapContextGo = requireElement<HTMLButtonElement>("#map-context-go");
-const mapContextAlias = requireElement<HTMLButtonElement>("#map-context-alias");
-const mapContextAliasDelete = requireElement<HTMLButtonElement>("#map-context-alias-delete");
-const mapContextAutoCmd = requireElement<HTMLButtonElement>("#map-context-auto-cmd");
-const mapContextAutoCmdDelete = requireElement<HTMLButtonElement>("#map-context-auto-cmd-delete");
-
-const autoCmdPopup = requireElement<HTMLDivElement>("#auto-cmd-popup");
-const autoCmdPopupTitle = requireElement<HTMLSpanElement>("#auto-cmd-popup-title");
-const autoCmdPopupInput = requireElement<HTMLTextAreaElement>("#auto-cmd-popup-input");
-const autoCmdPopupSave = requireElement<HTMLButtonElement>("#auto-cmd-popup-save");
-const autoCmdPopupDelete = requireElement<HTMLButtonElement>("#auto-cmd-popup-delete");
-const autoCmdPopupClose = requireElement<HTMLButtonElement>("#auto-cmd-popup-close");
-
 const survivalSettingsButton = requireElement<HTMLButtonElement>("#survival-settings-button");
 
 const buyFoodBtn = requireElement<HTMLButtonElement>("#buy-food-btn");
@@ -198,367 +163,18 @@ function switchContainerTab(tab: "inventory" | "nav" | "script"): void {
   containerPanelScript.classList.toggle("container-panels__panel--hidden", tab !== "script");
 }
 
-function openAliasPopup(vnum: number, existingAlias: string | undefined, roomName: string): void {
-  aliasPopupVnum = vnum;
-  aliasPopupTitle.textContent = `Алиас: ${roomName} (${vnum})`;
-  aliasPopupInput.value = existingAlias ?? "";
-  aliasPopupDelete.classList.toggle("alias-popup__delete--hidden", !existingAlias);
-  aliasPopup.classList.remove("alias-popup--hidden");
-  aliasPopupInput.focus();
-}
+const { openAliasPopup, openMapContextMenu } = createPopups({
+  getAliases: () => currentAliases,
+  getRoomAutoCommands: () => currentRoomAutoCommands,
+  getNodeName: (vnum) => latestMapSnapshot.nodes.find((n) => n.vnum === vnum)?.name,
+});
 
-function closeAliasPopup(): void {
-  aliasPopupVnum = null;
-  aliasPopup.classList.add("alias-popup--hidden");
-}
-
-function openAutoCmdPopup(vnum: number, existingCommand: string | undefined, roomName: string): void {
-  autoCmdPopupVnum = vnum;
-  autoCmdPopupTitle.textContent = `Авто-команда: ${roomName} (${vnum})`;
-  autoCmdPopupInput.value = existingCommand ?? "";
-  autoCmdPopupDelete.classList.toggle("alias-popup__delete--hidden", !existingCommand);
-  autoCmdPopup.classList.remove("alias-popup--hidden");
-  autoCmdPopupInput.focus();
-}
-
-function closeAutoCmdPopup(): void {
-  autoCmdPopupVnum = null;
-  autoCmdPopup.classList.add("alias-popup--hidden");
-}
-
-function openMapContextMenu(vnum: number, x: number, y: number): void {
-  mapContextMenuVnum = vnum;
-  const hasAlias = currentAliases.some((a) => a.vnum === vnum);
-  mapContextAliasDelete.classList.toggle("map-context-menu__item--hidden", !hasAlias);
-  const hasAutoCmd = currentRoomAutoCommands.has(vnum);
-  mapContextAutoCmdDelete.classList.toggle("map-context-menu__item--hidden", !hasAutoCmd);
-  mapContextAutoCmd.classList.toggle("map-context-menu__item--active", hasAutoCmd);
-  mapContextAutoCmd.textContent = hasAutoCmd
-    ? `Авто-команда: ${currentRoomAutoCommands.get(vnum)}…`
-    : "Авто-команда…";
-  mapContextMenu.style.left = `${x}px`;
-  mapContextMenu.style.top = `${y}px`;
-  mapContextMenu.classList.remove("map-context-menu--hidden");
-  mapContextGo.focus();
-}
-
-function closeMapContextMenu(): void {
-  mapContextMenuVnum = null;
-  mapContextMenu.classList.add("map-context-menu--hidden");
-}
-
-function renderNavPanel(): void {
-  const currentVnum = latestMapSnapshot.currentVnum;
-  const currentZone = currentVnum !== null ? getZoneId(currentVnum) : null;
-
-  if (currentVnum !== null) {
-    const currentNode = latestMapSnapshot.nodes.find(n => n.vnum === currentVnum);
-    const roomName = currentNode?.name ?? String(currentVnum);
-    navCurrentRoom.textContent = `${roomName} (${currentVnum})`;
-    navCurrentRoom.classList.remove("nav-current-room--hidden");
-  } else {
-    navCurrentRoom.classList.add("nav-current-room--hidden");
-  }
-
-  navZoneAliasesTitle.textContent = currentZone !== null
-    ? `Текущая зона ${zoneNames.get(currentZone) ? `— ${zoneNames.get(currentZone)}` : `(${currentZone}xx)`}`
-    : "Текущая зона";
-
-  const zoneAliases = currentZone !== null
-    ? currentAliases.filter(a => getZoneId(a.vnum) === currentZone)
-    : [];
-
-  navAliasList.innerHTML = "";
-  navAliasListEmpty.classList.toggle("alias-list-empty--hidden", zoneAliases.length > 0);
-
-  for (const entry of zoneAliases) {
-    const li = document.createElement("li");
-    li.className = "alias-list__item";
-
-    const label = document.createElement("span");
-    label.className = "alias-list__label";
-    label.textContent = entry.alias;
-
-    const vnumSpan = document.createElement("span");
-    vnumSpan.className = "alias-list__vnum";
-    vnumSpan.textContent = String(entry.vnum);
-
-    const goBtn = document.createElement("button");
-    goBtn.type = "button";
-    goBtn.className = "button-small alias-list__go";
-    goBtn.textContent = "Идти";
-    goBtn.addEventListener("click", () => {
-      const aliasName = entry.alias.toLowerCase();
-      const allVnums = currentAliases
-        .filter(a => a.alias.toLowerCase() === aliasName)
-        .map(a => a.vnum);
-      sendClientEvent({ type: "navigate_to", payload: { vnums: allVnums } });
-    });
-
-    li.appendChild(label);
-    li.appendChild(vnumSpan);
-    li.appendChild(goBtn);
-    navAliasList.appendChild(li);
-  }
-
-  const neighborZones = buildNeighborZones(currentZone);
-  const neighborZoneIdSet = new Set(neighborZones.map(z => z.zoneId));
-  const farZones = buildFarZones(currentZone, neighborZoneIdSet);
-
-  allNeighborZones = neighborZones;
-  allFarZones = farZones;
-  allVisitedZones = buildAllVisitedZones(currentZone, neighborZoneIdSet);
-  farZonesPage = 0;
-
-  applyNavZonesFilter();
-}
-
-function buildNavZoneItem(zone: NeighborZone | FarZone): HTMLLIElement {
-  const li = document.createElement("li");
-  li.className = "nav-zone-list__item";
-
-  const nameSpan = document.createElement("span");
-  nameSpan.className = "nav-zone-list__name";
-  nameSpan.textContent = zoneNames.get(zone.zoneId) ?? `Зона ${zone.zoneId}xx`;
-
-  const goBtn = document.createElement("button");
-  goBtn.type = "button";
-  goBtn.className = "button-small nav-zone-list__go";
-  goBtn.textContent = "Идти";
-  goBtn.addEventListener("click", () => {
-    sendClientEvent({ type: "navigate_to", payload: { vnums: zone.entryVnums } });
-  });
-
-  li.appendChild(nameSpan);
-  li.appendChild(goBtn);
-  return li;
-}
-
-function applyNavZonesFilter(): void {
-  const query = navZonesSearchQuery;
-
-  const filteredNeighbor = query
-    ? allNeighborZones.filter(z => {
-        const name = zoneNames.get(z.zoneId) ?? `Зона ${z.zoneId}xx`;
-        return name.toLowerCase().includes(query);
-      })
-    : allNeighborZones;
-
-  const sourceForFar = query ? allVisitedZones : allFarZones;
-  const filteredFar = query
-    ? sourceForFar.filter(z => {
-        const name = zoneNames.get(z.zoneId) ?? `Зона ${z.zoneId}xx`;
-        return name.toLowerCase().includes(query);
-      })
-    : sourceForFar;
-
-  const neighborSectionTitle = navNeighborZonesSection.querySelector<HTMLElement>(".nav-section__title");
-
-  if (query && filteredNeighbor.length === 0) {
-    navNeighborZonesSection.style.display = "none";
-  } else {
-    navNeighborZonesSection.style.display = "";
-    if (neighborSectionTitle) neighborSectionTitle.style.display = "";
-    navZoneList.innerHTML = "";
-    navZoneListEmpty.classList.toggle("alias-list-empty--hidden", filteredNeighbor.length > 0);
-    for (const zone of filteredNeighbor) {
-      navZoneList.appendChild(buildNavZoneItem(zone));
-    }
-  }
-
-  const farSectionTitle = navFarZonesSection.querySelector<HTMLElement>(".nav-section__title");
-
-  if (query && filteredFar.length === 0) {
-    navFarZonesSection.style.display = "none";
-  } else {
-    navFarZonesSection.style.display = "";
-    if (farSectionTitle) {
-      farSectionTitle.textContent = query ? "Все зоны" : "Дальние зоны";
-    }
-    navFarZonesList.innerHTML = "";
-    navFarZonesListEmpty.classList.toggle("alias-list-empty--hidden", filteredFar.length > 0);
-
-    farZonesPage = 0;
-    const firstPage = filteredFar.slice(0, FAR_ZONES_PAGE_SIZE);
-    for (const zone of firstPage) {
-      navFarZonesList.appendChild(buildNavZoneItem(zone));
-    }
-
-    allFarZonesFiltered = filteredFar;
-  }
-}
-
-let allFarZonesFiltered: FarZone[] = [];
-
-function loadMoreFarZones(): void {
-  farZonesPage += 1;
-  const start = farZonesPage * FAR_ZONES_PAGE_SIZE;
-  const end = start + FAR_ZONES_PAGE_SIZE;
-  const nextItems = allFarZonesFiltered.slice(start, end);
-  for (const zone of nextItems) {
-    navFarZonesList.appendChild(buildNavZoneItem(zone));
-  }
-}
-
-function buildNeighborZones(currentZone: number | null): NeighborZone[] {
-  if (currentZone === null || latestFullSnapshot.nodes.length === 0) return [];
-
-  const neighborZoneIds = new Set<number>();
-  for (const edge of latestFullSnapshot.edges) {
-    const fromZone = getZoneId(edge.fromVnum);
-    const toZone = getZoneId(edge.toVnum);
-    if (fromZone === currentZone && toZone !== currentZone) {
-      neighborZoneIds.add(toZone);
-    }
-    if (toZone === currentZone && fromZone !== currentZone) {
-      neighborZoneIds.add(fromZone);
-    }
-  }
-
-  const visitedVnums = new Set(
-    latestFullSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
-  );
-
-  const result: NeighborZone[] = [];
-  for (const zoneId of neighborZoneIds) {
-    const zoneVnums = latestFullSnapshot.nodes
-      .filter(n => getZoneId(n.vnum) === zoneId && visitedVnums.has(n.vnum))
-      .map(n => n.vnum);
-    if (zoneVnums.length > 0) {
-      result.push({ zoneId, entryVnums: zoneVnums });
-    }
-  }
-
-  result.sort((a, b) => {
-    const nameA = zoneNames.get(a.zoneId) ?? "";
-    const nameB = zoneNames.get(b.zoneId) ?? "";
-    if (nameA && !nameB) return -1;
-    if (!nameA && nameB) return 1;
-    return nameA.localeCompare(nameB) || a.zoneId - b.zoneId;
-  });
-
-  return result;
-}
-
-function buildFarZones(currentZone: number | null, neighborZoneIds: Set<number>): FarZone[] {
-  if (currentZone === null || latestFullSnapshot.nodes.length === 0) return [];
-
-  const zoneAdj = new Map<number, Set<number>>();
-  for (const edge of latestFullSnapshot.edges) {
-    const fromZone = getZoneId(edge.fromVnum);
-    const toZone = getZoneId(edge.toVnum);
-    if (fromZone === toZone) continue;
-    if (!zoneAdj.has(fromZone)) zoneAdj.set(fromZone, new Set());
-    if (!zoneAdj.has(toZone)) zoneAdj.set(toZone, new Set());
-    zoneAdj.get(fromZone)!.add(toZone);
-    zoneAdj.get(toZone)!.add(fromZone);
-  }
-
-  const visited = new Set<number>([currentZone, ...neighborZoneIds]);
-  const queue: Array<{ zoneId: number; hops: number }> = [];
-
-  for (const nz of neighborZoneIds) {
-    queue.push({ zoneId: nz, hops: 1 });
-  }
-
-  const farZoneHops = new Map<number, number>();
-
-  let head = 0;
-  while (head < queue.length) {
-    const { zoneId, hops } = queue[head++]!;
-    if (hops >= 4) continue;
-    const neighbors = zoneAdj.get(zoneId);
-    if (!neighbors) continue;
-    for (const nz of neighbors) {
-      if (visited.has(nz)) continue;
-      visited.add(nz);
-      farZoneHops.set(nz, hops + 1);
-      queue.push({ zoneId: nz, hops: hops + 1 });
-    }
-  }
-
-  const visitedVnums = new Set(
-    latestFullSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
-  );
-
-  const result: FarZone[] = [];
-  for (const [zoneId, hops] of farZoneHops) {
-    const zoneVnums = latestFullSnapshot.nodes
-      .filter(n => getZoneId(n.vnum) === zoneId && visitedVnums.has(n.vnum))
-      .map(n => n.vnum);
-    if (zoneVnums.length > 0) {
-      result.push({ zoneId, hops, entryVnums: zoneVnums });
-    }
-  }
-
-  result.sort((a, b) => {
-    if (a.hops !== b.hops) return a.hops - b.hops;
-    const nameA = zoneNames.get(a.zoneId) ?? "";
-    const nameB = zoneNames.get(b.zoneId) ?? "";
-    if (nameA && !nameB) return -1;
-    if (!nameA && nameB) return 1;
-    return nameA.localeCompare(nameB) || a.zoneId - b.zoneId;
-  });
-
-  return result;
-}
-
-function buildAllVisitedZones(currentZone: number | null, neighborZoneIds: Set<number>): FarZone[] {
-  if (latestFullSnapshot.nodes.length === 0) return [];
-
-  const visitedVnums = new Set(
-    latestFullSnapshot.nodes.filter(n => n.visited).map(n => n.vnum)
-  );
-
-  const excludedZones = new Set<number>();
-  if (currentZone !== null) excludedZones.add(currentZone);
-  for (const nz of neighborZoneIds) excludedZones.add(nz);
-
-  const zoneVnumsMap = new Map<number, number[]>();
-  for (const node of latestFullSnapshot.nodes) {
-    if (!visitedVnums.has(node.vnum)) continue;
-    const zoneId = getZoneId(node.vnum);
-    if (excludedZones.has(zoneId)) continue;
-    if (!zoneVnumsMap.has(zoneId)) zoneVnumsMap.set(zoneId, []);
-    zoneVnumsMap.get(zoneId)!.push(node.vnum);
-  }
-
-  const result: FarZone[] = [];
-  for (const [zoneId, vnums] of zoneVnumsMap) {
-    result.push({ zoneId, hops: 0, entryVnums: vnums });
-  }
-
-  result.sort((a, b) => {
-    const nameA = zoneNames.get(a.zoneId) ?? "";
-    const nameB = zoneNames.get(b.zoneId) ?? "";
-    if (nameA && !nameB) return -1;
-    if (!nameA && nameB) return 1;
-    return nameA.localeCompare(nameB) || a.zoneId - b.zoneId;
-  });
-
-  return result;
-}
-
-function renderNavStatus(state: NavigationStatePayload): void {
-  navStatus.innerHTML = "";
-  if (!state.active) {
-    navStatus.classList.add("nav-status--hidden");
-    return;
-  }
-
-  navStatus.classList.remove("nav-status--hidden");
-  const label = document.createElement("span");
-  label.textContent = `Навигация: шаг ${state.currentStep + 1} / ${state.totalSteps}`;
-  const cancelBtn = document.createElement("button");
-  cancelBtn.type = "button";
-  cancelBtn.className = "button-secondary button-small";
-  cancelBtn.textContent = "Отмена";
-  cancelBtn.addEventListener("click", () => {
-    sendClientEvent({ type: "navigate_stop" });
-  });
-  navStatus.appendChild(label);
-  navStatus.appendChild(cancelBtn);
-}
+const { render: renderNavPanel, renderStatus: renderNavStatus } = createNavPanel({
+  getSnapshot: () => latestMapSnapshot,
+  getFullSnapshot: () => latestFullSnapshot,
+  getZoneNames: () => zoneNames,
+  getAliases: () => currentAliases,
+});
 
 function updateStatsBar(hp: number, hpMax: number, energy: number, energyMax: number): void {
   const hpPct = hpMax > 0 ? Math.min(100, Math.round((hp / hpMax) * 100)) : 0;
@@ -611,13 +227,6 @@ let farm2PendingActivation = false;
 let zoneScriptState: ServerEvent & { type: "zone_script_state" } | null = null;
 let trackerCurrentVnum: number | null = null;
 
-let navZonesSearchQuery = "";
-let farZonesPage = 0;
-const FAR_ZONES_PAGE_SIZE = 30;
-let allFarZones: FarZone[] = [];
-let allNeighborZones: NeighborZone[] = [];
-let allVisitedZones: FarZone[] = [];
-
 
 function getScriptForVnum(vnum: number): { zoneId: number; name: string; stepLabels: string[] } | undefined {
   const hundred = Math.floor(vnum / 100);
@@ -633,9 +242,6 @@ let currentStats: FarmRuntimeStats = {
 let currentAliases: AliasPayload[] = [];
 let currentSurvivalStatus: { foodEmpty: boolean; flaskEmpty: boolean } = { foodEmpty: false, flaskEmpty: false };
 let currentRoomAutoCommands: Map<number, string> = new Map();
-let aliasPopupVnum: number | null = null;
-let autoCmdPopupVnum: number | null = null;
-let mapContextMenuVnum: number | null = null;
 let currentNavState: NavigationStatePayload = {
   active: false,
   targetVnum: null,
@@ -2358,16 +1964,6 @@ vorozheButton.addEventListener("click", () => {
   void import("./modals/vorozhe.ts").then((m) => m.openVorozheModal());
 });
 
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !mapContextMenu.classList.contains("map-context-menu--hidden")) {
-    closeMapContextMenu();
-  }
-  if (e.key === "Escape" && !autoCmdPopup.classList.contains("alias-popup--hidden")) {
-    closeAutoCmdPopup();
-  }
-});
-
 mapTabMap.addEventListener("click", () => switchMapTab("map"));
 
 containerTabInventory.addEventListener("click", () => switchContainerTab("inventory"));
@@ -2381,99 +1977,6 @@ scriptToggleBtn.addEventListener("click", () => {
     const script = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
     if (script !== undefined) {
       sendClientEvent({ type: "zone_script_toggle", payload: { enabled: true, zoneId: script.zoneId } });
-    }
-  }
-});
-
-
-
-aliasPopupSave.addEventListener("click", () => {
-  const alias = aliasPopupInput.value.trim();
-  if (aliasPopupVnum !== null && alias) {
-    sendClientEvent({ type: "alias_set", payload: { vnum: aliasPopupVnum, alias } });
-    closeAliasPopup();
-  }
-});
-
-aliasPopupDelete.addEventListener("click", () => {
-  if (aliasPopupVnum !== null) {
-    sendClientEvent({ type: "alias_delete", payload: { vnum: aliasPopupVnum } });
-    closeAliasPopup();
-  }
-});
-
-aliasPopupClose.addEventListener("click", closeAliasPopup);
-
-aliasPopupInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") aliasPopupSave.click();
-  if (e.key === "Escape") closeAliasPopup();
-});
-
-mapContextGo.addEventListener("click", () => {
-  if (mapContextMenuVnum !== null) {
-    sendClientEvent({ type: "navigate_to", payload: { vnums: [mapContextMenuVnum] } });
-  }
-  closeMapContextMenu();
-});
-
-mapContextAlias.addEventListener("click", () => {
-  if (mapContextMenuVnum !== null) {
-    const vnum = mapContextMenuVnum;
-    const node = latestMapSnapshot.nodes.find((n) => n.vnum === vnum);
-    openAliasPopup(vnum, currentAliases.find((a) => a.vnum === vnum)?.alias, node?.name ?? String(vnum));
-  }
-  closeMapContextMenu();
-});
-
-mapContextAliasDelete.addEventListener("click", () => {
-  if (mapContextMenuVnum !== null) {
-    sendClientEvent({ type: "alias_delete", payload: { vnum: mapContextMenuVnum } });
-  }
-  closeMapContextMenu();
-});
-
-mapContextAutoCmd.addEventListener("click", () => {
-  if (mapContextMenuVnum !== null) {
-    const vnum = mapContextMenuVnum;
-    const node = latestMapSnapshot.nodes.find((n) => n.vnum === vnum);
-    openAutoCmdPopup(vnum, currentRoomAutoCommands.get(vnum), node?.name ?? String(vnum));
-  }
-  closeMapContextMenu();
-});
-
-mapContextAutoCmdDelete.addEventListener("click", () => {
-  if (mapContextMenuVnum !== null) {
-    sendClientEvent({ type: "room_auto_command_delete", payload: { vnum: mapContextMenuVnum } });
-  }
-  closeMapContextMenu();
-});
-
-autoCmdPopupSave.addEventListener("click", () => {
-  const command = autoCmdPopupInput.value.trim();
-  if (autoCmdPopupVnum !== null && command) {
-    sendClientEvent({ type: "room_auto_command_set", payload: { vnum: autoCmdPopupVnum, command } });
-    closeAutoCmdPopup();
-  }
-});
-
-autoCmdPopupDelete.addEventListener("click", () => {
-  if (autoCmdPopupVnum !== null) {
-    sendClientEvent({ type: "room_auto_command_delete", payload: { vnum: autoCmdPopupVnum } });
-    closeAutoCmdPopup();
-  }
-});
-
-autoCmdPopupClose.addEventListener("click", closeAutoCmdPopup);
-
-autoCmdPopupInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) autoCmdPopupSave.click();
-  if (e.key === "Escape") closeAutoCmdPopup();
-});
-
-document.addEventListener("click", (e) => {
-  if (!mapContextMenu.classList.contains("map-context-menu--hidden")) {
-    if (!mapContextMenu.contains(e.target as Node)) {
-      closeMapContextMenu();
     }
   }
 });
@@ -2563,29 +2066,6 @@ bus.on("hotkeys_save", (entries) => {
 
 hotkeysButton.addEventListener("click", () => {
   void import("./modals/hotkeys.ts").then((m) => m.openHotkeysModal());
-});
-
-
-navPanel.addEventListener("scroll", () => {
-  if (navPanel.scrollTop + navPanel.clientHeight >= navPanel.scrollHeight - 100) {
-    const totalRendered = (farZonesPage + 1) * FAR_ZONES_PAGE_SIZE;
-    if (totalRendered < allFarZonesFiltered.length) {
-      loadMoreFarZones();
-    }
-  }
-});
-
-navZonesSearch.addEventListener("input", () => {
-  navZonesSearchQuery = navZonesSearch.value.trim().toLowerCase();
-  navZonesSearchClear.classList.toggle("nav-zones-search__clear--hidden", navZonesSearchQuery === "");
-  applyNavZonesFilter();
-});
-
-navZonesSearchClear.addEventListener("click", () => {
-  navZonesSearch.value = "";
-  navZonesSearchQuery = "";
-  navZonesSearchClear.classList.add("nav-zones-search__clear--hidden");
-  applyNavZonesFilter();
 });
 
 renderFarmButton();
