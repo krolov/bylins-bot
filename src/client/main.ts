@@ -3,9 +3,7 @@ import type {
   ConnectDefaults,
   ProfileInfo,
   ProfilesResponse,
-  AnsiColorName,
   TerminalStyle,
-  AnsiSegment,
   MapNodePayload,
   MapEdgePayload,
   MapSnapshotPayload,
@@ -32,6 +30,9 @@ import {
   DEFAULT_HOTKEYS,
 } from "./constants.ts";
 import * as bus from "./bus.ts";
+import { createTerminal } from "./terminal.ts";
+import { renderContainerList, renderInventoryList } from "./inventory.ts";
+import { initSplitters } from "./splitters.ts";
 
 // Modal chunks emit outbound messages via the bus to avoid importing main.ts
 // (which would force the bundler to keep them on the critical path).
@@ -640,12 +641,6 @@ let currentNavState: NavigationStatePayload = {
   targetVnum: null,
   totalSteps: 0,
   currentStep: 0,
-};
-
-const ESCAPE = "\u001b";
-const ansiState = {
-  style: createDefaultTerminalStyle(),
-  pendingEscape: "",
 };
 
 // ── Grid map renderer ────────────────────────────────────────────────────────
@@ -1551,13 +1546,6 @@ mapCanvasElement.addEventListener("contextmenu", (e) => {
   openMapContextMenu(Number(vnumAttr), e.clientX, e.clientY);
 });
 
-function createDefaultTerminalStyle(): TerminalStyle {
-  return {
-    foreground: "default",
-    bold: false,
-  };
-}
-
 function updateMap(snapshot: MapSnapshotPayload, fullReset: boolean): void {
   latestMapSnapshot = snapshot;
   if (fullReset) {
@@ -1627,253 +1615,28 @@ function saveZoneNames(names: Map<number, string>): void {
 
 let zoneNames: Map<number, string> = loadZoneNames();
 
-function cloneStyle(style: TerminalStyle): TerminalStyle {
-  return {
-    foreground: style.foreground,
-    bold: style.bold,
-  };
-}
-
-function resetStyle(style: TerminalStyle): void {
-  style.foreground = "default";
-  style.bold = false;
-}
-
-function mapAnsiCodeToColor(code: number): AnsiColorName | null {
-  switch (code) {
-    case 30:
-      return "black";
-    case 31:
-      return "red";
-    case 32:
-      return "green";
-    case 33:
-      return "yellow";
-    case 34:
-      return "blue";
-    case 35:
-      return "magenta";
-    case 36:
-      return "cyan";
-    case 37:
-      return "white";
-    case 90:
-      return "bright-black";
-    case 91:
-      return "bright-red";
-    case 92:
-      return "bright-green";
-    case 93:
-      return "bright-yellow";
-    case 94:
-      return "bright-blue";
-    case 95:
-      return "bright-magenta";
-    case 96:
-      return "bright-cyan";
-    case 97:
-      return "bright-white";
-    default:
-      return null;
-  }
-}
-
-function applyAnsiCodes(style: TerminalStyle, codes: number[]): void {
-  if (codes.length === 0) {
-    resetStyle(style);
-    return;
-  }
-
-  for (const code of codes) {
-    if (code === 0) {
-      resetStyle(style);
-      continue;
-    }
-
-    if (code === 1) {
-      style.bold = true;
-      continue;
-    }
-
-    if (code === 22) {
-      style.bold = false;
-      continue;
-    }
-
-    if (code === 39) {
-      style.foreground = "default";
-      continue;
-    }
-
-    const color = mapAnsiCodeToColor(code);
-
-    if (color) {
-      style.foreground = color;
-    }
-  }
-}
-
-function classNamesForStyle(style: TerminalStyle): string[] {
-  const classes = ["terminal-segment", `terminal-fg-${style.foreground}`];
-
-  if (style.bold) {
-    classes.push("terminal-bold");
-  }
-
-  return classes;
-}
-
-const MAX_OUTPUT_SEGMENTS = 2000;
-const OUTPUT_TRIM_COUNT = 200;
-
-function isScrolledToBottom(): boolean {
-  const threshold = 50;
-  return outputElement.scrollHeight - outputElement.scrollTop - outputElement.clientHeight <= threshold;
-}
-
-function appendStyledText(text: string, style: TerminalStyle): void {
-  if (text.length === 0) {
-    return;
-  }
-
-  const span = document.createElement("span");
-  span.className = classNamesForStyle(style).join(" ");
-  span.textContent = text;
-  outputElement.append(span);
-}
-
-function parseAnsiSegments(chunk: string): AnsiSegment[] {
-  const segments: AnsiSegment[] = [];
-  let text = `${ansiState.pendingEscape}${chunk}`;
-  ansiState.pendingEscape = "";
-  let cursor = 0;
-  let currentText = "";
-
-  const pushCurrentText = () => {
-    if (currentText.length === 0) {
-      return;
-    }
-
-    segments.push({
-      text: currentText,
-      style: cloneStyle(ansiState.style),
-    });
-    currentText = "";
-  };
-
-  while (cursor < text.length) {
-    if (text[cursor] !== ESCAPE) {
-      currentText += text[cursor];
-      cursor += 1;
-      continue;
-    }
-
-    const sequenceEnd = text.indexOf("m", cursor);
-
-    if (sequenceEnd === -1) {
-      ansiState.pendingEscape = text.slice(cursor);
-      break;
-    }
-
-    pushCurrentText();
-
-    const sequence = text.slice(cursor, sequenceEnd + 1);
-    const sgrMatch = /^\u001b\[([0-9;]*)m$/.exec(sequence);
-
-    if (!sgrMatch) {
-      currentText += sequence;
-      cursor = sequenceEnd + 1;
-      continue;
-    }
-
-    const codes = sgrMatch[1]
-      .split(";")
-      .filter((part) => part.length > 0)
-      .map((part) => Number(part))
-      .filter((value) => Number.isInteger(value));
-
-    applyAnsiCodes(ansiState.style, codes);
-    cursor = sequenceEnd + 1;
-  }
-
-  pushCurrentText();
-  return segments;
-}
-
-const MAX_CHAT_LINES = 200;
-
-function appendChatMessage(text: string, timestamp: number): void {
-  const isChatScrolledToBottom = chatOutputElement.scrollHeight - chatOutputElement.scrollTop - chatOutputElement.clientHeight <= 30;
-
-  const line = document.createElement("span");
-  line.className = "chat-line";
-
-  const timeSpan = document.createElement("span");
-  timeSpan.className = "chat-line__time";
-  const d = new Date(timestamp);
-  timeSpan.textContent = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  line.appendChild(timeSpan);
-
-  const textSpan = document.createElement("span");
-  textSpan.textContent = text;
-  line.appendChild(textSpan);
-
-  chatOutputElement.appendChild(line);
-
-  const children = chatOutputElement.children;
-  while (children.length > MAX_CHAT_LINES) {
-    children[0]?.remove();
-  }
-
-  if (isChatScrolledToBottom) {
-    chatOutputElement.scrollTop = chatOutputElement.scrollHeight;
-  }
-}
-
-function appendOutput(text: string): void {
-  const shouldAutoScroll = isScrolledToBottom();
-  const segments = parseAnsiSegments(text);
-
-  // Parse last enemy name from combat prompt: e.g. "... [Ринли:Невредима] [крестьянин:Ранен] > "
-  // There may be multiple [...:...] blocks; take the last one as the current target.
-  // Strip ANSI escape codes first — raw text may contain color sequences inside [...] blocks.
-  const cleanText = text.replace(/\x1b\[[0-9;]*m/g, "");
-  const combatPromptMatches = [...cleanText.matchAll(/\[([^\]:]+):[А-Яа-яЁё. ]+\]/g)];
-  if (combatPromptMatches.length > 0) {
-    const last = combatPromptMatches[combatPromptMatches.length - 1];
-    if (last[1]) {
-      const words = last[1].trim().split(/\s+/);
-      lastEnemy = words.map((w) => w.slice(0, 4)).join(".");
-    }
-  }
-
-  for (const segment of segments) {
-    appendStyledText(segment.text, segment.style);
-  }
-
-  const children = outputElement.children;
-  if (children.length > MAX_OUTPUT_SEGMENTS) {
-    const scrollBefore = outputElement.scrollTop;
-    const heightBefore = outputElement.scrollHeight;
-
-    const toRemove = Math.min(OUTPUT_TRIM_COUNT, children.length - MAX_OUTPUT_SEGMENTS);
-    for (let i = 0; i < toRemove; i++) {
-      children[0]?.remove();
-    }
-
-    if (!shouldAutoScroll) {
-      outputElement.scrollTop = scrollBefore - (heightBefore - outputElement.scrollHeight);
-    }
-  }
-
-  if (shouldAutoScroll) {
-    outputElement.scrollTop = outputElement.scrollHeight;
-  }
-}
-
-function appendSystemLine(text: string): void {
-  appendOutput(`\n[system] ${text}\n`);
-}
+// Terminal instance (ANSI parser + output/chat renderer). `onRawText` receives
+// every chunk passed to `appendOutput` so the hotkey combat-target extraction
+// below can update `lastEnemy` for `$target` substitution.
+const { appendOutput, appendSystemLine, appendChatMessage, appendStyledText, resetAnsiState } =
+  createTerminal({
+    outputElement,
+    chatOutputElement,
+    onRawText: (text: string) => {
+      // Parse last enemy name from combat prompt: e.g. "... [Ринли:Невредима] [крестьянин:Ранен] > "
+      // There may be multiple [...:...] blocks; take the last one as the current target.
+      // Strip ANSI escape codes first — raw text may contain color sequences inside [...] blocks.
+      const cleanText = text.replace(/\x1b\[[0-9;]*m/g, "");
+      const combatPromptMatches = [...cleanText.matchAll(/\[([^\]:]+):[А-Яа-яЁё. ]+\]/g)];
+      if (combatPromptMatches.length > 0) {
+        const last = combatPromptMatches[combatPromptMatches.length - 1];
+        if (last[1]) {
+          const words = last[1].trim().split(/\s+/);
+          lastEnemy = words.map((w) => w.slice(0, 4)).join(".");
+        }
+      }
+    },
+  });
 
 function updateConnectButton(state: "idle" | "connecting" | "connected" | "disconnected" | "error"): void {
   const isActive = state === "connected" || state === "connecting";
@@ -2398,8 +2161,7 @@ commandForm.addEventListener("submit", (event) => {
 
 clearOutputButton.addEventListener("click", () => {
   outputElement.replaceChildren();
-  ansiState.pendingEscape = "";
-  ansiState.style = createDefaultTerminalStyle();
+  resetAnsiState();
 });
 
 chatClearButton.addEventListener("click", () => {
@@ -2595,230 +2357,6 @@ compareButton.addEventListener("click", () => {
 vorozheButton.addEventListener("click", () => {
   void import("./modals/vorozhe.ts").then((m) => m.openVorozheModal());
 });
-
-
-// ─── Container / Inventory lists ──────────────────────────────────────────────
-
-function renderItemRow(
-  item: { name: string; count: number },
-  sellCommand: ((kw: string, count: number) => string) | null,
-  dropCommand: ((kw: string, count: number) => string) | null,
-): HTMLTableRowElement {
-  const keyword = item.name.split(/\s+/)[0] ?? item.name;
-  const tr = document.createElement("tr");
-
-  const tdSell = document.createElement("td");
-  tdSell.className = "container-panel__sell-cell";
-  if (sellCommand !== null) {
-    const sellBtn = document.createElement("button");
-    sellBtn.type = "button";
-    sellBtn.className = "container-panel__sell-btn";
-    sellBtn.textContent = "П";
-    sellBtn.title = "Продать";
-    sellBtn.addEventListener("click", () => {
-      const cmd = sellCommand(keyword, item.count);
-      for (const part of cmd.split(";;").map((s) => s.trim()).filter(Boolean)) {
-        sendClientEvent({ type: "send", payload: { command: part } });
-      }
-    });
-    tdSell.appendChild(sellBtn);
-  }
-
-  const tdDrop = document.createElement("td");
-  tdDrop.className = "container-panel__sell-cell";
-  if (dropCommand !== null) {
-    const dropBtn = document.createElement("button");
-    dropBtn.type = "button";
-    dropBtn.className = "container-panel__sell-btn";
-    dropBtn.textContent = "В";
-    dropBtn.title = "Выбросить";
-    dropBtn.addEventListener("click", () => {
-      sendClientEvent({ type: "send", payload: { command: dropCommand(keyword, item.count) } });
-    });
-    tdDrop.appendChild(dropBtn);
-  }
-
-  const tdCount = document.createElement("td");
-  tdCount.className = "container-panel__count";
-  tdCount.textContent = item.count > 1 ? `×${item.count}` : "";
-
-  const tdName = document.createElement("td");
-  tdName.className = "container-panel__name";
-  tdName.textContent = item.name;
-
-  tr.appendChild(tdSell);
-  tr.appendChild(tdDrop);
-  tr.appendChild(tdCount);
-  tr.appendChild(tdName);
-  return tr;
-}
-
-function sortItems<T extends { name: string; count: number }>(items: T[]): T[] {
-  return [...items].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "ru"));
-}
-
-function renderBazaarSellRow(
-  item: { name: string; count: number },
-  takeFrom: string,
-  dropCommand: ((kw: string, count: number) => string) | null,
-): HTMLTableRowElement {
-  const kw = item.name.split(/\s+/)[0] ?? item.name;
-  const tr = document.createElement("tr");
-  tr.dataset["itemName"] = item.name;
-
-  const tdSell = document.createElement("td");
-  tdSell.className = "container-panel__sell-cell";
-  const sellBtn = document.createElement("button");
-  sellBtn.type = "button";
-  sellBtn.className = "container-panel__sell-btn";
-  sellBtn.textContent = "П";
-  sellBtn.title = "Продать";
-  sellBtn.dataset["takeCmd"] = `взя ${kw} ${takeFrom}`;
-  sellBtn.dataset["sellPrice"] = "";
-  sellBtn.addEventListener("click", () => {
-    const price = sellBtn.dataset["sellPrice"];
-    if (!price) return;
-    sendClientEvent({ type: "send", payload: { command: sellBtn.dataset["takeCmd"] ?? "" } });
-    sendClientEvent({ type: "send", payload: { command: `базар выставить ${kw} ${price}` } });
-  });
-  tdSell.appendChild(sellBtn);
-
-  const tdDrop = document.createElement("td");
-  tdDrop.className = "container-panel__sell-cell";
-  if (dropCommand !== null) {
-    const dropBtn = document.createElement("button");
-    dropBtn.type = "button";
-    dropBtn.className = "container-panel__sell-btn";
-    dropBtn.textContent = "В";
-    dropBtn.title = "Выбросить";
-    dropBtn.addEventListener("click", () => {
-      sendClientEvent({ type: "send", payload: { command: dropCommand(kw, item.count) } });
-    });
-    tdDrop.appendChild(dropBtn);
-  }
-
-  const tdCount = document.createElement("td");
-  tdCount.className = "container-panel__count";
-  tdCount.textContent = item.count > 1 ? `×${item.count}` : "";
-
-  const tdName = document.createElement("td");
-  tdName.className = "container-panel__name";
-  tdName.textContent = item.name;
-
-  tr.appendChild(tdSell);
-  tr.appendChild(tdDrop);
-  tr.appendChild(tdCount);
-  tr.appendChild(tdName);
-  return tr;
-}
-
-function renderContainerList(
-  tbody: HTMLTableSectionElement,
-  items: Array<{ name: string; count: number }>,
-  container: "склад" | "расход" | "базар" | "хлам",
-): void {
-  tbody.innerHTML = "";
-  for (const item of sortItems(items)) {
-    if (container === "склад") {
-      tbody.appendChild(renderItemRow(
-        item,
-        null,
-        (k, count) => count > 1 ? `бросить все.${k} склад` : `бросить ${k} склад`,
-      ));
-    } else if (container === "расход") {
-      tbody.appendChild(renderBazaarSellRow(
-        item,
-        "расход",
-        (k, count) => count > 1 ? `бросить все.${k} расход` : `бросить ${k} расход`,
-      ));
-    } else if (container === "базар") {
-      tbody.appendChild(renderBazaarSellRow(item, "базар", null));
-    } else {
-      tbody.appendChild(renderItemRow(
-        item,
-        (k) => `взя ${k} хлам;;прод ${k}`,
-        (k) => `взя ${k} хлам;;бро ${k}`,
-      ));
-    }
-  }
-  if (container === "базар" || container === "расход") {
-    requestBazaarMaxPrices(tbody);
-  }
-}
-
-function requestBazaarMaxPrices(tbody: HTMLTableSectionElement): void {
-  const rows = tbody.querySelectorAll<HTMLTableRowElement>("tr[data-item-name]");
-  rows.forEach((row) => {
-    const itemName = row.dataset["itemName"];
-    if (itemName) {
-      sendClientEvent({ type: "bazaar_max_price_request", payload: { itemName } });
-    }
-  });
-}
-
-function renderInventoryList(
-  tbody: HTMLTableSectionElement,
-  items: Array<{ name: string; count: number }>,
-): void {
-  tbody.innerHTML = "";
-  for (const item of sortItems(items)) {
-    const kw = item.name.split(/\s+/)[0] ?? item.name;
-    const tr = document.createElement("tr");
-
-    const tdSort = document.createElement("td");
-    tdSort.className = "container-panel__sell-cell";
-    const sortBtn = document.createElement("button");
-    sortBtn.type = "button";
-    sortBtn.className = "container-panel__sell-btn";
-    sortBtn.textContent = "⇅";
-    sortBtn.title = "Авто: базар или хлам";
-    sortBtn.addEventListener("click", () => {
-      sendClientEvent({ type: "inventory_auto_sort", payload: { items: [item] } });
-    });
-    tdSort.appendChild(sortBtn);
-
-    const tdSell = document.createElement("td");
-    tdSell.className = "container-panel__sell-cell";
-    const sellBtn = document.createElement("button");
-    sellBtn.type = "button";
-    sellBtn.className = "container-panel__sell-btn";
-    sellBtn.textContent = "П";
-    sellBtn.title = "Продать";
-    sellBtn.addEventListener("click", () => {
-      sendClientEvent({ type: "send", payload: { command: `прод ${kw}` } });
-    });
-    tdSell.appendChild(sellBtn);
-
-    const tdDrop = document.createElement("td");
-    tdDrop.className = "container-panel__sell-cell";
-    const dropBtn = document.createElement("button");
-    dropBtn.type = "button";
-    dropBtn.className = "container-panel__sell-btn";
-    dropBtn.textContent = "В";
-    dropBtn.title = "Выбросить";
-    dropBtn.addEventListener("click", () => {
-      const cmd = item.count > 1 ? `бросить все.${kw}` : `бросить ${kw}`;
-      sendClientEvent({ type: "send", payload: { command: cmd } });
-    });
-    tdDrop.appendChild(dropBtn);
-
-    const tdCount = document.createElement("td");
-    tdCount.className = "container-panel__count";
-    tdCount.textContent = item.count > 1 ? `×${item.count}` : "";
-
-    const tdName = document.createElement("td");
-    tdName.className = "container-panel__name";
-    tdName.textContent = item.name;
-
-    tr.appendChild(tdSort);
-    tr.appendChild(tdSell);
-    tr.appendChild(tdDrop);
-    tr.appendChild(tdCount);
-    tr.appendChild(tdName);
-    tbody.appendChild(tr);
-  }
-}
-
 
 
 document.addEventListener("keydown", (e) => {
@@ -3054,115 +2592,7 @@ renderFarmButton();
 updateActionBadges();
 updateActionButtons();
 
-const PANEL_SPLIT_KEY = "panel-split-map-fr";
-const PANEL_SPLIT_MIN_FR = 0.15;
-const PANEL_SPLIT_MAX_FR = 0.75;
-const CONTAINER_SPLIT_KEY = "panel-split-container-px";
-const CONTAINER_SPLIT_MIN_PX = 100;
-const CONTAINER_SPLIT_MAX_PX = 500;
-const CONTAINER_SPLIT_DEFAULT_PX = 160;
-
-const shellEl = document.querySelector<HTMLElement>("main.shell");
-const panelSplitterEl = document.getElementById("panel-splitter");
-const containerSplitterEl = document.getElementById("container-splitter");
-
-let currentContainerPx = CONTAINER_SPLIT_DEFAULT_PX;
-
-function applyPanelSplit(mapFr: number): void {
-  if (!shellEl) return;
-  const clamped = Math.max(PANEL_SPLIT_MIN_FR, Math.min(PANEL_SPLIT_MAX_FR, mapFr));
-  shellEl.style.gridTemplateColumns = `56px ${1 - clamped}fr 6px ${clamped}fr 6px ${currentContainerPx}px`;
-}
-
-function applyContainerSplit(px: number): void {
-  if (!shellEl) return;
-  const clamped = Math.max(CONTAINER_SPLIT_MIN_PX, Math.min(CONTAINER_SPLIT_MAX_PX, px));
-  currentContainerPx = clamped;
-  const match = shellEl.style.gridTemplateColumns.match(/^(56px\s+[\d.]+fr\s+6px\s+[\d.]+fr)\s+6px\s+[\d.]+px$/);
-  const base = match ? match[1] : `56px ${1 - 0.35}fr 6px ${0.35}fr`;
-  shellEl.style.gridTemplateColumns = `${base} 6px ${clamped}px`;
-}
-
-function loadPanelSplit(): void {
-  const storedContainer = localStorage.getItem(CONTAINER_SPLIT_KEY);
-  if (storedContainer !== null) {
-    const px = parseFloat(storedContainer);
-    if (!isNaN(px)) currentContainerPx = Math.max(CONTAINER_SPLIT_MIN_PX, Math.min(CONTAINER_SPLIT_MAX_PX, px));
-  }
-
-  const stored = localStorage.getItem(PANEL_SPLIT_KEY);
-  if (stored !== null) {
-    const fr = parseFloat(stored);
-    if (!isNaN(fr)) {
-      applyPanelSplit(fr);
-      return;
-    }
-  }
-  applyPanelSplit(0.35);
-}
-
-loadPanelSplit();
-
-if (panelSplitterEl !== null && shellEl !== null) {
-  let dragging = false;
-
-  panelSplitterEl.addEventListener("pointerdown", (e: PointerEvent) => {
-    e.preventDefault();
-    dragging = true;
-    panelSplitterEl.classList.add("panel-splitter--dragging");
-    panelSplitterEl.setPointerCapture(e.pointerId);
-  });
-
-  panelSplitterEl.addEventListener("pointermove", (e: PointerEvent) => {
-    if (!dragging) return;
-    const shellRect = shellEl.getBoundingClientRect();
-    const gaps = 5 * 8;
-    const available = shellRect.width - 56 - currentContainerPx - gaps;
-    const offsetX = e.clientX - shellRect.left - 56 - gaps / 2;
-    applyPanelSplit(Math.max(0, 1 - offsetX / available));
-  });
-
-  function stopSplitterDrag(e: PointerEvent): void {
-    if (!dragging) return;
-    dragging = false;
-    panelSplitterEl!.classList.remove("panel-splitter--dragging");
-    panelSplitterEl!.releasePointerCapture(e.pointerId);
-    const match = shellEl!.style.gridTemplateColumns.match(/56px\s+[\d.]+fr\s+6px\s+([\d.]+)fr/);
-    if (match) localStorage.setItem(PANEL_SPLIT_KEY, match[1]);
-  }
-
-  panelSplitterEl.addEventListener("pointerup", stopSplitterDrag);
-  panelSplitterEl.addEventListener("pointercancel", stopSplitterDrag);
-}
-
-if (containerSplitterEl !== null && shellEl !== null) {
-  let dragging = false;
-
-  containerSplitterEl.addEventListener("pointerdown", (e: PointerEvent) => {
-    e.preventDefault();
-    dragging = true;
-    containerSplitterEl.classList.add("panel-splitter--dragging");
-    containerSplitterEl.setPointerCapture(e.pointerId);
-  });
-
-  containerSplitterEl.addEventListener("pointermove", (e: PointerEvent) => {
-    if (!dragging) return;
-    const shellRect = shellEl.getBoundingClientRect();
-    const px = shellRect.right - e.clientX - 8;
-    applyContainerSplit(px);
-  });
-
-  function stopContainerDrag(e: PointerEvent): void {
-    if (!dragging) return;
-    dragging = false;
-    containerSplitterEl!.classList.remove("panel-splitter--dragging");
-    containerSplitterEl!.releasePointerCapture(e.pointerId);
-    localStorage.setItem(CONTAINER_SPLIT_KEY, String(currentContainerPx));
-  }
-
-  containerSplitterEl.addEventListener("pointerup", stopContainerDrag);
-  containerSplitterEl.addEventListener("pointercancel", stopContainerDrag);
-}
+initSplitters();
 
 void loadDefaults()
   .then(() => {

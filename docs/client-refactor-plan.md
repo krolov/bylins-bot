@@ -319,10 +319,100 @@ Bootstrap в headless Chromium: ~100–220 мс.
 | `src/client/main.ts` LOC | 3974 | 3174 |
 | Дельта | базовый снимок | **−800 строк** |
 
+### Сессия #3 (ветка `claude/continue-frontend-refactor-ccWkI`)
+
+Структурный распил `main.ts` без code-splitting — эти модули нужны eager,
+dynamic import тут не помог бы. Цель — читаемость и локальность изменений.
+
+```
+src/client/
+  terminal.ts            (285) — ANSI-парсер, appendOutput/appendSystemLine/
+                                 appendChatMessage/appendStyledText. Создаётся
+                                 фабрикой `createTerminal({outputElement,
+                                 chatOutputElement, onRawText})`. Callback
+                                 `onRawText` получает сырой chunk — main
+                                 использует его для парсинга combat-prompt'a
+                                 ("[Ринли:Ранен]") в `lastEnemy` для `$target`
+                                 в хоткеях.
+  inventory.ts           (234) — renderContainerList / renderInventoryList
+                                 (склад/расход/базар/хлам + инв). Все кнопки
+                                 шлют команды через `bus.emit("client_send",ev)`
+                                 — модуль не знает про socket.
+  splitters.ts           (117) — panel + container splitters. Один export
+                                 `initSplitters()`, который читает localStorage,
+                                 применяет grid-template-columns и вешает
+                                 drag-handlers.
+```
+
+Изменения в `main.ts`:
+- Удалены: `ESCAPE`, `ansiState`, `createDefaultTerminalStyle`, `cloneStyle`,
+  `resetStyle`, `mapAnsiCodeToColor`, `applyAnsiCodes`, `classNamesForStyle`,
+  `isScrolledToBottom`, `appendStyledText`, `parseAnsiSegments`,
+  `appendOutput`, `appendSystemLine`, `appendChatMessage`,
+  `MAX_OUTPUT_SEGMENTS`, `OUTPUT_TRIM_COUNT`, `MAX_CHAT_LINES` (все ушли
+  в `terminal.ts`).
+- Удалены: `renderItemRow`, `renderBazaarSellRow`, `renderContainerList`,
+  `renderInventoryList`, `requestBazaarMaxPrices`, `sortItems` — в
+  `inventory.ts`.
+- Удалены: `PANEL_SPLIT_*`, `CONTAINER_SPLIT_*` константы,
+  `shellEl`/`panelSplitterEl`/`containerSplitterEl`, `currentContainerPx`,
+  `applyPanelSplit`/`applyContainerSplit`/`loadPanelSplit`, два
+  `if (panelSplitterEl !== null && shellEl !== null)` IIFE-блока — в
+  `splitters.ts`.
+- Добавлено: `const { appendOutput, appendSystemLine, appendChatMessage,
+  appendStyledText, resetAnsiState } = createTerminal(...)`, `initSplitters()`,
+  `import { renderContainerList, renderInventoryList } from "./inventory.ts"`.
+- `clearOutputButton` click handler теперь вызывает `resetAnsiState()` вместо
+  прямого обращения к `ansiState.pendingEscape` / `ansiState.style`.
+
+### main.ts по сессиям
+
+| Метрика | Сессия #1 | Сессия #2 | Сессия #3 |
+|---|---|---|---|
+| `src/client/main.ts` LOC | 3974 | 3174 | 2604 |
+| Дельта к предыдущей | базовый снимок | −800 строк | **−570 строк** |
+
+### Bundle layout после сессии #3
+
+| Чанк | Размер | Когда грузится |
+|---|---|---|
+| `client.js` | 54.3 KB | Eager (старт) — +0.4 KB vs #2 (factory-closure overhead) |
+| `styles.min.css` | 36.7 KB | Eager (preload) |
+| chunk-shared (bus + const) | 5.4 KB | Eager (импортирован main.ts) |
+| chunk-global-map | 10.6 KB | На клик 🗺️ |
+| chunk-item-db | 7.6 KB | На клик 📦 |
+| chunk-compare | 7.1 KB | На клик ⚖️ |
+| chunk-hotkeys | 3.6 KB | На клик 🎹 |
+| chunk-triggers | 3.0 KB | На клик ⚡ |
+| chunk-farm-settings | 2.8 KB | На клик 🌾⚙️ |
+| chunk-vorozhe | 2.8 KB | На клик 🧙 |
+| chunk-survival | 2.6 KB | На клик 🍞⚙️ |
+
+Smoke bootstrap в headless Chromium: **140–150 мс** (стабильно).
+
 ### Что осталось (для будущей сессии)
 
-1. **Map grid / Nav-panel / Inventory renderers** — это не модалки, code-splitting там не даст эффекта, но структурное разбиение `src/client/main.ts` (~3170 строк) на 4–5 файлов улучшит читаемость. Кандидаты: `terminal.ts` (ANSI + appendOutput + chat), `net.ts` (createSocket + reconnect + dispatcher), `map-grid.ts` (integrateSnapshot + renderGridMap + updateMap), `nav-panel.ts`, `inventory.ts`.
-2. **Preload for hashed chunks** — `<link rel="modulepreload">` в `index.html` сейчас покрывает только `client.js`. Shared chunk подгружается вторым HTTP-запросом. Чтобы убрать этот hop, нужно генерировать HTML из билд-шага с реальными hash-именами чанков (или пере-именовать в стабильные имена).
+1. **`map-grid.ts`** (~1000 строк) — `integrateSnapshot` + `renderGridMap` +
+   `updateMap` + z-level + pointer/drag handlers. Самый крупный кусок,
+   сильно сцеплен с `latestMapSnapshot`, `gridLayout`, `mapRoomElements`,
+   `currentZLevel`, `zoneNames`. Для извлечения нужен общий state-объект.
+2. **`nav-panel.ts`** (~320 строк) — `renderNavPanel`, `buildNavZoneItem`,
+   `applyNavZonesFilter`, `buildNeighborZones/FarZones/AllVisitedZones`,
+   `renderNavStatus`. Сильная связь с `currentNavState`, `currentAliases`,
+   `currentRoomAutoCommands`, `allNeighborZones/FarZones/VisitedZones`,
+   `navZonesSearchQuery`, `farZonesPage`.
+3. **`net.ts`** (~400 строк) — `createSocket`, `scheduleReconnect`,
+   `flushPendingQueue`, `sendClientEvent`, `ensureSocketOpen`, `loadDefaults`,
+   вместе с dispatcher'ом. Сердце clients↔server; нуждается в типобезопасной
+   прокачке колбэков (dispatch, state-mutators).
+4. **Alias/auto-cmd/map-context popups** (~150 строк) — маленький кластер
+   `openAliasPopup`/`openAutoCmdPopup`/`openMapContextMenu` + их close/commit
+   хэндлеры. Хорошая цель для одного файла `popups.ts`.
+5. **Preload for hashed chunks** — `<link rel="modulepreload">` в
+   `index.html` сейчас покрывает только `client.js`. Shared chunk подгружается
+   вторым HTTP-запросом. Чтобы убрать этот hop, нужно генерировать HTML из
+   билд-шага с реальными hash-именами чанков (или пере-именовать в стабильные
+   имена).
 
 ### Коммиты в ветке `claude/refactor-client-performance-YQZmB`
 
@@ -335,5 +425,10 @@ Bootstrap в headless Chromium: ~100–220 мс.
 7. `51d4056` refactor(client): extract Triggers modal as dynamic chunk
 
 ### Коммиты в ветке `claude/continue-frontend-refactor-7Mvnx`
+
+1. `7f45df8` perf(client): minify CSS, preload bundle, bump cache (?v=7)
+2. `e64ec31` refactor(client): extract Farm, Survival, Global Map modals as dynamic chunks
+
+### Коммиты в ветке `claude/continue-frontend-refactor-ccWkI`
 
 (добавляются по мере коммитов в этой сессии)
