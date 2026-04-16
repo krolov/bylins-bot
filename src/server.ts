@@ -14,16 +14,17 @@ import { createSnapshotBroadcaster } from "./server/snapshots.ts";
 import { createNavigationController } from "./server/navigation.ts";
 import { createContainerInspector } from "./server/containers.ts";
 import { createSendCommandHandler, normalizeTextMessage } from "./server/command-handler.ts";
+import { createMudTextPipeline } from "./server/mud-text-pipeline.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
 import { createFarmController } from "./farm/index.ts";
 import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
-import { createParserState, feedText } from "./map/parser.ts";
+import { createParserState } from "./map/parser.ts";
 import { createMapStore } from "./map/store.ts";
 import type { MarketSale } from "./map/store.ts";
-import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker.ts";
+import { createTrackerState, trackOutgoingCommand } from "./map/tracker.ts";
 import { createMover } from "./map/mover.ts";
 import { createTriggers } from "./triggers.ts";
 import { runCompareScan } from "./compare-scan/index.ts";
@@ -78,7 +79,7 @@ const mudConnection = createMudConnection({
       }
     }
     lootSorter.handleMudText(text);
-    void persistParsedMapData(text, ws).catch((error: unknown) => {
+    void mudTextPipeline.handleMudText(text, ws).catch((error: unknown) => {
       logEvent(ws, "error", error instanceof Error ? `Automapper error: ${error.message}` : "Automapper error.");
     });
   },
@@ -116,8 +117,6 @@ const mover = createMover({
 let mapRecordingEnabled = true;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
-const currentRoomMobs = new Map<string, string>();
-let currentRoomCorpseCount = 0;
 const farmController = createFarmController({
   // ── Shared plumbing ────────────────────────────────────────────────────
   getCurrentRoomId: () => trackerState.currentRoomId,
@@ -154,8 +153,8 @@ const farmController = createFarmController({
   onceRoomChanged: (timeoutMs) => onceRoomChanged(timeoutMs),
   refreshCurrentRoom: (timeoutMs) => refreshCurrentRoom(timeoutMs),
   stealthMove: (direction) => mover.stealthMove(direction, trackerState.currentRoomId),
-  getVisibleTargets: () => new Map(currentRoomMobs),
-  getCorpseCount: () => currentRoomCorpseCount,
+  getVisibleTargets: () => new Map(mudTextPipeline.getVisibleMobs()),
+  getCorpseCount: () => mudTextPipeline.getCorpseCount(),
   isStealthProfile: () => {
     const profile = runtimeConfig.profiles.find((p) => p.id === activeProfileId);
     return profile?.stealthCombat === true;
@@ -385,9 +384,6 @@ const statsTracker = createStatsTracker({
   onStatsChanged: (stats) => farmController.updateStats(stats),
 });
 
-const ANSI_ESCAPE_REGEXP = /\u001b\[[0-9;]*m/g;
-const COMBAT_PROMPT_MOB_REGEXP = /\[([^\]:]+):[^\]]+\]/g;
-
 let survivalTickTimer: ReturnType<typeof setTimeout> | null = null;
 let survivalTickRunning = false;
 
@@ -551,154 +547,26 @@ function clearSurvivalTickTimer(): void {
   }
 }
 
-async function persistParsedMapData(text: string, ws: BunServerWebSocket | null): Promise<void> {
-  statsTracker.parseAndBroadcast(text);
-
-  combatState.handleMudText(text);
-  triggers.handleMudText(text);
-  survivalController.handleMudText(text);
-  gatherController.handleMudText(text);
-
-  const stripped = text.replace(ANSI_ESCAPE_REGEXP, "");
-  const { enteredCombat, exitedCombat } = combatState.getTransition();
-
-  if (enteredCombat) {
-    triggers.onCombatStart();
-    broadcastServerEvent({ type: "combat_state", payload: { inCombat: true } });
-  } else if (exitedCombat) {
-    triggers.onCombatEnd();
-    broadcastServerEvent({ type: "combat_state", payload: { inCombat: false } });
-  }
-
-  if (exitedCombat) {
-    scheduleSurvivalTick(50);
-  } else if (!combatState.getInCombat()) {
-    scheduleSurvivalTick(150);
-  }
-
-  void itemIdentifier.handleChunk(text).catch((error: unknown) => {
-    logEvent(ws, "error", error instanceof Error ? `Item parser error: ${error.message}` : "Item parser error.");
-  });
-  const events = feedText(parserState, text);
-  const previousRoomId = trackerState.currentRoomId;
-
-  const mobsInRoom: string[] = [];
-  let corpseCount = 0;
-  for (const event of events) {
-    if (event.kind === "mobs_in_room") {
-      for (const name of event.mobs) {
-        if (!mobsInRoom.includes(name)) mobsInRoom.push(name);
-      }
-    }
-    if (event.kind === "corpses_in_room") {
-      corpseCount += event.count;
-    }
-  }
-
-  const roomEvent = events.find((event) => event.kind === "room");
-  if (roomEvent?.kind === "room") {
-    logEvent(null, "session", `[zone-debug] parsed room event vnum=${roomEvent.room.vnum} mobs=[${mobsInRoom.join(" | ")}]`);
-  }
-
-  if (events.some((e) => e.kind === "room")) {
-    currentRoomMobs.clear();
-    for (const name of mobsInRoom) {
-      currentRoomMobs.set(name.toLowerCase(), name);
-    }
-    currentRoomCorpseCount = corpseCount;
-    logEvent(
-      null,
-      "session",
-      `[zone-debug] currentRoomMobs updated room=${trackerState.currentRoomId} values=[${[...currentRoomMobs.values()].join(" | ")}]`,
-    );
-    for (const listener of roomRefreshListeners) {
-      listener(trackerState.currentRoomId);
-    }
-  }
-
-  const strippedText = text.replace(ANSI_ESCAPE_REGEXP, "");
-  const vnumAtCombatSave = trackerState.currentRoomId;
-  const combatMobNames: string[] = [];
-  for (const line of strippedText.split("\n")) {
-    const blocks = [...line.matchAll(COMBAT_PROMPT_MOB_REGEXP)];
-    if (blocks.length < 2) continue;
-    for (const match of blocks.slice(1)) {
-      const mobName = match[1].trim();
-      if (mobName && !combatMobNames.includes(mobName)) {
-        combatMobNames.push(mobName);
-        void mapStore.saveMobCombatName(mobName, vnumAtCombatSave).catch((error: unknown) => {
-          logEvent(ws, "error", error instanceof Error ? `Mob combat name save error: ${error.message}` : "Mob combat name save error.");
-        });
-      }
-    }
-  }
-
-  if (events.length === 0) {
-    farmController.handleMudText(text, {
-      roomChanged: false,
-      roomDescriptionReceived: false,
-      currentRoomId: trackerState.currentRoomId,
-      mobsInRoom: [],
-      combatMobNames,
-      corpseCount: 0,
-    });
-    return;
-  }
-
-  const result = processParsedEvents(trackerState, events);
-
-  if (mapRecordingEnabled) {
-    for (const room of result.rooms) {
-      await mapStore.upsertRoom(room.vnum, room.name, room.exits, room.closedExits);
-    }
-
-    for (const edge of result.edges) {
-      await mapStore.upsertEdge(edge);
-    }
-  }
-
-  await broadcastMapSnapshot("map_update");
-
-  if (result.rooms.length > 0 || result.edges.length > 0) {
-    logEvent(ws, "session", "Automapper updated.", {
-      rooms: result.rooms.length,
-      edges: result.edges.length,
-      currentVnum: result.currentVnum,
-    });
-  }
-
-  mover.onTrackerResult({
-    currentVnum: trackerState.currentRoomId,
-    previousVnum: previousRoomId,
-    movementBlocked: result.movementBlocked,
-    roomDescriptionReceived: result.rooms.length > 0,
-    visibleMobNames: mobsInRoom,
-  });
-
-  if (result.rooms.length > 0) {
-    logEvent(
-      null,
-      "session",
-      `[zone-debug] mover feedback current=${trackerState.currentRoomId} previous=${previousRoomId} roomDescriptionReceived=${result.rooms.length > 0} visibleMobNames=[${mobsInRoom.join(" | ")}]`,
-    );
-  }
-
-  farmController.handleMudText(text, {
-    roomChanged: previousRoomId !== trackerState.currentRoomId,
-    roomDescriptionReceived: result.rooms.length > 0,
-    currentRoomId: trackerState.currentRoomId,
-    mobsInRoom,
-    combatMobNames,
-    corpseCount,
-  });
-
-  if (trackerState.currentRoomId !== null && trackerState.currentRoomId !== previousRoomId) {
-    const vnum = trackerState.currentRoomId;
-    for (const listener of roomChangedListeners) {
-      listener(vnum);
-    }
-  }
-}
+const mudTextPipeline = createMudTextPipeline({
+  statsTracker,
+  combatState,
+  triggers,
+  survivalController,
+  gatherController,
+  itemIdentifier,
+  farmController,
+  mover,
+  parserState,
+  trackerState,
+  mapStore,
+  broadcastServerEvent,
+  logEvent,
+  broadcastMapSnapshot,
+  scheduleSurvivalTick,
+  getMapRecordingEnabled: () => mapRecordingEnabled,
+  roomChangedListeners,
+  roomRefreshListeners,
+});
 
 await mapStore.initialize();
 
