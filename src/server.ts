@@ -12,6 +12,8 @@ import { createListenerHub } from "./server/listeners.ts";
 import type { RoomRefreshListener } from "./server/listeners.ts";
 import { createSnapshotBroadcaster } from "./server/snapshots.ts";
 import { createNavigationController } from "./server/navigation.ts";
+import { createContainerInspector } from "./server/containers.ts";
+import { createSendCommandHandler, normalizeTextMessage } from "./server/command-handler.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
@@ -546,46 +548,18 @@ function sendDefaults(ws: BunServerWebSocket): void {
   }
 }
 
-function normalizeTextMessage(message: string | ArrayBuffer | Uint8Array): string {
-  if (typeof message === "string") {
-    return message;
-  }
-
-  return new TextDecoder().decode(message);
-}
-
-function handleSendCommand(ws: BunServerWebSocket, command: string | undefined): void {
-  const session = sharedSession;
-
-  if (!session?.tcpSocket || !session.connected) {
-    sendServerEvent(ws, {
-      type: "error",
-      payload: { message: "You are not connected to a MUD yet." },
-    });
-    return;
-  }
-
-  const trimmedCommand = command?.trim();
-
-  if (!trimmedCommand) {
-    return;
-  }
-
-  if (trimmedCommand.startsWith("#go ")) {
-    const dir = trimmedCommand.slice(4).trim();
-    const mudCmd = combatState.getInCombat() ? `беж ${dir}` : `краст ${dir}`;
-    mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, mudCmd, "browser");
-    return;
-  }
-
-  if (trimmedCommand.toLowerCase() === "дсу") {
-    const dsuFormatted = statsTracker.getDsu().toLocaleString("ru-RU");
-    mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, `гг [ Разбег: ${statsTracker.getRazb()} -+- Уровень: ${statsTracker.getLevel()} -+- ДСУ: ${dsuFormatted} ]`, "browser");
-    return;
-  }
-
-  mudConnection.writeAndLogMudCommand(ws, session.tcpSocket!, trimmedCommand, "browser");
-}
+const handleSendCommand = createSendCommandHandler({
+  session: sharedSession,
+  combatState,
+  writeAndLogMudCommand: (ws, socket, cmd, origin) =>
+    mudConnection.writeAndLogMudCommand(ws, socket, cmd, origin),
+  sendServerEvent,
+  getStats: () => ({
+    dsu: statsTracker.getDsu(),
+    level: statsTracker.getLevel(),
+    razb: statsTracker.getRazb(),
+  }),
+});
 
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -630,23 +604,14 @@ const {
 } = snapshots;
 const sendMapSnapshot = (ws: BunServerWebSocket) => snapshots.sendInitialSnapshot(ws);
 
-async function inspectContainer(ws: BunServerWebSocket | null, container: string): Promise<string> {
-  if (!sharedSession.tcpSocket || !sharedSession.connected) {
-    return "";
-  }
-  const result = containerTracker.waitForInspectResult(2000);
-  mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, `осм ${container}`, "inspect-container");
-  return result;
-}
-
-async function inspectInventory(ws: BunServerWebSocket | null): Promise<string> {
-  if (!sharedSession.tcpSocket || !sharedSession.connected) {
-    return "";
-  }
-  const result = containerTracker.waitForInspectResult(2000);
-  mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, "инв", "inspect-inventory");
-  return result;
-}
+const containerInspector = createContainerInspector({
+  session: sharedSession,
+  writeAndLogMudCommand: (ws, socket, cmd, origin) =>
+    mudConnection.writeAndLogMudCommand(ws, socket, cmd, origin),
+  waitForInspectResult: (ms) => containerTracker.waitForInspectResult(ms),
+});
+const inspectContainer = containerInspector.inspectContainer;
+const inspectInventory = containerInspector.inspectInventory;
 
 function scheduleSurvivalTick(delayMs: number): void {
   if (survivalTickTimer !== null) return;
