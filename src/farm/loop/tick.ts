@@ -6,7 +6,7 @@ import {
 import { getZoneId } from "./room.ts";
 import { chooseNextDirection } from "./navigation.ts";
 import { publishState, disable } from "./state.ts";
-import { resolveAttackTarget, resetMobProbeState } from "../mob-resolver.ts";
+import { resolveAttackTarget, resetMobProbeState } from "../../mob-resolver.ts";
 import type { Farm2State, Farm2ControllerDependencies } from "./types.ts";
 
 const PENDING_ROOM_SCAN_TIMEOUT_MS = 5000;

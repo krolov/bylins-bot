@@ -7,7 +7,7 @@ import { settingsToConfig } from "./config.ts";
 import { publishState, markRoomVisited, disable } from "./state.ts";
 import { scheduleTick, runTick } from "./tick.ts";
 import { createLogger } from "./logger.ts";
-import { resetMobProbeState } from "../mob-resolver.ts";
+import { resetMobProbeState } from "../../mob-resolver.ts";
 import type { Farm2State, Farm2ControllerDependencies } from "./types.ts";
 
 function sendSkinningSalvo(state: Farm2State, deps: Farm2ControllerDependencies): void {

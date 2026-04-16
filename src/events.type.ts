@@ -1,10 +1,10 @@
 import type { MapAlias, MapSnapshot } from "./map/types.ts";
 import type { FarmZoneSettings, SurvivalSettings, GameItem } from "./map/store.ts";
-import type { Farm2StateSnapshot } from "./farm2/index.ts";
+import type { Farm2StateSnapshot } from "./farm/index.ts";
 import type { TriggerState } from "./triggers.ts";
 import type { GatherState } from "./gather-script.ts";
 import type { CompareScanResult, CompareSlotResult, CompareCandidate } from "./compare-scan/index.ts";
-import type { ZoneScriptStateSnapshot } from "./zone-scripts/index.ts";
+import type { ZoneScriptStateSnapshot } from "./farm/index.ts";
 import type { ContainerKey } from "./container-tracker.ts";
 
 export interface WsData {
@@ -250,8 +250,8 @@ export type {
   SurvivalSettings,
   GameItem,
 } from "./map/store.ts";
-export type { Farm2StateSnapshot } from "./farm2/index.ts";
-export type { ZoneScriptStateSnapshot } from "./zone-scripts/index.ts";
+export type { Farm2StateSnapshot } from "./farm/index.ts";
+export type { ZoneScriptStateSnapshot } from "./farm/index.ts";
 export type { TriggerState } from "./triggers.ts";
 export type { MapAlias, MapSnapshot } from "./map/types.ts";
 export type { GatherState } from "./gather-script.ts";

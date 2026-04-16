@@ -1,8 +1,8 @@
 import { DEFAULT_RETRY_DELAY_MS } from "./types.ts";
 import { defaultConfig, settingsToConfig } from "./config.ts";
 import { getZoneId } from "./room.ts";
-import { createTickTimer } from "../utils/timer.ts";
-import { createMobProbeState, resetMobProbeState } from "../mob-resolver.ts";
+import { createTickTimer } from "../../utils/timer.ts";
+import { createMobProbeState, resetMobProbeState } from "../../mob-resolver.ts";
 import type { Farm2State, Farm2StateSnapshot, Farm2ControllerDependencies, Farm2Config } from "./types.ts";
 
 export function createInitialState(config: Farm2Config): Farm2State {
