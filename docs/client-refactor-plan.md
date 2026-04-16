@@ -469,18 +469,102 @@ src/client/
 Smoke bootstrap в headless Chromium: **~250–300 мс** (оверхед первого
 запуска с чистым playwright-профилем; стабильный повторный — 140–170 мс).
 
+### Сессия #5 (ветка `claude/continue-refactoring-ldLR5`)
+
+Самый крупный распил проекта — вытаскиваем всю подсистему рендера карты.
+
+```
+src/client/
+  map-grid.ts            (1046) — фабрика `createMapGrid({mapCanvasElement,
+                                  zLevelLabel, zLevelDownButton, zLevelUpButton,
+                                  getAliases, onAliasPopup, onMapContextMenu,
+                                  onMapUpdated})`. Возвращает
+                                  `{updateMap, forceFullRerender,
+                                  getLatestSnapshot, getLatestFullSnapshot,
+                                  getZoneNames, setZoneName}`.
+                                  Внутри: CELL/TILE/PAD константы,
+                                  gridLayout/collisionDisplacedVnums/
+                                  mapRoomElements state, last*Layout* кэши,
+                                  latestMapSnapshot/latestFullSnapshot,
+                                  mapDragOrigin/mapDidDrag, zoneNames
+                                  (localStorage-backed), cellKey/placeRoom/
+                                  resetGridLayout/getZoneId helpers,
+                                  `integrateSnapshot` (358 строк — layout
+                                  алгоритм), `updateZLevelControls`,
+                                  `renderGridMap` (434 строки с всеми SVG
+                                  edge/stub/portal рисовальщиками),
+                                  `updateMap`, `loadZoneNames/saveZoneNames`.
+                                  Pointer/dblclick/contextmenu handlers
+                                  навешиваются на `mapCanvasElement` внутри
+                                  фабрики. zLevel-кнопки тоже навешиваются
+                                  внутри. Bus-emits `zone_names` и
+                                  `map_full_snapshot` — по-прежнему летят
+                                  из `updateMap` в global-map модалку через
+                                  replay-кэш шины.
+```
+
+Изменения в `main.ts`:
+
+- Добавлен `import { createMapGrid } from "./map-grid.ts"`.
+- Удалены импорты `MapNodePayload`, `MapEdgePayload`, `GridCell`, `ColumnDef`,
+  `GameItemPayload`, `TerminalStyle`, `ProfileInfo`, `WEAPON_COLUMNS`,
+  `ARMOR_COLUMNS`, `DIR_DELTA`, `OPPOSITE_DIR`, `DIRECTION_PRIORITY` —
+  больше не используются.
+- Удалены (ушли в `map-grid.ts`): `CELL`, `TILE`, `PAD`, `ZONE_GAP`,
+  `COMPONENT_GAP`, `gridLayout`, `collisionDisplacedVnums`, `currentZLevel`,
+  `availableZLevels`, `mapRoomElements`, `lastLayoutNodeCount`,
+  `lastLayoutEdgeCount`, `lastRenderedZone`, `lastRenderedZLevel`,
+  `lastRenderedMinX`, `lastRenderedMaxY`, `cellKey`, `placeRoom`,
+  `resetGridLayout`, `getZoneId`, `integrateSnapshot`, `updateZLevelControls`,
+  `renderGridMap`, `mapDragOrigin`, `mapDidDrag`, все pointer/dblclick/
+  contextmenu handlers на `mapCanvasElement`, `updateMap`, `loadZoneNames`,
+  `saveZoneNames`, `zoneNames`, `latestMapSnapshot`, `latestFullSnapshot`,
+  click-handlers на `zLevelDownButton`/`zLevelUpButton`.
+- Форвард-объявления `let openAliasPopup`, `openMapContextMenu`,
+  `renderNavPanel`, `renderNavStatus` — чтобы `mapGrid` мог построиться
+  раньше popups/nav-panel, а их замыкания на mapGrid.getLatestSnapshot()
+  работали корректно.
+- Диспетчер `map_snapshot`/`map_update` вызывает `mapGrid.updateMap(...)`.
+  `aliases_snapshot` — `mapGrid.forceFullRerender()` вместо пары
+  `lastLayoutNodeCount = -1; renderGridMap(latestMapSnapshot);`.
+- `farmSettingsButton.click`: `getZoneId(trackerCurrentVnum ?? 0)` → инлайн
+  `Math.floor((trackerCurrentVnum ?? 0) / 100)`.
+- `globalMapButton.click`: читает `mapGrid.getLatestFullSnapshot()` и
+  `mapGrid.getZoneNames()`.
+- `bus.on("zone_name_set_local")` теперь делегирует `mapGrid.setZoneName`.
+
+### main.ts по сессиям
+
+| Метрика | #1 | #2 | #3 | #4 | #5 |
+|---|---|---|---|---|---|
+| `src/client/main.ts` LOC | 3974 | 3174 | 2604 | 2084 | 1087 |
+| Дельта к предыдущей | базовый | −800 | −570 | −520 | **−997** |
+
+### Bundle layout после сессии #5
+
+| Чанк | Размер | Когда грузится |
+|---|---|---|
+| `client.js` | 54.9 KB | Eager (старт) — +1.0 KB vs #4 (factory-closure overhead для mapGrid) |
+| `styles.min.css` | 36.7 KB | Eager (preload) |
+| chunk-shared (bus + const) | 5.4 KB | Eager |
+| chunk-global-map | 10.6 KB | На клик 🗺️ |
+| chunk-item-db | 7.6 KB | На клик 📦 |
+| chunk-compare | 7.1 KB | На клик ⚖️ |
+| chunk-hotkeys | 3.6 KB | На клик 🎹 |
+| chunk-triggers | 3.0 KB | На клик ⚡ |
+| chunk-farm-settings | 2.8 KB | На клик 🌾⚙️ |
+| chunk-vorozhe | 2.8 KB | На клик 🧙 |
+| chunk-survival | 2.6 KB | На клик 🍞⚙️ |
+
+Smoke bootstrap в headless Chromium: **~380 мс** (быстрее, чем в #4 — возможно, прогретый playwright-кэш; но не медленнее).
+
 ### Что осталось (для будущей сессии)
 
-1. **`map-grid.ts`** (~1000 строк) — `integrateSnapshot` + `renderGridMap` +
-   `updateMap` + z-level + pointer/drag handlers. Самый крупный кусок,
-   сильно сцеплен с `latestMapSnapshot`, `gridLayout`, `mapRoomElements`,
-   `currentZLevel`, `zoneNames`. Для извлечения нужен общий state-объект
-   или фабрика с десятком геттеров.
-2. **`net.ts`** (~400 строк) — `createSocket`, `scheduleReconnect`,
+1. **`net.ts`** (~400 строк) — `createSocket`, `scheduleReconnect`,
    `flushPendingQueue`, `sendClientEvent`, `ensureSocketOpen`, `loadDefaults`,
    вместе с dispatcher'ом. Сердце clients↔server; нуждается в типобезопасной
    прокачке колбэков (dispatch, state-mutators).
-3. **Preload for hashed chunks** — `<link rel="modulepreload">` в
+2. **Preload for hashed chunks** — `<link rel="modulepreload">` в
    `index.html` сейчас покрывает только `client.js`. Shared chunk подгружается
    вторым HTTP-запросом. Чтобы убрать этот hop, нужно генерировать HTML из
    билд-шага с реальными hash-именами чанков (или пере-именовать в стабильные
@@ -506,5 +590,9 @@ Smoke bootstrap в headless Chromium: **~250–300 мс** (оверхед пер
 1. `3af463e` refactor(client): split main.ts into terminal/inventory/splitters modules
 
 ### Коммиты в ветке `claude/continue-frontend-refactor-93c5m`
+
+1. `3c62ece` refactor(client): extract popups + nav-panel into dedicated modules
+
+### Коммиты в ветке `claude/continue-refactoring-ldLR5`
 
 (добавляются по мере коммитов в этой сессии)
