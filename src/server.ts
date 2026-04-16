@@ -10,6 +10,7 @@ import { createLogEvent, createStatusUpdater, sanitizeLogText, appendLogLine } f
 import { createStatsTracker } from "./server/stats.ts";
 import { createListenerHub } from "./server/listeners.ts";
 import type { RoomRefreshListener } from "./server/listeners.ts";
+import { createSnapshotBroadcaster } from "./server/snapshots.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
@@ -610,49 +611,26 @@ function resetMapState(): void {
   farmController.setLoopEnabled(false);
 }
 
-async function getCurrentMapSnapshot(): Promise<MapSnapshot> {
-  return mapStore.getSnapshot(trackerState.currentRoomId);
-}
-
-async function getCurrentZoneSnapshot(): Promise<MapSnapshot> {
-  return mapStore.getZoneSnapshot(trackerState.currentRoomId);
-}
-
-async function sendMapSnapshot(ws: BunServerWebSocket): Promise<void> {
-  sendServerEvent(ws, {
-    type: "map_snapshot",
-    payload: await getCurrentMapSnapshot(),
-  });
-
-  const aliases = await mapStore.getAliases();
-  sendServerEvent(ws, {
-    type: "aliases_snapshot",
-    payload: { aliases },
-  });
-
-  const autoCommandEntries = await mapStore.getRoomAutoCommands();
-  sendServerEvent(ws, {
-    type: "room_auto_commands_snapshot",
-    payload: { entries: autoCommandEntries },
-  });
-
-  sendServerEvent(ws, {
-    type: "navigation_state",
-    payload: {
-      active: navigationState.active,
-      targetVnum: navigationState.targetVnum,
-      totalSteps: navigationState.steps.length,
-      currentStep: navigationState.currentStep,
-    },
-  });
-}
-
-async function broadcastMapSnapshot(type: "map_snapshot" | "map_update"): Promise<void> {
-  const payload = type === "map_update"
-    ? await getCurrentZoneSnapshot()
-    : await getCurrentMapSnapshot();
-  broadcastServerEvent({ type, payload });
-}
+const snapshots = createSnapshotBroadcaster({
+  mapStore,
+  broadcastServerEvent,
+  sendServerEvent,
+  getCurrentRoomId: () => trackerState.currentRoomId,
+  getNavigationSnapshot: () => ({
+    active: navigationState.active,
+    targetVnum: navigationState.targetVnum,
+    totalSteps: navigationState.steps.length,
+    currentStep: navigationState.currentStep,
+  }),
+});
+const {
+  getCurrentMapSnapshot,
+  getCurrentZoneSnapshot,
+  broadcastMapSnapshot,
+  broadcastAliasesSnapshot,
+  broadcastRoomAutoCommandsSnapshot,
+} = snapshots;
+const sendMapSnapshot = (ws: BunServerWebSocket) => snapshots.sendInitialSnapshot(ws);
 
 function broadcastNavigationState(): void {
   broadcastServerEvent({
@@ -663,22 +641,6 @@ function broadcastNavigationState(): void {
       totalSteps: navigationState.steps.length,
       currentStep: navigationState.currentStep,
     },
-  });
-}
-
-async function broadcastAliasesSnapshot(): Promise<void> {
-  const aliases = await mapStore.getAliases();
-  broadcastServerEvent({
-    type: "aliases_snapshot",
-    payload: { aliases },
-  });
-}
-
-async function broadcastRoomAutoCommandsSnapshot(): Promise<void> {
-  const entries = await mapStore.getRoomAutoCommands();
-  broadcastServerEvent({
-    type: "room_auto_commands_snapshot",
-    payload: { entries },
   });
 }
 
