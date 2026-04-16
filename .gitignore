@@ -5,6 +5,7 @@ public/client.js
 public/client.js.map
 public/chunk-*.js
 public/chunk-*.js.map
+public/styles.min.css
 src/client.js
 src/client.js.map
 .env
