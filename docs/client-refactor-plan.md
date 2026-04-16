@@ -558,17 +558,126 @@ src/client/
 
 Smoke bootstrap в headless Chromium: **~380 мс** (быстрее, чем в #4 — возможно, прогретый playwright-кэш; но не медленнее).
 
+### Сессия #6 (ветка `claude/continue-frontend-refactor-YGAwB`)
+
+Два куска: (1) выносим socket-lifecycle в отдельный модуль, dispatcher
+остаётся в main.ts; (2) расширяем modulepreload на eager-чанки, чтобы
+shared chunk шёл параллельно с `client.js`, а не после его парсинга.
+
+```
+src/client/
+  net.ts                 (149) — фабрика `createNet({onMessage})`. Владеет
+                                 `socket`, `pendingOpenPromise`, `reconnectTimer`,
+                                 `reconnectDelay`, `reconnectEnabled`, `pendingQueue`.
+                                 Экспортирует `{sendClientEvent, ensureSocketOpen,
+                                 enableReconnect}`. На `open` шлёт warm-up
+                                 тройку `осм склад1 / осм склад2 / инв` через
+                                 собственный `sendClientEvent`. На входящее
+                                 сообщение парсит JSON и делегирует в
+                                 `onMessage(event)`. На `close` запускает
+                                 экспоненциальный backoff (1s → 30s).
+                                 Reconnect включается вызовом
+                                 `enableReconnect()` из bootstrap после
+                                 успешного `loadDefaults()` — до этого
+                                 неудачи подключения не порождают лавину
+                                 ретраев.
+```
+
+Изменения в `main.ts`:
+
+- Добавлен `import { createNet } from "./net.ts"`.
+- Удалены: `socket`, `pendingOpenPromise`, `reconnectTimer`, `reconnectDelay`,
+  `reconnectEnabled`, `pendingQueue`, `RECONNECT_DELAY_MAX`, `getSocketUrl`,
+  `scheduleReconnect`, `flushPendingQueue`, `createSocket`, `sendClientEvent`,
+  `ensureSocketOpen` (все в `net.ts`).
+- Большой switch на 28 case (парсинг `ServerEvent`) вытащен из inline
+  `nextSocket.addEventListener("message")` в hoisted function declaration
+  `handleServerEvent(message)`. Это важно: function declaration хойстится,
+  поэтому `createNet({ onMessage: handleServerEvent })` на строке ниже
+  работает, несмотря на forward reference к `sendClientEvent` внутри switch.
+- После `createNet`: `const { sendClientEvent, ensureSocketOpen } = net;` —
+  все existing call-sites (`sendClientEvent(...)`, `ensureSocketOpen()`)
+  продолжают работать без изменений.
+- Bootstrap-хвост: `reconnectEnabled = true` → `net.enableReconnect()`.
+- Перемещён `bus.on("client_send", ...)` с верха main.ts (где он был до
+  `sendClientEvent`-forward-ref) на позицию после `createNet` — теперь
+  `sendClientEvent` уже связан.
+
+`scripts/build-client.ts`: после JS/CSS-билдов читает `./public/client.js`,
+вырезает static-import prelude (`/^(?:import[^;]+;)+/`), экстрагирует имена
+eager-чанков (`/["']\.\/(chunk-[a-z0-9]+\.js)["']/g`), и переписывает
+`public/index.html` между маркерами `<!-- chunk-preload:start -->` /
+`<!-- chunk-preload:end -->` списком `<link rel="modulepreload">` для этих
+чанков. Dynamic `import(...)` не попадают в prelude (они внутри кода, не в
+top-level statement'ах), поэтому lazy-чанки не preloadятся. Перезапись
+идемпотентна — если содержимое между маркерами совпадает, файл не
+трогается.
+
+`public/index.html`: между `<link rel="modulepreload" href="/client.js">`
+и `<link rel="stylesheet">` вставлены маркеры:
+
+```html
+<!-- chunk-preload:start -->
+<link rel="modulepreload" href="/chunk-wtr0d5hw.js" />
+<link rel="modulepreload" href="/chunk-bezgv9t7.js" />
+<!-- chunk-preload:end -->
+```
+
+Это даёт браузеру спекулятивный discovery shared-чанка сразу из HTML: он
+начинает fetch одновременно с `client.js`, вместо того чтобы ждать, пока
+модуль распарсится и выстрелит собственный `import`.
+
+### main.ts по сессиям
+
+| Метрика | #1 | #2 | #3 | #4 | #5 | #6 |
+|---|---|---|---|---|---|---|
+| `src/client/main.ts` LOC | 3974 | 3174 | 2604 | 2084 | 1087 | 980 |
+| Дельта к предыдущей | базовый | −800 | −570 | −520 | −997 | **−107** |
+
+### Bundle layout после сессии #6
+
+| Чанк | Размер | Когда грузится |
+|---|---|---|
+| `client.js` | 55.1 KB | Eager (старт) |
+| `styles.min.css` | 35.9 KB | Eager (preload) |
+| chunk-shared (bus + const) | 5.3 KB | Eager (**теперь preload**) |
+| chunk-typings-shim | 0.5 KB | Eager (**теперь preload**) |
+| chunk-global-map | 10.4 KB | На клик 🗺️ |
+| chunk-item-db | 7.4 KB | На клик 📦 |
+| chunk-compare | 6.9 KB | На клик ⚖️ |
+| chunk-hotkeys | 3.5 KB | На клик 🎹 |
+| chunk-triggers | 2.9 KB | На клик ⚡ |
+| chunk-farm-settings | 2.7 KB | На клик 🌾⚙️ |
+| chunk-vorozhe | 2.7 KB | На клик 🧙 |
+| chunk-survival | 2.5 KB | На клик 🍞⚙️ |
+
+`client.js` формально вырос на +0.2 KB против #5 (factory-замыкание для
+net добавляет чуть-чуть оверхеда vs модуль-скоуп globals), но на
+wall-clock time это компенсируется preload'ом shared-чанка: теперь
+browser fetch'ит `client.js` + `chunk-wtr0d5hw.js` + `chunk-bezgv9t7.js`
+параллельно из HTML prescan, а не sequentially.
+
+Smoke bootstrap в headless Chromium: **~200–230 мс**.
+
 ### Что осталось (для будущей сессии)
 
-1. **`net.ts`** (~400 строк) — `createSocket`, `scheduleReconnect`,
-   `flushPendingQueue`, `sendClientEvent`, `ensureSocketOpen`, `loadDefaults`,
-   вместе с dispatcher'ом. Сердце clients↔server; нуждается в типобезопасной
-   прокачке колбэков (dispatch, state-mutators).
-2. **Preload for hashed chunks** — `<link rel="modulepreload">` в
-   `index.html` сейчас покрывает только `client.js`. Shared chunk подгружается
-   вторым HTTP-запросом. Чтобы убрать этот hop, нужно генерировать HTML из
-   билд-шага с реальными hash-именами чанков (или пере-именовать в стабильные
-   имена).
+1. **Разбивка `handleServerEvent`** (28 case) на хендлеры по доменам —
+   например `src/client/handlers/containers.ts` для `*_contents`/
+   `bazaar_max_price_response`, `handlers/combat.ts` для `stats_update`/
+   `combat_state`, и т.д. main.ts станет тоньше, но переплёт со state
+   (state-mutators) делает это структурной, а не code-splitting-работой.
+2. **Извлечение state в `state.ts`** — все `let current*` (currentStats,
+   currentAliases, currentSurvivalStatus, currentNavState, currentSurvivalSettings,
+   currentRoomAutoCommands, farm2Enabled/ZoneId, trackerCurrentVnum,
+   zoneScriptState, mapRecordingEnabled, hotkeys, commandHistory,
+   lastEnemy, pendingEquippedAction) в один типизированный store с
+   explicit setters. Обеспечит централизованный audit-log того, кто и
+   когда мутирует состояние.
+3. **Автоматическое `?v=N` cache-busting** в `scripts/build-client.ts` —
+   сейчас `?v=7` захардкожен в index.html. При смене client.js хэш
+   чанков меняется (преодолевает proxy-кеш), но сам `client.js`
+   остаётся тем же именем, так что `?v=N` всё ещё нужен для bump'а при
+   изменении содержимого. Можно автогенерить на основе content-hash.
 
 ### Коммиты в ветке `claude/refactor-client-performance-YQZmB`
 
@@ -594,5 +703,9 @@ Smoke bootstrap в headless Chromium: **~380 мс** (быстрее, чем в #
 1. `3c62ece` refactor(client): extract popups + nav-panel into dedicated modules
 
 ### Коммиты в ветке `claude/continue-refactoring-ldLR5`
+
+1. `8bbb2f2` refactor(client): extract map grid renderer into dedicated module
+
+### Коммиты в ветке `claude/continue-frontend-refactor-YGAwB`
 
 (добавляются по мере коммитов в этой сессии)
