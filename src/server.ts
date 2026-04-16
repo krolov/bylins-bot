@@ -15,6 +15,7 @@ import { createNavigationController } from "./server/navigation.ts";
 import { createContainerInspector } from "./server/containers.ts";
 import { createSendCommandHandler, normalizeTextMessage } from "./server/command-handler.ts";
 import { createMudTextPipeline } from "./server/mud-text-pipeline.ts";
+import { createHttpRoutes } from "./server/http-routes.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
@@ -476,20 +477,6 @@ const handleSendCommand = createSendCommandHandler({
   }),
 });
 
-function jsonResponse(data: unknown): Response {
-  return new Response(JSON.stringify(data), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
-}
-
-function getStaticFile(pathname: string): Bun.BunFile {
-  const safePath = pathname === "/" ? "/index.html" : pathname;
-  return Bun.file(new URL(`../public${safePath}`, import.meta.url));
-}
-
 function resetMapState(): void {
   parserState.lineBuffer = "";
   parserState.pendingRoomHeader = null;
@@ -602,6 +589,11 @@ roomChangedListeners.add((vnum: number) => {
   });
 });
 
+const httpRoutes = createHttpRoutes({
+  runtimeConfig,
+  getCurrentMapSnapshot: () => getCurrentMapSnapshot(),
+});
+
 const server = Bun.serve({
   hostname: runtimeConfig.host,
   port: runtimeConfig.port,
@@ -625,42 +617,7 @@ const server = Bun.serve({
       return new Response("WebSocket upgrade failed.", { status: 500 });
     }
 
-    if (url.pathname === "/api/config") {
-      return jsonResponse({
-        autoConnect: runtimeConfig.autoConnect,
-        host: runtimeConfig.mudHost,
-        port: runtimeConfig.mudPort,
-        tls: runtimeConfig.mudTls,
-        startupCommands: runtimeConfig.startupCommands,
-        commandDelayMs: runtimeConfig.commandDelayMs,
-      });
-    }
-
-    if (url.pathname === "/api/profiles") {
-      return jsonResponse({
-        profiles: runtimeConfig.profiles.map((p) => ({ id: p.id, name: p.name })),
-        defaultProfileId: runtimeConfig.defaultProfileId,
-      });
-    }
-
-    if (url.pathname === "/api/map/snapshot") {
-      return jsonResponse(await getCurrentMapSnapshot());
-    }
-
-    if (url.pathname.includes("..")) {
-      return new Response("Invalid path.", { status: 400 });
-    }
-
-    const file = getStaticFile(url.pathname);
-    return file.exists().then((exists) => {
-      if (!exists) {
-        return new Response("Not found.", { status: 404 });
-      }
-
-      const response = new Response(file);
-      response.headers.set("cache-control", "no-store");
-      return response;
-    });
+    return await httpRoutes.handle(url);
   },
   websocket: {
     data: {} as WsData,
