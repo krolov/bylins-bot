@@ -1,10 +1,12 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { runtimeConfig } from "./config.ts";
-import { LOG_DIR, LOG_FILE, DEBUG_LOG_FILE, MAX_OUTPUT_CHUNKS, NAVIGATION_STEP_TIMEOUT_MS, ANSI_ESCAPE_RE } from "./server/constants.ts";
+import { LOG_DIR, LOG_FILE, NAVIGATION_STEP_TIMEOUT_MS, ANSI_ESCAPE_RE } from "./server/constants.ts";
 import type { BunServerWebSocket } from "./server/constants.ts";
 import { extractChatLines } from "./server/chat.ts";
 import { extractMarketSales } from "./server/market.ts";
 import { LOOT_FROM_CORPSE_RE, PICKUP_FROM_GROUND_RE } from "./server/loot.ts";
+import { createBroadcaster } from "./server/broadcast.ts";
+import { createLogEvent, createStatusUpdater, sanitizeLogText, appendLogLine } from "./server/logging.ts";
 import { readLastProfileId, saveLastProfileId } from "./server/profile-storage.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
@@ -32,7 +34,12 @@ import type { Session } from "./mud-connection.ts";
 import { findVorozheRoute } from "./vorozhe-graph.ts";
 import { createBazaarNotifier } from "./bazaar-notifier.ts";
 
-const browserClients = new Set<BunServerWebSocket>();
+const broadcaster = createBroadcaster();
+const { browserClients, recentOutputChunks, sendServerEvent, broadcastServerEvent, rememberOutput } = broadcaster;
+
+let debugLogEnabled = false;
+const logEvent = createLogEvent({ getDebugLogEnabled: () => debugLogEnabled });
+
 const mudConnection = createMudConnection({
   logEvent: (ws, direction, message, details) => logEvent(ws, direction, message, details),
   sanitizeLogText: (text) => sanitizeLogText(text),
@@ -105,8 +112,8 @@ const mudConnection = createMudConnection({
   lineEnding: runtimeConfig.lineEnding,
 });
 const sharedSession = mudConnection.session;
+const updateSessionStatus = createStatusUpdater({ session: sharedSession, broadcastServerEvent });
 let activeProfileId: string = readLastProfileId();
-const recentOutputChunks: string[] = [];
 
 const pendingLootItems = new Map<string, number>();
 let lootSortTimer: ReturnType<typeof setTimeout> | null = null;
@@ -123,7 +130,6 @@ const mover = createMover({
   },
 });
 let mapRecordingEnabled = true;
-let debugLogEnabled = false;
 const mapStore = createMapStore(sql);
 const combatState = createCombatState();
 const currentRoomMobs = new Map<string, string>();
@@ -583,28 +589,6 @@ function parseAndBroadcastStats(text: string): void {
   }
 }
 
-function sendServerEvent(ws: BunServerWebSocket, event: ServerEvent): void {
-  ws.send(JSON.stringify(event));
-}
-
-function broadcastServerEvent(event: ServerEvent): void {
-  for (const client of browserClients) {
-    sendServerEvent(client, event);
-  }
-}
-
-function rememberOutput(text: string): void {
-  if (text.length === 0) {
-    return;
-  }
-
-  recentOutputChunks.push(text);
-
-  if (recentOutputChunks.length > MAX_OUTPUT_CHUNKS) {
-    recentOutputChunks.splice(0, recentOutputChunks.length - MAX_OUTPUT_CHUNKS);
-  }
-}
-
 async function sendSurvivalSettings(ws: BunServerWebSocket): Promise<void> {
   const survival = await mapStore.getSurvivalSettings();
   sendServerEvent(ws, { type: "survival_settings_data", payload: survival });
@@ -678,55 +662,6 @@ function sendDefaults(ws: BunServerWebSocket): void {
         energyMax: statsEnergyMax,
       },
     });
-  }
-}
-
-function updateSessionStatus(
-  state: Session["state"],
-  message: string,
-): void {
-  sharedSession.state = state;
-  sharedSession.statusMessage = message;
-  broadcastServerEvent({
-    type: "status",
-    payload: {
-      state,
-      message,
-    },
-  });
-}
-
-function sanitizeLogText(text: string): string {
-  return text.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-}
-
-function appendLogLine(line: string): void {
-  appendFileSync(LOG_FILE, `${line}\n`, "utf8");
-}
-
-function appendDebugLog(line: string): void {
-  appendFileSync(DEBUG_LOG_FILE, `${line}\n`, "utf8");
-}
-
-function logEvent(
-  ws: BunServerWebSocket | null,
-  direction: "session" | "mud-in" | "mud-out" | "browser-in" | "browser-out" | "error",
-  message: string,
-  details?: Record<string, string | number | boolean | null | undefined>,
-): void {
-  const timestamp = new Date().toISOString();
-  const sessionId = ws?.data.sessionId ?? "system";
-  const suffix = details
-    ? Object.entries(details)
-        .filter(([, value]) => value !== undefined)
-        .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-        .join(" ")
-    : "";
-
-  appendLogLine(`[${timestamp}] session=${sessionId} direction=${direction} message=${JSON.stringify(message)}${suffix ? ` ${suffix}` : ""}`);
-
-  if (debugLogEnabled && (direction === "mud-in" || direction === "mud-out")) {
-    appendDebugLog(`[${timestamp}] direction=${direction} message=${JSON.stringify(message)}${suffix ? ` ${suffix}` : ""}`);
   }
 }
 
