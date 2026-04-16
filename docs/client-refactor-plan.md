@@ -390,25 +390,97 @@ src/client/
 
 Smoke bootstrap в headless Chromium: **140–150 мс** (стабильно).
 
+### Сессия #4 (ветка `claude/continue-frontend-refactor-93c5m`)
+
+Два небольших, но хорошо изолированных распила — popups и nav-panel.
+
+```
+src/client/
+  popups.ts              (215) — alias / auto-cmd / map-context popups.
+                                 Фабрика `createPopups({getAliases,
+                                 getRoomAutoCommands, getNodeName})` возвращает
+                                 `{openAliasPopup, openMapContextMenu}`;
+                                 все остальные open/close/commit-handlers
+                                 владеются самим модулем. Исходящие команды —
+                                 через `bus.emit("client_send", ev)`.
+  nav-panel.ts           (413) — левый нав-панель: aliases текущей зоны,
+                                 соседние зоны, дальние зоны (BFS на
+                                 zone-graph), инфинит-скролл по дальним,
+                                 поиск. Фабрика `createNavPanel({getSnapshot,
+                                 getFullSnapshot, getZoneNames, getAliases})`
+                                 возвращает `{render, renderStatus}`. Модуль
+                                 сам вешает listeners на `#nav-panel` scroll
+                                 и `#nav-zones-search*`, владеет
+                                 `navZonesSearchQuery`, `farZonesPage`,
+                                 `allNeighbor/Far/VisitedZones`,
+                                 `allFarZonesFiltered`. `getZoneId` инлайнен
+                                 в модуль (pure `Math.floor(vnum/100)`).
+```
+
+Изменения в `main.ts`:
+- Удалены DOM-рефы `aliasPopup*`, `autoCmdPopup*`, `mapContext*` (14 штук)
+  и `nav*` (14 штук — `navAliasList`, `navZoneList`, `navFarZonesList`,
+  `navZoneAliasesTitle`, `navZonesSearch`/`Clear`, `navPanel`,
+  `navNeighborZonesSection`, `navFarZonesSection`, `navStatus`,
+  `navCurrentRoom` и `Empty`-варианты).
+- Удалены функции `openAliasPopup`, `closeAliasPopup`, `openAutoCmdPopup`,
+  `closeAutoCmdPopup`, `openMapContextMenu`, `closeMapContextMenu`,
+  `renderNavPanel`, `renderNavStatus`, `buildNavZoneItem`,
+  `applyNavZonesFilter`, `loadMoreFarZones`, `buildNeighborZones`,
+  `buildFarZones`, `buildAllVisitedZones`.
+- Удалено состояние `aliasPopupVnum`, `autoCmdPopupVnum`,
+  `mapContextMenuVnum`, `navZonesSearchQuery`, `farZonesPage`,
+  `FAR_ZONES_PAGE_SIZE`, `allFarZones`, `allNeighborZones`,
+  `allVisitedZones`, `allFarZonesFiltered`.
+- Удалены listener-блоки popups (save/delete/close для alias- и
+  auto-cmd-попапов, map-context-menu items, Escape/click-outside guard)
+  и nav (scroll, search input/clear).
+- Удалены type-импорты `NeighborZone`, `FarZone`.
+- Добавлены `const { openAliasPopup, openMapContextMenu } = createPopups({...})`
+  и `const { render: renderNavPanel, renderStatus: renderNavStatus } = createNavPanel({...})`.
+
+### main.ts по сессиям
+
+| Метрика | #1 | #2 | #3 | #4 |
+|---|---|---|---|---|
+| `src/client/main.ts` LOC | 3974 | 3174 | 2604 | 2084 |
+| Дельта к предыдущей | базовый | −800 | −570 | **−520** |
+
+### Bundle layout после сессии #4
+
+| Чанк | Размер | Когда грузится |
+|---|---|---|
+| `client.js` | 53.9 KB | Eager (старт) |
+| `styles.min.css` | 36.7 KB | Eager (preload) |
+| chunk-shared (bus + const) | 5.4 KB | Eager (импортирован main.ts) |
+| chunk-global-map | 10.6 KB | На клик 🗺️ |
+| chunk-item-db | 7.6 KB | На клик 📦 |
+| chunk-compare | 7.1 KB | На клик ⚖️ |
+| chunk-hotkeys | 3.6 KB | На клик 🎹 |
+| chunk-triggers | 3.0 KB | На клик ⚡ |
+| chunk-farm-settings | 2.8 KB | На клик 🌾⚙️ |
+| chunk-vorozhe | 2.8 KB | На клик 🧙 |
+| chunk-survival | 2.6 KB | На клик 🍞⚙️ |
+
+`client.js` чуть меньше, чем в #3 (было 54.3 KB, стало 53.9 KB), хотя фабрик
+добавилось две — видимо, минификатор получил чище область для DCE, а
+инлайн `getZoneId` сократил повторы.
+
+Smoke bootstrap в headless Chromium: **~250–300 мс** (оверхед первого
+запуска с чистым playwright-профилем; стабильный повторный — 140–170 мс).
+
 ### Что осталось (для будущей сессии)
 
 1. **`map-grid.ts`** (~1000 строк) — `integrateSnapshot` + `renderGridMap` +
    `updateMap` + z-level + pointer/drag handlers. Самый крупный кусок,
    сильно сцеплен с `latestMapSnapshot`, `gridLayout`, `mapRoomElements`,
-   `currentZLevel`, `zoneNames`. Для извлечения нужен общий state-объект.
-2. **`nav-panel.ts`** (~320 строк) — `renderNavPanel`, `buildNavZoneItem`,
-   `applyNavZonesFilter`, `buildNeighborZones/FarZones/AllVisitedZones`,
-   `renderNavStatus`. Сильная связь с `currentNavState`, `currentAliases`,
-   `currentRoomAutoCommands`, `allNeighborZones/FarZones/VisitedZones`,
-   `navZonesSearchQuery`, `farZonesPage`.
-3. **`net.ts`** (~400 строк) — `createSocket`, `scheduleReconnect`,
+   `currentZLevel`, `zoneNames`. Для извлечения нужен общий state-объект
+   или фабрика с десятком геттеров.
+2. **`net.ts`** (~400 строк) — `createSocket`, `scheduleReconnect`,
    `flushPendingQueue`, `sendClientEvent`, `ensureSocketOpen`, `loadDefaults`,
    вместе с dispatcher'ом. Сердце clients↔server; нуждается в типобезопасной
    прокачке колбэков (dispatch, state-mutators).
-4. **Alias/auto-cmd/map-context popups** (~150 строк) — маленький кластер
-   `openAliasPopup`/`openAutoCmdPopup`/`openMapContextMenu` + их close/commit
-   хэндлеры. Хорошая цель для одного файла `popups.ts`.
-5. **Preload for hashed chunks** — `<link rel="modulepreload">` в
+3. **Preload for hashed chunks** — `<link rel="modulepreload">` в
    `index.html` сейчас покрывает только `client.js`. Shared chunk подгружается
    вторым HTTP-запросом. Чтобы убрать этот hop, нужно генерировать HTML из
    билд-шага с реальными hash-именами чанков (или пере-именовать в стабильные
@@ -430,5 +502,9 @@ Smoke bootstrap в headless Chromium: **140–150 мс** (стабильно).
 2. `e64ec31` refactor(client): extract Farm, Survival, Global Map modals as dynamic chunks
 
 ### Коммиты в ветке `claude/continue-frontend-refactor-ccWkI`
+
+1. `3af463e` refactor(client): split main.ts into terminal/inventory/splitters modules
+
+### Коммиты в ветке `claude/continue-frontend-refactor-93c5m`
 
 (добавляются по мере коммитов в этой сессии)
