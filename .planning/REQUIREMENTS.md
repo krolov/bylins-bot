@@ -110,52 +110,56 @@ Deferred — следующая итерация после этого milestone
 
 ## Traceability
 
-Populated during roadmap creation.
+Populated during roadmap creation (2026-04-18).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SAFE-01 | TBD | Pending |
-| SAFE-02 | TBD | Pending |
-| SAFE-03 | TBD | Pending |
-| SAFE-04 | TBD | Pending |
-| SAFE-05 | TBD | Pending |
-| INFRA-01 | TBD | Pending |
-| INFRA-02 | TBD | Pending |
-| INFRA-03 | TBD | Pending |
-| INFRA-04 | TBD | Pending |
-| SRV-01 | TBD | Pending |
-| SRV-02 | TBD | Pending |
-| SRV-03 | TBD | Pending |
-| SRV-04 | TBD | Pending |
-| SRV-05 | TBD | Pending |
-| SRV-06 | TBD | Pending |
-| BUS-01 | TBD | Pending |
-| BUS-02 | TBD | Pending |
-| BUS-03 | TBD | Pending |
-| CLI-01 | TBD | Pending |
-| CLI-02 | TBD | Pending |
-| CLI-03 | TBD | Pending |
-| CLI-04 | TBD | Pending |
-| CLI-05 | TBD | Pending |
-| CLI-06 | TBD | Pending |
-| CLI-07 | TBD | Pending |
-| CLI-08 | TBD | Pending |
-| CLI-09 | TBD | Pending |
-| FREEZE-01 | TBD | Pending |
-| FREEZE-02 | TBD | Pending |
-| TEST-01 | TBD | Pending |
-| TEST-02 | TBD | Pending |
-| TEST-03 | TBD | Pending |
-| TEST-04 | TBD | Pending |
-| TEST-05 | TBD | Pending |
-| TEST-06 | TBD | Pending |
-| TEST-07 | TBD | Pending |
+| SAFE-01 | Phase 1 | Pending |
+| SAFE-02 | Phase 1 | Pending |
+| SAFE-03 | Phase 1 | Pending |
+| SAFE-04 | Phase 1 | Pending |
+| SAFE-05 | Phase 1 | Pending |
+| INFRA-01 | Phase 1 | Pending |
+| INFRA-02 | Phase 1 | Pending |
+| INFRA-03 | Phase 1 | Pending |
+| INFRA-04 | Phase 1 | Pending |
+| SRV-01 | Phase 2 | Pending |
+| SRV-02 | Phase 2 | Pending |
+| SRV-03 | Phase 2 | Pending |
+| SRV-04 | Phase 2 | Pending |
+| SRV-05 | Phase 2 | Pending |
+| SRV-06 | Phase 2 | Pending |
+| BUS-01 | Phase 2 | Pending |
+| BUS-02 | Phase 2 | Pending |
+| BUS-03 | Phase 3 | Pending |
+| CLI-01 | Phase 3 | Pending |
+| CLI-02 | Phase 3 | Pending |
+| CLI-03 | Phase 3 | Pending |
+| CLI-04 | Phase 3 | Pending |
+| CLI-05 | Phase 3 | Pending |
+| CLI-06 | Phase 3 | Pending |
+| CLI-07 | Phase 3 | Pending |
+| CLI-08 | Phase 3 | Pending |
+| CLI-09 | Phase 3 | Pending |
+| FREEZE-01 | Phase 3 | Pending |
+| FREEZE-02 | Phase 3 | Pending |
+| TEST-01 | Phase 4 | Pending |
+| TEST-02 | Phase 4 | Pending |
+| TEST-03 | Phase 4 | Pending |
+| TEST-04 | Phase 4 | Pending |
+| TEST-05 | Phase 4 | Pending |
+| TEST-06 | Phase 4 | Pending |
+| TEST-07 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 36 total
-- Mapped to phases: 0 (populated by roadmapper)
-- Unmapped: 36 ⚠️ (expected before roadmap)
+- Mapped to phases: 36 ✓
+- Unmapped: 0
+- Phase 1 (Safety Harness + Scaffolding Infrastructure): 9 requirements
+- Phase 2 (server.ts Extraction + Bus Cutover): 8 requirements
+- Phase 3 (Client Split + Freeze Fix + Bus Finalization): 12 requirements
+- Phase 4 (Hot-Path Tests): 7 requirements
 
 ---
 *Requirements defined: 2026-04-18*
-*Last updated: 2026-04-18 after initial definition*
+*Last updated: 2026-04-18 with traceability populated after roadmap creation*
