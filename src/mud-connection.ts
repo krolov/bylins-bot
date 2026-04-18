@@ -16,7 +16,7 @@ const SE = 240;
 const STARTUP_COMMAND_FALLBACK_MS = 1200;
 const KEEPALIVE_INTERVAL_MS = 30_000;
 const RECONNECT_DELAYS_MS = [5_000, 10_000, 20_000, 30_000, 60_000];
-const RECONNECT_MAX_ATTEMPTS = RECONNECT_DELAYS_MS.length;
+const RECONNECT_RETRY_INTERVAL_MS = 60_000;
 
 interface ResolvedConnectConfig {
   host: string;
@@ -305,20 +305,15 @@ export function createMudConnection(deps: MudConnectionDeps) {
 
     if (!options.byUser && lastConfig) {
       const attempt = session.reconnectAttempt;
-      if (attempt < RECONNECT_MAX_ATTEMPTS) {
-        const delay = RECONNECT_DELAYS_MS[attempt] ?? RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1];
-        session.reconnectAttempt += 1;
-        deps.logEvent(ws, "session", `Auto-reconnect in ${delay / 1000}s... (attempt ${session.reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`);
-        deps.updateSessionStatus("connecting", `Auto-reconnect in ${delay / 1000}s... (attempt ${session.reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`);
-        session.reconnectTimer = setTimeout(() => {
-          session.reconnectTimer = undefined;
-          session.disconnectedByUser = false;
-          void connectToMud(ws, session, lastConfig);
-        }, delay);
-      } else {
-        deps.logEvent(ws, "session", `Auto-reconnect exhausted after ${RECONNECT_MAX_ATTEMPTS} attempts. Manual reconnect required.`);
-        deps.updateSessionStatus(options.state ?? "disconnected", `Reconnect failed after ${RECONNECT_MAX_ATTEMPTS} attempts.`);
-      }
+      const delay = RECONNECT_DELAYS_MS[attempt] ?? RECONNECT_RETRY_INTERVAL_MS;
+      session.reconnectAttempt += 1;
+      deps.logEvent(ws, "session", `Auto-reconnect in ${delay / 1000}s... (attempt ${session.reconnectAttempt})`);
+      deps.updateSessionStatus("connecting", `Auto-reconnect in ${delay / 1000}s... (attempt ${session.reconnectAttempt})`);
+      session.reconnectTimer = setTimeout(() => {
+        session.reconnectTimer = undefined;
+        session.disconnectedByUser = false;
+        void connectToMud(ws, session, lastConfig);
+      }, delay);
     }
   }
 

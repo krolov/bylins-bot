@@ -1,4 +1,4 @@
-import type { FarmZoneSettings, SurvivalSettings } from "./map/store.ts";
+import type { FarmZoneSettings, SurvivalSettings, ZoneScriptSettings } from "./map/store.ts";
 
 export function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZoneSettings {
   return {
@@ -13,12 +13,14 @@ export function normalizeFarmZoneSettings(raw: Partial<FarmZoneSettings>): FarmZ
 export function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSettings {
   return {
     container: typeof raw.container === "string" ? raw.container : "",
-    foodItems: typeof raw.foodItems === "string" ? raw.foodItems : "",
-    flaskItems: typeof raw.flaskItems === "string" ? raw.flaskItems : "",
-    buyFoodItem: typeof raw.buyFoodItem === "string" ? raw.buyFoodItem : "",
-    buyFoodMax: typeof raw.buyFoodMax === "number" && Number.isFinite(raw.buyFoodMax) && raw.buyFoodMax > 0 ? Math.floor(raw.buyFoodMax) : 20,
-    buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : "",
-    fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : "",
-    fillFlaskSource: typeof raw.fillFlaskSource === "string" ? raw.fillFlaskSource : "",
+    foodItem: typeof raw.foodItem === "string" ? raw.foodItem : "",
+    eatCommand: typeof raw.eatCommand === "string" ? raw.eatCommand : "",
+  };
+}
+
+export function normalizeZoneScriptSettings(raw: Partial<ZoneScriptSettings>): ZoneScriptSettings {
+  const assistTarget = typeof raw.assistTarget === "string" ? raw.assistTarget.trim() : "";
+  return {
+    assistTarget: assistTarget.length > 0 ? assistTarget : undefined,
   };
 }

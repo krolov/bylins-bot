@@ -8,15 +8,14 @@ export interface FarmZoneSettings {
   lootHideCommand: string;
 }
 
+export interface ZoneScriptSettings {
+  assistTarget?: string;
+}
+
 export interface SurvivalSettings {
   container: string;
-  foodItems: string;
-  flaskItems: string;
-  buyFoodItem: string;
-  buyFoodMax: number;
-  buyFoodAlias: string;
-  fillFlaskAlias: string;
-  fillFlaskSource: string;
+  foodItem: string;
+  eatCommand: string;
 }
 
 export interface TriggerSettings {
@@ -76,6 +75,8 @@ export interface MapStore {
   resolveAliasAll(alias: string): Promise<number[]>;
   getFarmSettings(profileId: string, zoneId: number): Promise<FarmZoneSettings | null>;
   setFarmSettings(profileId: string, zoneId: number, settings: FarmZoneSettings): Promise<void>;
+  getZoneScriptSettings(): Promise<ZoneScriptSettings>;
+  setZoneScriptSettings(settings: ZoneScriptSettings): Promise<void>;
   getSurvivalSettings(): Promise<SurvivalSettings | null>;
   setSurvivalSettings(settings: SurvivalSettings): Promise<void>;
   getTriggerSettings(profileId: string): Promise<TriggerSettings | null>;
@@ -126,6 +127,10 @@ interface AliasRow {
 
 interface FarmSettingsRow {
   settings: FarmZoneSettings;
+}
+
+interface ZoneScriptSettingsRow {
+  settings: ZoneScriptSettings;
 }
 
 interface ItemRow {
@@ -200,6 +205,14 @@ export function createMapStore(database: DatabaseClient): MapStore {
           settings   JSONB NOT NULL,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (profile_id, zone_id)
+        )
+      `;
+
+      await database`
+        CREATE TABLE IF NOT EXISTS zone_script_settings (
+          id         TEXT PRIMARY KEY DEFAULT 'global',
+          settings   JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `;
 
@@ -451,6 +464,28 @@ export function createMapStore(database: DatabaseClient): MapStore {
         INSERT INTO farm_zone_settings (profile_id, zone_id, settings, updated_at)
         VALUES (${profileId}, ${zoneId}, ${settingsJson}::jsonb, NOW())
         ON CONFLICT (profile_id, zone_id)
+        DO UPDATE SET
+          settings = EXCLUDED.settings,
+          updated_at = NOW()
+      `;
+    },
+
+    async getZoneScriptSettings(): Promise<ZoneScriptSettings> {
+      const rows = await database<ZoneScriptSettingsRow[]>`
+        SELECT settings FROM zone_script_settings WHERE id = 'global'
+      `;
+      const raw = rows[0]?.settings;
+      if (raw === undefined || raw === null) return {};
+      if (typeof raw === "string") return JSON.parse(raw) as ZoneScriptSettings;
+      return raw;
+    },
+
+    async setZoneScriptSettings(settings: ZoneScriptSettings): Promise<void> {
+      const settingsJson = JSON.stringify(settings);
+      await database`
+        INSERT INTO zone_script_settings (id, settings, updated_at)
+        VALUES ('global', ${settingsJson}::jsonb, NOW())
+        ON CONFLICT (id)
         DO UPDATE SET
           settings = EXCLUDED.settings,
           updated_at = NOW()

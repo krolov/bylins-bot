@@ -1,4 +1,4 @@
-import type { SurvivalSettings } from "../events.type.ts";
+import type { SurvivalSettings, ZoneScriptSettings } from "../events.type.ts";
 
 export interface ConnectDefaults {
   autoConnect: boolean;
@@ -97,6 +97,10 @@ export interface FarmSettings {
   skinningSkinVerb: string;
   lootMeatCommand: string;
   lootHideCommand: string;
+}
+
+export interface ZoneScriptSettingsPayload {
+  assistTarget?: string;
 }
 
 export interface FarmRuntimeStats {
@@ -367,7 +371,12 @@ export type ServerEvent =
         currentStepIndex: number | null;
         steps: Array<{ index: number; label: string; status: string; error?: string }>;
         errorMessage: string | null;
+        loopWaitingUntil: number | null;
       };
+    }
+  | {
+      type: "zone_script_settings";
+      payload: ZoneScriptSettings;
     };
 
 export type ClientEvent =
@@ -420,4 +429,7 @@ export type ClientEvent =
   | { type: "bazaar_max_price_request"; payload: { itemName: string } }
   | { type: "equipped_scan" }
   | { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
-  | { type: "farming_toggle"; payload?: { enabled?: boolean; zoneId?: number } };
+  | { type: "farming_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
+  | { type: "farm2_loop_set"; payload: { enabled: boolean; delayMinutes: number } }
+  | { type: "zone_script_loop_set"; payload: { enabled: boolean; delayMinutes: number } }
+  | { type: "zone_script_settings_save"; payload?: Partial<ZoneScriptSettingsPayload> };

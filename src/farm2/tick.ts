@@ -20,7 +20,7 @@ export function scheduleTick(state: Farm2State, runTickFn: () => Promise<void>, 
 }
 
 export async function runTick(state: Farm2State, deps: Farm2ControllerDependencies): Promise<void> {
-  if (!state.enabled || state.tickInFlight) {
+  if (!state.enabled || state.tickInFlight || state.recalling) {
     return;
   }
 

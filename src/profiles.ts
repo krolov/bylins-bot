@@ -11,6 +11,8 @@ export interface CharacterProfile {
   gearProfile: boolean;
   /** Использовать стелс-режим боя (краст + закол + беж). Для татей. */
   stealthCombat?: boolean;
+  /** Использовать режим боя купца (обычное движение + приказать все убит). Для купцов. */
+  merchantCombat?: boolean;
 }
 
 export const profiles: CharacterProfile[] = [
@@ -27,6 +29,7 @@ export const profiles: CharacterProfile[] = [
     startupCommands: ["5", "алруг", "respect1", ""],
     commandDelayMs: 150,
     gearProfile: false,
+    merchantCombat: true,
   },
   {
     id: "rinli",

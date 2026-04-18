@@ -30,6 +30,7 @@ function getArg(name: string): string | null {
 
 const vnumsArg = getArg("vnums");
 const excludeArg = getArg("exclude");
+const blockArg = getArg("block");
 const startArg = getArg("start");
 const endArg = getArg("end");
 
@@ -53,7 +54,8 @@ function parseVnums(s: string): number[] {
 }
 
 const excludeSet = new Set(excludeArg ? parseVnums(excludeArg) : []);
-const requestedVnums = parseVnums(vnumsArg).filter((v) => !excludeSet.has(v));
+const blockSet = new Set(blockArg ? parseVnums(blockArg) : []);
+const requestedVnums = parseVnums(vnumsArg).filter((v) => !excludeSet.has(v) && !blockSet.has(v));
 
 if (requestedVnums.length === 0) {
   console.error("No vnums after exclusion.");
@@ -88,6 +90,7 @@ async function loadGraph(vnums: number[]): Promise<Graph> {
   for (const v of vnums) graph.set(v, new Map());
 
   for (const { from_vnum, to_vnum } of rows) {
+    if (blockSet.has(from_vnum) || blockSet.has(to_vnum)) continue;
     if (!graph.has(from_vnum)) graph.set(from_vnum, new Map());
     if (!graph.has(to_vnum)) graph.set(to_vnum, new Map());
     graph.get(from_vnum)!.set(to_vnum, 1);

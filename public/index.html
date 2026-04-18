@@ -27,7 +27,6 @@
       </form>
       <button id="farm-toggle-button" type="button" class="button-secondary button-small">Фарм: выкл</button>
 
-
       <div id="stats-bar" class="stats-bar">
         <div class="stat-bar stat-bar--hp">
           <div id="hp-bar-fill" class="stat-bar__fill"></div>
@@ -45,8 +44,6 @@
 
     <main class="shell">
       <aside class="panel panel--actions">
-        <button id="buy-food-btn" type="button" class="action-btn" title="Купить еду">🍞<span id="buy-food-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
-        <button id="fill-flask-btn" type="button" class="action-btn" title="Наполнить флягу">💧<span id="fill-flask-badge" class="action-btn__badge action-btn__badge--hidden" aria-hidden="true"></span></button>
         <button id="repair-btn" type="button" class="action-btn" title="Починить снаряжение">🔨</button>
         <button id="compare-button" type="button" class="action-btn" title="Сравнятор v2">⚖️</button>
         <div class="panel--actions__divider"></div>
@@ -226,11 +223,17 @@
         </div>
 
         <div id="container-panel-script" class="container-panels__panel container-panels__panel--hidden">
-          <div class="container-panel script-panel">
+            <div class="container-panel script-panel">
             <div class="container-panel__header script-panel__header">
               <span class="container-panel__title" id="script-panel-title">Скрипт</span>
                 <button id="script-toggle-btn" type="button" class="button-secondary button-small">Нет скрипта</button>
-            </div>
+                 <label class="script-loop-label" title="Бесконечный повтор">
+                   <input id="script-loop-enabled" type="checkbox" />
+                   <span>∞</span>
+                 </label>
+                 <input id="script-loop-delay" type="number" min="1" max="999" value="5" class="script-loop-delay" title="Пауза между повторами (мин)" />
+                 <input id="zone-script-assist-target" type="text" class="script-assist-target-input" placeholder="Помочь (ключ моба)" title="Ключевое слово нанятого моба для команды 'помочь'" />
+             </div>
             <div id="script-status-line" class="script-status-line script-status-line--hidden"></div>
             <div class="container-panel__scroll">
               <ul id="script-steps-list" class="script-steps-list"></ul>
@@ -363,74 +366,21 @@
 
           <div class="farm-modal__body">
             <div class="farm-modal__field farm-modal__field--inline">
-              <label for="survival-modal-container" class="farm-modal__label">Контейнер</label>
+              <label for="survival-modal-container" class="farm-modal__label">Склад</label>
               <input
                 id="survival-modal-container"
                 type="text"
                 class="topbar__input"
-                placeholder="мешок"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--section-header">
-              <span class="farm-modal__label">Еда</span>
-            </div>
-
-            <div class="farm-modal__field">
-              <label for="survival-modal-food-items" class="farm-modal__label">
-                Названия еды
-                <span class="farm-modal__hint">ключевые слова, по одному на строку</span>
-              </label>
-              <textarea
-                id="survival-modal-food-items"
-                class="farm-modal__textarea"
-                placeholder="хлеб&#10;мясо&#10;каравай"
-                rows="3"
-                autocomplete="off"
-                spellcheck="false"
-              ></textarea>
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--section-header">
-              <span class="farm-modal__label">Фляга</span>
-            </div>
-
-            <div class="farm-modal__field">
-              <label for="survival-modal-flask-items" class="farm-modal__label">
-                Названия фляги
-                <span class="farm-modal__hint">ключевые слова, по одному на строку</span>
-              </label>
-              <textarea
-                id="survival-modal-flask-items"
-                class="farm-modal__textarea"
-                placeholder="фляга&#10;бурдюк"
-                rows="2"
-                autocomplete="off"
-                spellcheck="false"
-              ></textarea>
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--section-header">
-              <span class="farm-modal__label">Покупка еды</span>
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-              <label for="survival-modal-buy-food-alias" class="farm-modal__label">Алиас места покупки еды</label>
-              <input
-                id="survival-modal-buy-food-alias"
-                type="text"
-                class="topbar__input"
+                placeholder="торба"
                 autocomplete="off"
                 spellcheck="false"
               />
             </div>
 
             <div class="farm-modal__field farm-modal__field--inline">
-              <label for="survival-modal-buy-food-item" class="farm-modal__label">Что покупать</label>
+              <label for="survival-modal-food-item" class="farm-modal__label">Название еды</label>
               <input
-                id="survival-modal-buy-food-item"
+                id="survival-modal-food-item"
                 type="text"
                 class="topbar__input"
                 placeholder="хлеб"
@@ -440,39 +390,12 @@
             </div>
 
             <div class="farm-modal__field farm-modal__field--inline">
-              <label for="survival-modal-buy-food-max" class="farm-modal__label">Максимум в мешке</label>
+              <label for="survival-modal-eat-command" class="farm-modal__label">Команда употребления</label>
               <input
-                id="survival-modal-buy-food-max"
-                type="number"
-                min="1"
-                class="farm-modal__number-input topbar__input"
-                value="20"
-              />
-            </div>
-
-
-            <div class="farm-modal__field farm-modal__field--section-header">
-              <span class="farm-modal__label">Наполнение фляги</span>
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-              <label for="survival-modal-fill-flask-alias" class="farm-modal__label">Алиас места с водой</label>
-              <input
-                id="survival-modal-fill-flask-alias"
+                id="survival-modal-eat-command"
                 type="text"
                 class="topbar__input"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </div>
-
-            <div class="farm-modal__field farm-modal__field--inline">
-              <label for="survival-modal-fill-flask-source" class="farm-modal__label">Источник воды</label>
-              <input
-                id="survival-modal-fill-flask-source"
-                type="text"
-                class="topbar__input"
-                placeholder="колодец"
+                placeholder="есть хлеб"
                 autocomplete="off"
                 spellcheck="false"
               />

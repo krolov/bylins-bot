@@ -2652,6 +2652,37 @@ button:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
+}
+
+.script-loop-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.script-loop-delay {
+  width: 40px;
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--input-bg, #1e1e1e);
+  color: var(--text, #ccc);
+  border: 1px solid var(--panel-border, #444);
+  border-radius: 3px;
+}
+
+.script-assist-target-input {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--input-bg, #1e1e1e);
+  color: var(--text, #ccc);
+  border: 1px solid var(--panel-border, #444);
+  border-radius: 3px;
 }
 
 .script-status-line {

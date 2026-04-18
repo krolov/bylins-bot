@@ -1,9 +1,9 @@
 import type { MapAlias, MapSnapshot } from "./map/types.ts";
-import type { FarmZoneSettings, SurvivalSettings, GameItem } from "./map/store.ts";
+import type { FarmZoneSettings, SurvivalSettings, GameItem, ZoneScriptSettings } from "./map/store.ts";
 import type { Farm2StateSnapshot } from "./farm2/index.ts";
 import type { TriggerState } from "./triggers.ts";
 import type { GatherState } from "./gather-script.ts";
-import type { CompareScanResult, CompareSlotResult, CompareCandidate } from "./compare-scan/index.ts";
+import type { CompareScanResult } from "./compare-scan/index.ts";
 import type { ZoneScriptStateSnapshot } from "./zone-scripts/index.ts";
 import type { ContainerKey } from "./container-tracker.ts";
 
@@ -40,6 +40,7 @@ export type ClientEvent =
         settings?: Partial<FarmZoneSettings>;
       };
     }
+  | { type: "zone_script_settings_save"; payload?: Partial<ZoneScriptSettings> }
   | { type: "survival_settings_get" }
   | { type: "survival_settings_save"; payload?: Partial<SurvivalSettings> }
   | { type: "triggers_toggle"; payload?: Partial<TriggerState> }
@@ -57,6 +58,8 @@ export type ClientEvent =
   | { type: "gather_sell_bag" }
   | { type: "zone_script_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
   | { type: "farming_toggle"; payload?: { enabled?: boolean; zoneId?: number } }
+  | { type: "farm2_loop_set"; payload: { enabled: boolean; delayMinutes: number } }
+  | { type: "zone_script_loop_set"; payload: { enabled: boolean; delayMinutes: number } }
   | { type: "zone_name_set"; payload: { zoneId: number; name: string | null } }
   | { type: "debug_log_toggle"; payload?: { enabled?: boolean } }
   | { type: "attack_nearest" }
@@ -139,6 +142,10 @@ export type ServerEvent =
         zoneId: number;
         settings: FarmZoneSettings | null;
       };
+    }
+  | {
+      type: "zone_script_settings";
+      payload: ZoneScriptSettings;
     }
   | {
       type: "survival_settings_data";
@@ -249,6 +256,7 @@ export type {
   FarmZoneSettings,
   SurvivalSettings,
   GameItem,
+  ZoneScriptSettings,
 } from "./map/store.ts";
 export type { Farm2StateSnapshot } from "./farm2/index.ts";
 export type { ZoneScriptStateSnapshot } from "./zone-scripts/index.ts";

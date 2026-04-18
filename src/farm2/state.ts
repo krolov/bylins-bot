@@ -26,6 +26,11 @@ export function createInitialState(config: Farm2Config): Farm2State {
     pendingRoomScanSetAt: 0,
     lastRoomCorpseCount: 0,
     attackSentAt: 0,
+    recalling: false,
+    recallTimer: createTickTimer(),
+    loopEnabled: false,
+    loopDelayMs: 0,
+    loopRestartScheduledAt: null,
   };
 }
 
@@ -66,6 +71,9 @@ export function resetTrackingState(state: Farm2State): void {
   state.pendingRoomScanSetAt = 0;
   state.lastRoomCorpseCount = 0;
   state.attackSentAt = 0;
+  state.recalling = false;
+  state.recallTimer.clear();
+  state.loopRestartScheduledAt = null;
 }
 
 export function disable(

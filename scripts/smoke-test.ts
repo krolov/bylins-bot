@@ -10,15 +10,49 @@
 //
 // Run: bun run scripts/smoke-test.ts
 
-import { spawnSync } from "node:child_process";
 import { Module, createRequire } from "node:module";
+
+interface PlaywrightConsoleMessage {
+  type(): string;
+  text(): string;
+}
+
+interface PlaywrightPageError {
+  message: string;
+}
+
+interface PlaywrightPage {
+  on(event: "console", handler: (msg: PlaywrightConsoleMessage) => void): void;
+  on(event: "pageerror", handler: (err: PlaywrightPageError) => void): void;
+  goto(url: string, options: { waitUntil: "domcontentloaded" }): Promise<void>;
+  waitForFunction(fn: () => boolean, options?: { timeout?: number }): Promise<void>;
+  evaluate<TArg, TResult>(fn: (arg: TArg) => TResult, arg: TArg): Promise<TResult>;
+  evaluate<TResult>(fn: () => TResult): Promise<TResult>;
+  click(selector: string): Promise<void>;
+  waitForSelector(selector: string, options?: { timeout?: number }): Promise<void>;
+  waitForTimeout(timeout: number): Promise<void>;
+  locator(selector: string): { click(options?: { force?: boolean }): Promise<void> };
+}
+
+interface PlaywrightContext {
+  newPage(): Promise<PlaywrightPage>;
+}
+
+interface PlaywrightBrowser {
+  newContext(): Promise<PlaywrightContext>;
+  close(): Promise<void>;
+}
+
+interface PlaywrightChromium {
+  launch(options: { headless: boolean }): Promise<PlaywrightBrowser>;
+}
 
 // Make globally-installed playwright importable from this script.
 process.env.NODE_PATH = `${process.env.NODE_PATH ?? ""}:/opt/node22/lib/node_modules`;
-// @ts-ignore — internal API
-Module._initPaths();
+const moduleWithInitPaths = Module as typeof Module & { _initPaths(): void };
+moduleWithInitPaths._initPaths();
 const requireGlobal = createRequire("/opt/node22/lib/node_modules/");
-const { chromium } = requireGlobal("playwright") as typeof import("playwright");
+const { chromium } = requireGlobal("playwright") as { chromium: PlaywrightChromium };
 
 // ── Mock backend ──────────────────────────────────────────────────────────────
 const port = 38771;
@@ -89,10 +123,10 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext();
 const page = await context.newPage();
 
-page.on("console", (msg) => {
+page.on("console", (msg: PlaywrightConsoleMessage) => {
   if (msg.type() === "error") consoleErrors.push(msg.text());
 });
-page.on("pageerror", (err) => {
+page.on("pageerror", (err: PlaywrightPageError) => {
   pageErrors.push(`${err.message}`);
 });
 
@@ -112,7 +146,7 @@ const actionBtnIds = [
   "scratch-clan-btn", "equip-all-btn", "vorozhe-button", "debug-log-button",
 ];
 for (const id of actionBtnIds) {
-  const exists = await page.evaluate((x) => !!document.getElementById(x), id);
+  const exists = await page.evaluate((x: string) => !!document.getElementById(x), id);
   if (!exists) failures.push(`missing action button #${id}`);
 }
 
@@ -172,7 +206,7 @@ await page.waitForSelector("#item-db-modal:not(.farm-modal--hidden)", { timeout:
 });
 await page.locator("#item-db-modal-close").click({ force: true });
 await page.waitForFunction(
-  () => document.getElementById("item-db-modal")?.classList.contains("farm-modal--hidden"),
+  () => document.getElementById("item-db-modal")?.classList.contains("farm-modal--hidden") === true,
   { timeout: 2000 },
 ).catch(() => {
   failures.push("item-db modal did not close");

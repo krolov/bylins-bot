@@ -1,4 +1,4 @@
-import type { SurvivalSettings } from "../events.type.ts";
+import type { SurvivalSettings, ZoneScriptSettings } from "../events.type.ts";
 import type {
   ConnectDefaults,
   ProfilesResponse,
@@ -70,13 +70,12 @@ const scriptStepsList = requireElement<HTMLUListElement>("#script-steps-list");
 const scriptPanelTitle = requireElement<HTMLSpanElement>("#script-panel-title");
 const scriptStatusLine = requireElement<HTMLDivElement>("#script-status-line");
 const scriptToggleBtn = requireElement<HTMLButtonElement>("#script-toggle-btn");
+const scriptLoopEnabled = requireElement<HTMLInputElement>("#script-loop-enabled");
+const scriptLoopDelay = requireElement<HTMLInputElement>("#script-loop-delay");
+const zoneScriptAssistTargetInput = requireElement<HTMLInputElement>("#zone-script-assist-target");
 const survivalSettingsButton = requireElement<HTMLButtonElement>("#survival-settings-button");
 
-const buyFoodBtn = requireElement<HTMLButtonElement>("#buy-food-btn");
-const fillFlaskBtn = requireElement<HTMLButtonElement>("#fill-flask-btn");
 const repairBtn = requireElement<HTMLButtonElement>("#repair-btn");
-const buyFoodBadge = requireElement<HTMLSpanElement>("#buy-food-badge");
-const fillFlaskBadge = requireElement<HTMLSpanElement>("#fill-flask-badge");
 
 const triggersButton = requireElement<HTMLButtonElement>("#triggers-button");
 
@@ -106,33 +105,43 @@ const inventoryPanelList = requireElement<HTMLTableSectionElement>("#inventory-p
 
 
 let currentSurvivalSettings: SurvivalSettings = defaultSurvivalSettings();
+let currentZoneScriptSettings: ZoneScriptSettings = defaultZoneScriptSettings();
 
 function defaultSurvivalSettings(): SurvivalSettings {
-  return { container: "", foodItems: "", flaskItems: "", buyFoodItem: "", buyFoodMax: 20, buyFoodAlias: "", fillFlaskAlias: "", fillFlaskSource: "" };
+  return { container: "", foodItem: "", eatCommand: "" };
 }
 
 function normalizeSurvivalSettings(raw: Partial<SurvivalSettings>): SurvivalSettings {
   const def = defaultSurvivalSettings();
   return {
     container: typeof raw.container === "string" ? raw.container : def.container,
-    foodItems: typeof raw.foodItems === "string" ? raw.foodItems : def.foodItems,
-    flaskItems: typeof raw.flaskItems === "string" ? raw.flaskItems : def.flaskItems,
-    buyFoodItem: typeof raw.buyFoodItem === "string" ? raw.buyFoodItem : def.buyFoodItem,
-    buyFoodMax: typeof raw.buyFoodMax === "number" && Number.isFinite(raw.buyFoodMax) && raw.buyFoodMax > 0 ? Math.floor(raw.buyFoodMax) : def.buyFoodMax,
-    buyFoodAlias: typeof raw.buyFoodAlias === "string" ? raw.buyFoodAlias : def.buyFoodAlias,
-    fillFlaskAlias: typeof raw.fillFlaskAlias === "string" ? raw.fillFlaskAlias : def.fillFlaskAlias,
-    fillFlaskSource: typeof raw.fillFlaskSource === "string" ? raw.fillFlaskSource : def.fillFlaskSource,
+    foodItem: typeof raw.foodItem === "string" ? raw.foodItem : def.foodItem,
+    eatCommand: typeof raw.eatCommand === "string" ? raw.eatCommand : def.eatCommand,
   };
 }
-function updateActionButtons(): void {
-  buyFoodBtn.disabled = !currentSurvivalSettings.buyFoodAlias.trim() || !currentSurvivalSettings.buyFoodItem.trim();
-  fillFlaskBtn.disabled = !currentSurvivalSettings.fillFlaskAlias.trim();
+
+function defaultZoneScriptSettings(): ZoneScriptSettings {
+  return { assistTarget: undefined };
 }
 
-function updateActionBadges(): void {
-  buyFoodBadge.classList.toggle("action-btn__badge--hidden", !currentSurvivalStatus.foodEmpty);
-  fillFlaskBadge.classList.toggle("action-btn__badge--hidden", !currentSurvivalStatus.flaskEmpty);
+function fillZoneScriptSettings(settings: ZoneScriptSettings): void {
+  zoneScriptAssistTargetInput.value = settings.assistTarget ?? "";
 }
+
+function commitZoneScriptSettings(): void {
+  const assistTarget = zoneScriptAssistTargetInput.value.trim();
+  currentZoneScriptSettings = {
+    assistTarget: assistTarget.length > 0 ? assistTarget : undefined,
+  };
+  sendClientEvent({
+    type: "zone_script_settings_save",
+    payload: currentZoneScriptSettings,
+  });
+}
+
+function updateActionButtons(): void {}
+
+function updateActionBadges(): void {}
 
 function switchMapTab(tab: "map"): void {
   mapTabMap.classList.toggle("map-tab--active", tab === "map");
@@ -277,17 +286,23 @@ function renderFarmButton(): void {
 }
 
 
-function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; steps: Array<{ index: number; label: string; status: string; error?: string }>; errorMessage: string | null }): void {
+function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; steps: Array<{ index: number; label: string; status: string; error?: string }>; errorMessage: string | null; loopWaitingUntil?: number | null }): void {
   scriptPanelTitle.textContent = state.zoneName ? `Скрипт: ${state.zoneName}` : "Скрипт";
 
   if (state.errorMessage) {
     scriptStatusLine.textContent = state.errorMessage;
     scriptStatusLine.classList.remove("script-status-line--hidden");
+  } else if (state.loopWaitingUntil != null) {
+    const secsLeft = Math.max(0, Math.round((state.loopWaitingUntil - Date.now()) / 1000));
+    const mins = Math.floor(secsLeft / 60);
+    const secs = secsLeft % 60;
+    scriptStatusLine.textContent = `Следующий запуск через ${mins}:${String(secs).padStart(2, "0")}`;
+    scriptStatusLine.classList.remove("script-status-line--hidden");
   } else {
     scriptStatusLine.classList.add("script-status-line--hidden");
   }
 
-  if (state.enabled) {
+  if (state.enabled || state.loopWaitingUntil != null) {
     scriptToggleBtn.textContent = "Стоп";
     scriptToggleBtn.disabled = false;
   } else {
@@ -356,6 +371,7 @@ function handleServerEvent(message: ServerEvent): void {
       tlsInput.checked = message.payload.tls;
       startupCommandsInput.value = message.payload.startupCommands.join("\n");
       commandDelayInput.value = String(message.payload.commandDelayMs);
+      sendScriptLoopConfig();
       break;
     case "status":
       appendSystemLine(message.payload.message);
@@ -393,6 +409,13 @@ function handleServerEvent(message: ServerEvent): void {
       if (message.payload.enabled) {
         switchContainerTab("script");
       }
+      break;
+    case "zone_script_settings":
+      currentZoneScriptSettings = {
+        ...defaultZoneScriptSettings(),
+        ...message.payload,
+      };
+      fillZoneScriptSettings(currentZoneScriptSettings);
       break;
     case "stats_update":
       currentStats = message.payload;
@@ -727,40 +750,6 @@ bus.on<SurvivalSettings>("survival_settings_commit", (payload) => {
   updateActionButtons();
 });
 
-buyFoodBtn.addEventListener("click", () => {
-  const alias = currentSurvivalSettings.buyFoodAlias.trim();
-  if (alias) {
-    const aliasName = alias.toLowerCase();
-    const allVnums = currentAliases
-      .filter(a => a.alias.toLowerCase() === aliasName)
-      .map(a => a.vnum);
-    if (allVnums.length > 0) {
-      sendClientEvent({ type: "goto_and_run", payload: { vnums: allVnums, commands: [], action: "buy_food" } });
-      return;
-    }
-    appendSystemLine(`[survival] алиас "${alias}" не найден на карте`);
-    return;
-  }
-  appendSystemLine("[survival] не задан алиас места покупки еды");
-});
-
-fillFlaskBtn.addEventListener("click", () => {
-  const alias = currentSurvivalSettings.fillFlaskAlias.trim();
-  if (alias) {
-    const aliasName = alias.toLowerCase();
-    const allVnums = currentAliases
-      .filter(a => a.alias.toLowerCase() === aliasName)
-      .map(a => a.vnum);
-    if (allVnums.length > 0) {
-      sendClientEvent({ type: "goto_and_run", payload: { vnums: allVnums, commands: [], action: "fill_flask" } });
-      return;
-    }
-    appendSystemLine(`[survival] алиас "${alias}" не найден на карте`);
-    return;
-  }
-  appendSystemLine("[survival] не задан алиас места с водой");
-});
-
 repairBtn.addEventListener("click", () => {
   sendClientEvent({ type: "repair_start" });
 });
@@ -867,7 +856,7 @@ containerTabNav.addEventListener("click", () => switchContainerTab("nav"));
 containerTabScript.addEventListener("click", () => switchContainerTab("script"));
 
 scriptToggleBtn.addEventListener("click", () => {
-  if (zoneScriptState?.payload.enabled) {
+  if (zoneScriptState?.payload.enabled || zoneScriptState?.payload.loopWaitingUntil != null) {
     sendClientEvent({ type: "zone_script_toggle", payload: { enabled: false } });
   } else {
     const script = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
@@ -876,6 +865,27 @@ scriptToggleBtn.addEventListener("click", () => {
     }
   }
 });
+
+function sendScriptLoopConfig(): void {
+  const enabled = scriptLoopEnabled.checked;
+  const delayMinutes = Math.max(1, parseInt(scriptLoopDelay.value, 10) || 5);
+  localStorage.setItem("scriptLoopEnabled", String(enabled));
+  localStorage.setItem("scriptLoopDelay", String(delayMinutes));
+  sendClientEvent({ type: "zone_script_loop_set", payload: { enabled, delayMinutes } });
+}
+
+scriptLoopEnabled.checked = localStorage.getItem("scriptLoopEnabled") === "true";
+scriptLoopDelay.value = localStorage.getItem("scriptLoopDelay") ?? "5";
+scriptLoopEnabled.addEventListener("change", sendScriptLoopConfig);
+scriptLoopDelay.addEventListener("change", sendScriptLoopConfig);
+zoneScriptAssistTargetInput.addEventListener("change", commitZoneScriptSettings);
+zoneScriptAssistTargetInput.addEventListener("blur", commitZoneScriptSettings);
+
+setInterval(() => {
+  if (zoneScriptState?.payload.loopWaitingUntil != null) {
+    renderScriptSteps(zoneScriptState.payload);
+  }
+}, 1000);
 
 // ── Hotkey system ─────────────────────────────────────────────────────────────
 

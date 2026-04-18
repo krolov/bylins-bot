@@ -14,9 +14,9 @@ export const merchantConfig: CharacterConfig = {
 
   damageAvgWeight: 8,
 
-  rightWeaponClasses: ["проникающее оружие", "иное оружие"],
-  leftWeaponClasses: ["проникающее оружие", "иное оружие"],
-  twoHandedWeaponClasses: ["палицы и дубины", "иное оружие"],
+  rightWeaponClasses: ["копья и рогатины", "палицы и дубины", "проникающее оружие", "иное оружие"],
+  leftWeaponClasses: ["копья и рогатины", "проникающее оружие", "иное оружие"],
+  twoHandedWeaponClasses: ["палицы и дубины", "копья и рогатины", "иное оружие"],
 
   weaponMaterials: [],
 
@@ -34,15 +34,21 @@ export const merchantConfig: CharacterConfig = {
   ],
 
   properties: [
-    { affect: "обаяние",     scorePerPoint: 50 },
-    { affect: "телосложение", scorePerPoint: 25 },
-    { affect: "защита",      scorePerPoint:  5 },
-    { affect: "броня",       scorePerPoint:  3 },
-    { affect: "попадание",   scorePerPoint:  2 },
-    { affect: "повреждение", scorePerPoint:  2 },
-    { affect: "реакция",     scorePerPoint:  2 },
-    { affect: "здоровье",    scorePerPoint:  2 },
-    { affect: "макс.жизнь",  scorePerPoint:  2 },
-    { affect: "инициатива",  scorePerPoint:  1 },
+    { affect: "обаяние",      scorePerPoint: 50 },
+    { affect: "интеллект",    scorePerPoint: 50 },
+    { affect: "телосложение", scorePerPoint: 20 },
+    { affect: "сила",         scorePerPoint: 10 },
+    { affect: "ловкость",     scorePerPoint: 10 },
+    { affect: "защита",       scorePerPoint:  5 },
+    { affect: "броня",        scorePerPoint:  3 },
+    { affect: "попадание",    scorePerPoint:  2 },
+    { affect: "повреждение",  scorePerPoint:  2 },
+    { affect: "реакция",      scorePerPoint:  2 },
+    { affect: "воля",         scorePerPoint:  2 },
+    { affect: "стойкость",    scorePerPoint:  2 },
+    { affect: "разум",        scorePerPoint:  2 },
+    { affect: "здоровье",     scorePerPoint:  2 },
+    { affect: "макс.жизнь",   scorePerPoint:  2 },
+    { affect: "инициатива",   scorePerPoint:  1 },
   ],
 };

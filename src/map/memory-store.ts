@@ -1,5 +1,5 @@
 import type { MapAlias, MapEdge, MapNode, MapSnapshot } from "./types";
-import type { GameItem, MapStore, MarketSale, MobName, RoomAutoCommand } from "./store";
+import type { GameItem, MapStore, MarketSale, MobName, RoomAutoCommand, ZoneScriptSettings } from "./store";
 
 export function createMemoryMapStore(): MapStore {
   const rooms = new Map<number, MapNode>();
@@ -117,6 +117,12 @@ export function createMemoryMapStore(): MapStore {
     },
 
     async setFarmSettings(_profileId: string, _zoneId: number, _settings: unknown): Promise<void> {},
+
+    async getZoneScriptSettings(): Promise<ZoneScriptSettings> {
+      return {};
+    },
+
+    async setZoneScriptSettings(_settings: ZoneScriptSettings): Promise<void> {},
 
     async getSurvivalSettings() {
       return null;

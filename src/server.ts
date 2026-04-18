@@ -3,25 +3,24 @@ import { runtimeConfig } from "./config.ts";
 import { sql } from "./db.ts";
 import { createCombatState } from "./combat-state.ts";
 import { createFarm2Controller } from "./farm2/index.ts";
-import { createSurvivalController, normalizeSurvivalConfig, resolveSurvivalCommands, parseInspectItems, parseInventoryItems } from "./survival-script.ts";
+import { createSurvivalController, normalizeSurvivalConfig, parseInventoryItems } from "./survival-script.ts";
 import { findPath } from "./map/pathfinder.ts";
 import type { PathStep } from "./map/pathfinder.ts";
 import { createParserState, feedText } from "./map/parser.ts";
 import { createMapStore } from "./map/store.ts";
-import type { MarketSale } from "./map/store.ts";
 import { createTrackerState, processParsedEvents, trackOutgoingCommand } from "./map/tracker.ts";
 import { createMover } from "./map/mover.ts";
-import type { Direction } from "./map/types.ts";
+import type { Direction, MapSnapshot } from "./map/types.ts";
 import { createTriggers } from "./triggers.ts";
 import { runCompareScan } from "./compare-scan/index.ts";
-import { fetchWiki, parseSearchResults, parseGearItemCard, gearItemCardToData, parseWikiItemCard, parseMudIdentifyBlock, mergeItemSources, gearItemCardFromCache, searchAndCacheWikiItem } from "./wiki.ts";
+import { searchAndCacheWikiItem } from "./wiki.ts";
 import { createContainerTracker } from "./container-tracker.ts";
 import { createItemIdentifier } from "./item-identify.ts";
 import { createRepairController } from "./repair-script.ts";
 import { createGatherController } from "./gather-script.ts";
 import { createZoneScriptController } from "./zone-scripts/index.ts";
-import type { WsData, ConnectPayload, ClientEvent, ServerEvent, FarmZoneSettings, SurvivalSettings, TriggerState, MapAlias, MapSnapshot, GameItem } from "./events.type.ts";
-import { normalizeFarmZoneSettings, normalizeSurvivalSettings } from "./settings-normalizers.ts";
+import type { WsData, ClientEvent, ServerEvent, ZoneScriptSettings } from "./events.type.ts";
+import { normalizeFarmZoneSettings, normalizeSurvivalSettings, normalizeZoneScriptSettings } from "./settings-normalizers.ts";
 import { createMudConnection } from "./mud-connection.ts";
 import type { Session } from "./mud-connection.ts";
 import { findVorozheRoute } from "./vorozhe-graph.ts";
@@ -101,7 +100,10 @@ const mudConnection = createMudConnection({
       let m: RegExpExecArray | null;
       while ((m = PICKUP_FROM_GROUND_RE.exec(stripped)) !== null) {
         const name = m[1]?.trim();
-        if (name) pendingLootItems.set(name, (pendingLootItems.get(name) ?? 0) + 1);
+        if (!name) continue;
+        const kw = name.split(/\s+/)[0]?.slice(0, 6) ?? "";
+        if (rashodExemptKeywords.has(kw)) continue;
+        pendingLootItems.set(name, (pendingLootItems.get(name) ?? 0) + 1);
       }
       scheduleLootSort();
     }
@@ -109,7 +111,7 @@ const mudConnection = createMudConnection({
       logEvent(ws, "error", error instanceof Error ? `Automapper error: ${error.message}` : "Automapper error.");
     });
   },
-  onTcpError: (ws, message) => {
+  onTcpError: (_ws, message) => {
     broadcastServerEvent({ type: "error", payload: { message } });
   },
   onSessionTeardown: () => {
@@ -184,6 +186,7 @@ const LOOT_FROM_CORPSE_RE = /Вы взяли (.+?) из трупа /gi;
 const PICKUP_FROM_GROUND_RE = /Вы подняли (?!труп\b)(.+?)\./gi;
 
 const pendingLootItems = new Map<string, number>();
+const rashodExemptKeywords = new Set<string>();
 let lootSortTimer: ReturnType<typeof setTimeout> | null = null;
 interface ParsedMarketSale {
   source: "bazaar" | "auction";
@@ -249,6 +252,7 @@ const mover = createMover({
 let mapRecordingEnabled = true;
 let debugLogEnabled = false;
 const mapStore = createMapStore(sql);
+let zoneScriptSettings: ZoneScriptSettings = {};
 const combatState = createCombatState();
 const currentRoomMobs = new Map<string, string>();
 let currentRoomCorpseCount = 0;
@@ -282,29 +286,16 @@ const farm2Controller = createFarm2Controller({
   },
 });
 const survivalController = createSurvivalController({
-  getCurrentRoomId: () => trackerState.currentRoomId,
   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
     mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "survival-script");
   },
-  resolveNearest: async (alias) => {
-    const vnums = await mapStore.resolveAliasAll(alias);
-    if (vnums.length === 0) return null;
-    return vnums[0] ?? null;
-  },
-  navigateTo: (vnum) => startNavigation(null, vnum),
   isInCombat: () => combatState.getInCombat(),
   onLog: (message) => {
     appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
   },
   onDebugLog: (message) => {
     appendLogLine(`[${new Date().toISOString()}] session=system direction=session message=${JSON.stringify(message)}`);
-  },
-  onStatusChange: (status) => {
-    broadcastServerEvent({
-      type: "survival_status",
-      payload: status,
-    });
   },
 });
 
@@ -351,6 +342,10 @@ const gatherController = createGatherController({
   },
   onLog: (message) => {
     logEvent(null, "session", message);
+  },
+  onPickupForRaskhod: (keyword) => {
+    rashodExemptKeywords.add(keyword);
+    setTimeout(() => rashodExemptKeywords.delete(keyword), 10_000);
   },
 });
 
@@ -491,6 +486,7 @@ const zoneScriptController = createZoneScriptController({
   onLog: (message) => {
     logEvent(null, "session", message);
   },
+  getStats: () => ({ hp: statsHp, hpMax: statsHpMax }),
   getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
   move: (direction) => mover.move(direction, trackerState.currentRoomId),
   stealthMove: (direction) => mover.stealthMove(direction, trackerState.currentRoomId),
@@ -501,9 +497,14 @@ const zoneScriptController = createZoneScriptController({
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
     mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "см", "zone-script");
   },
+  getAssistTarget: () => zoneScriptSettings.assistTarget,
   isStealthProfile: () => {
     const profile = runtimeConfig.profiles.find((p) => p.id === activeProfileId);
     return profile?.stealthCombat === true;
+  },
+  isMerchantProfile: () => {
+    const profile = runtimeConfig.profiles.find((p) => p.id === activeProfileId);
+    return profile?.merchantCombat === true;
   },
   mobResolver: {
     getMobCombatNamesByZone: (zoneId) => mapStore.getMobCombatNamesByZone(zoneId),
@@ -516,6 +517,10 @@ const zoneScriptController = createZoneScriptController({
   },
   autoSortInventory: async () => {
     await autoSortInventory();
+  },
+  addMudTextListener: (handler) => {
+    mudTextHandlers.add(handler);
+    return () => mudTextHandlers.delete(handler);
   },
 });
 sessionTeardownHooks.add(() => zoneScriptController.handleSessionClosed());
@@ -749,6 +754,27 @@ async function sendSurvivalSettings(ws: BunServerWebSocket): Promise<void> {
   sendServerEvent(ws, { type: "survival_settings_data", payload: survival });
 }
 
+async function loadZoneScriptSettings(): Promise<ZoneScriptSettings> {
+  const raw = await mapStore.getZoneScriptSettings();
+  const normalized = normalizeZoneScriptSettings(raw);
+  zoneScriptSettings = normalized;
+  return normalized;
+}
+
+function sendZoneScriptSettings(ws: BunServerWebSocket): void {
+  sendServerEvent(ws, {
+    type: "zone_script_settings",
+    payload: zoneScriptSettings,
+  });
+}
+
+function broadcastZoneScriptSettings(): void {
+  broadcastServerEvent({
+    type: "zone_script_settings",
+    payload: zoneScriptSettings,
+  });
+}
+
 function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "defaults",
@@ -770,11 +796,6 @@ function sendDefaults(ws: BunServerWebSocket): void {
   sendServerEvent(ws, {
     type: "triggers_state",
     payload: triggers.getState(),
-  });
-
-  sendServerEvent(ws, {
-    type: "survival_status",
-    payload: survivalController.getStatus(),
   });
 
   sendServerEvent(ws, {
@@ -801,6 +822,8 @@ function sendDefaults(ws: BunServerWebSocket): void {
     type: "zone_script_list",
     payload: zoneScriptController.getZoneList(),
   });
+
+  sendZoneScriptSettings(ws);
 
   sendServerEvent(ws, {
     type: "combat_state",
@@ -1136,24 +1159,6 @@ async function startNavigationToNearest(ws: BunServerWebSocket | null, targetVnu
   await startNavigation(ws, bestVnum);
 }
 
-async function inspectContainer(ws: BunServerWebSocket | null, container: string): Promise<string> {
-  if (!sharedSession.tcpSocket || !sharedSession.connected) {
-    return "";
-  }
-  const result = containerTracker.waitForInspectResult(2000);
-  mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, `осм ${container}`, "inspect-container");
-  return result;
-}
-
-async function inspectInventory(ws: BunServerWebSocket | null): Promise<string> {
-  if (!sharedSession.tcpSocket || !sharedSession.connected) {
-    return "";
-  }
-  const result = containerTracker.waitForInspectResult(2000);
-  mudConnection.writeAndLogMudCommand(ws, sharedSession.tcpSocket!, "инв", "inspect-inventory");
-  return result;
-}
-
 function scheduleSurvivalTick(delayMs: number): void {
   if (survivalTickTimer !== null) return;
   survivalTickTimer = setTimeout(() => {
@@ -1181,7 +1186,6 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
   survivalController.handleMudText(text);
   gatherController.handleMudText(text);
 
-  const stripped = text.replace(ANSI_ESCAPE_REGEXP, "");
   const { enteredCombat, exitedCombat } = combatState.getTransition();
 
   if (enteredCombat) {
@@ -1323,20 +1327,16 @@ async function persistParsedMapData(text: string, ws: BunServerWebSocket | null)
 }
 
 await mapStore.initialize();
+zoneScriptSettings = await loadZoneScriptSettings();
 
 const savedSurvival = await mapStore.getSurvivalSettings();
 if (savedSurvival) {
   const normalizedSavedSurvival = normalizeSurvivalSettings(savedSurvival);
   survivalController.updateConfig(normalizeSurvivalConfig({
-    enabled: normalizedSavedSurvival.foodItems.trim().length > 0 || normalizedSavedSurvival.flaskItems.trim().length > 0,
+    enabled: normalizedSavedSurvival.foodItem.trim().length > 0,
     container: normalizedSavedSurvival.container,
-    foodItems: normalizedSavedSurvival.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
-    flaskItems: normalizedSavedSurvival.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
-    buyFoodItem: normalizedSavedSurvival.buyFoodItem,
-    buyFoodMax: normalizedSavedSurvival.buyFoodMax,
-    buyFoodAlias: normalizedSavedSurvival.buyFoodAlias,
-    fillFlaskAlias: normalizedSavedSurvival.fillFlaskAlias,
-    fillFlaskSource: normalizedSavedSurvival.fillFlaskSource,
+    foodItem: normalizedSavedSurvival.foodItem,
+    eatCommand: normalizedSavedSurvival.eatCommand,
   }));
 }
 
@@ -1470,6 +1470,8 @@ const server = Bun.serve({
           if (event.payload?.profileId) {
             activeProfileId = event.payload.profileId;
             saveLastProfileId(event.payload.profileId);
+             await loadZoneScriptSettings();
+            broadcastZoneScriptSettings();
           }
           await mudConnection.connectToMud(ws, event.payload);
           void mapStore.getTriggerSettings(activeProfileId).then((saved) => {
@@ -1521,6 +1523,20 @@ const server = Bun.serve({
           const enabled = event.payload?.enabled === true;
           logEvent(ws, "browser-in", "farm2_toggle", { enabled });
           farm2Controller.setEnabled(enabled);
+          break;
+        }
+        case "farm2_loop_set": {
+          const enabled = event.payload.enabled;
+          const delayMinutes = event.payload.delayMinutes;
+          logEvent(ws, "browser-in", "farm2_loop_set", { enabled, delayMinutes });
+          farm2Controller.setLoopConfig(enabled, delayMinutes);
+          break;
+        }
+        case "zone_script_loop_set": {
+          const enabled = event.payload.enabled;
+          const delayMinutes = event.payload.delayMinutes;
+          logEvent(ws, "browser-in", "zone_script_loop_set", { enabled, delayMinutes });
+          zoneScriptController.setLoopConfig(enabled, delayMinutes);
           break;
         }
         case "attack_nearest": {
@@ -1582,36 +1598,6 @@ const server = Bun.serve({
           if (Array.isArray(vnums) && vnums.length > 0) {
             logEvent(ws, "browser-in", "goto_and_run", { vnums: vnums.join(","), commands: (commands ?? []).join(";") });
             let resolvedCommands: string[] = Array.isArray(commands) ? commands : [];
-            const action = event.payload?.action;
-            if (action === "buy_food" || action === "fill_flask") {
-              const survival = await mapStore.getSurvivalSettings();
-              const ss = normalizeSurvivalSettings(survival ?? {});
-              const survivalConfig = normalizeSurvivalConfig({
-                enabled: true,
-                container: ss.container,
-                foodItems: ss.foodItems.split("\n").map((s) => s.trim()).filter(Boolean),
-                flaskItems: ss.flaskItems.split("\n").map((s) => s.trim()).filter(Boolean),
-                buyFoodItem: ss.buyFoodItem,
-                buyFoodMax: ss.buyFoodMax,
-                buyFoodAlias: ss.buyFoodAlias,
-                fillFlaskAlias: ss.fillFlaskAlias,
-                fillFlaskSource: ss.fillFlaskSource,
-              });
-              const result = await resolveSurvivalCommands(
-                action,
-                survivalConfig,
-                (container) => inspectContainer(ws, container),
-              );
-              if (result === null) {
-                const currentCount = "достаточно";
-                broadcastServerEvent({
-                  type: "status",
-                  payload: { state: sharedSession.state, message: `[survival] уже ${currentCount} еды` },
-                });
-                break;
-              }
-              resolvedCommands = result;
-            }
             await startNavigationToNearest(ws, vnums);
             for (const cmd of resolvedCommands) {
               if (sharedSession.tcpSocket && sharedSession.connected) {
@@ -1649,6 +1635,16 @@ const server = Bun.serve({
           }
           break;
         }
+        case "zone_script_settings_save": {
+          const raw = event.payload;
+          if (raw) {
+            zoneScriptSettings = normalizeZoneScriptSettings(raw);
+            logEvent(ws, "browser-in", "zone_script_settings_save", { hasAssistTarget: zoneScriptSettings.assistTarget !== undefined });
+            await mapStore.setZoneScriptSettings(zoneScriptSettings);
+            broadcastZoneScriptSettings();
+          }
+          break;
+        }
         case "survival_settings_get": {
           logEvent(ws, "browser-in", "survival_settings_get");
           await sendSurvivalSettings(ws);
@@ -1661,15 +1657,10 @@ const server = Bun.serve({
             logEvent(ws, "browser-in", "survival_settings_save");
             await mapStore.setSurvivalSettings(settings);
             survivalController.updateConfig(normalizeSurvivalConfig({
-              enabled: settings.foodItems.trim().length > 0 || settings.flaskItems.trim().length > 0,
+              enabled: settings.foodItem.trim().length > 0,
               container: settings.container,
-              foodItems: settings.foodItems.split("\n").map(s => s.trim()).filter(Boolean),
-              flaskItems: settings.flaskItems.split("\n").map(s => s.trim()).filter(Boolean),
-              buyFoodItem: settings.buyFoodItem,
-              buyFoodMax: settings.buyFoodMax,
-              buyFoodAlias: settings.buyFoodAlias,
-              fillFlaskAlias: settings.fillFlaskAlias,
-              fillFlaskSource: settings.fillFlaskSource,
+              foodItem: settings.foodItem,
+              eatCommand: settings.eatCommand,
             }));
           }
           break;

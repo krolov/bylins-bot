@@ -91,4 +91,9 @@ export interface Farm2State {
   pendingRoomScanSetAt: number;
   lastRoomCorpseCount: number;
   attackSentAt: number;
+  recalling: boolean;
+  recallTimer: TickTimer;
+  loopEnabled: boolean;
+  loopDelayMs: number;
+  loopRestartScheduledAt: number | null;
 }

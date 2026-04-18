@@ -57,6 +57,7 @@ const LIGHT_MEMORIZING_REGEXP = /Вы занесли заклинание "[^"]*
 // Меню выбора персонажа после логина (переход в игру = вариант 1)
 const CHARACTER_MENU_REGEXP = /Чего ваша душа желает\?/;
 
+
 // Follow-leader: лидеры клана, чьи команды выполняются
 const FOLLOW_LEADER_NAMES = new Set([
   "Магуша", "Аделя", "Куруш", "Нимрок", "Цисса", "Экзар", "Берест",
@@ -80,6 +81,7 @@ export interface TriggerState {
   followLeader: boolean;
   assist: boolean;
   assistTanks: string[];
+  collectIngredients: boolean;
 }
 
 interface TriggerDependencies {
@@ -104,6 +106,7 @@ export function createTriggers(deps: TriggerDependencies) {
     followLeader: true,
     assist: false,
     assistTanks: [],
+    collectIngredients: false,
   };
 
   let dodgeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -141,7 +144,9 @@ export function createTriggers(deps: TriggerDependencies) {
     const stripped = text.replace(ANSI_ESCAPE_REGEXP, "").replace(/\r/g, "");
 
     if (CHARACTER_MENU_REGEXP.test(stripped)) {
-      deps.sendCommand("1");
+      setTimeout(() => {
+        deps.sendCommand("1");
+      }, 5000);
     }
 
     if (enabled.standUp && stripped.includes("Вам лучше встать на ноги!")) {
@@ -185,6 +190,10 @@ export function createTriggers(deps: TriggerDependencies) {
 
     if (enabled.assist) {
       handleAssistLogic(stripped);
+    }
+
+    if (enabled.collectIngredients) {
+      handleCollectIngredientsLogic(stripped);
     }
   }
 
@@ -375,6 +384,9 @@ export function createTriggers(deps: TriggerDependencies) {
         }
       }
     }
+  }
+
+  function handleCollectIngredientsLogic(_stripped: string): void {
   }
 
   function handleAssistLogic(stripped: string): void {

@@ -36,6 +36,10 @@ interface RunnerState {
   currentStepIndex: number | null;
   errorMessage: string | null;
   abortController: AbortController | null;
+  loopEnabled: boolean;
+  loopDelayMs: number;
+  loopAbortController: AbortController | null;
+  loopWaitingUntil: number | null;
 }
 
 function createInitialState(): RunnerState {
@@ -47,6 +51,10 @@ function createInitialState(): RunnerState {
     currentStepIndex: null,
     errorMessage: null,
     abortController: null,
+    loopEnabled: false,
+    loopDelayMs: 0,
+    loopAbortController: null,
+    loopWaitingUntil: null,
   };
 }
 
@@ -58,6 +66,7 @@ function getSnapshot(state: RunnerState): ZoneScriptStateSnapshot {
     currentStepIndex: state.currentStepIndex,
     steps: state.steps,
     errorMessage: state.errorMessage,
+    loopWaitingUntil: state.loopWaitingUntil,
   };
 }
 
@@ -143,6 +152,7 @@ async function executeStep(
           idleTimeoutMs: step.idleTimeoutMs,
           maxPassCount: step.maxPassCount,
           skinCorpses: step.skinCorpses,
+          assistTarget: step.assistTarget,
         },
         deps,
         signal,
@@ -182,6 +192,19 @@ async function runScript(
   }
 }
 
+async function waitForLoop(
+  delayMs: number,
+  deps: ZoneScriptDeps,
+  signal: AbortSignal,
+): Promise<void> {
+  await sleep(delayMs, signal);
+  while (!signal.aborted) {
+    const { hp, hpMax } = deps.getStats();
+    if (hpMax > 0 && hp >= hpMax) return;
+    await sleep(10_000, signal);
+  }
+}
+
 export function createZoneScriptController(deps: ZoneScriptDeps) {
   const state = createInitialState();
 
@@ -193,6 +216,10 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
     if (state.abortController) {
       state.abortController.abort();
       state.abortController = null;
+    }
+    if (state.loopAbortController) {
+      state.loopAbortController.abort();
+      state.loopAbortController = null;
     }
   }
 
@@ -236,6 +263,22 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
         state.abortController = null;
         deps.onLog(`Zone script completed: zone ${zoneId}`);
         broadcastState();
+
+        if (state.loopEnabled && state.loopDelayMs > 0) {
+          const loopAbort = new AbortController();
+          state.loopAbortController = loopAbort;
+          state.loopWaitingUntil = Date.now() + state.loopDelayMs;
+          broadcastState();
+          void waitForLoop(state.loopDelayMs, deps, loopAbort.signal).then(() => {
+            state.loopAbortController = null;
+            state.loopWaitingUntil = null;
+            if (!loopAbort.signal.aborted) start(zoneId);
+          }).catch(() => {
+            state.loopAbortController = null;
+            state.loopWaitingUntil = null;
+            broadcastState();
+          });
+        }
       })
       .catch((err: unknown) => {
         if (abortController.signal.aborted) return;
@@ -272,6 +315,11 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
       } else {
         stop();
       }
+    },
+
+    setLoopConfig(enabled: boolean, delayMinutes: number): void {
+      state.loopEnabled = enabled;
+      state.loopDelayMs = delayMinutes * 60 * 1000;
     },
 
     handleSessionClosed(): void {

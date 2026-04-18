@@ -37,6 +37,7 @@ const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
 const ROOM_ARRIVED_TIMEOUT_MS = 5_000;
 const DEATH_LOOT_TIMEOUT_MS = 15_000;
 const DEATH_WAIT_TIMEOUT_MS = 3_000;
+const MERCHANT_DEATH_WAIT_TIMEOUT_MS = 30_000;
 
 const DIRECTION_TO_COMMAND: Record<Direction, string> = {
   north: "с",
@@ -53,6 +54,9 @@ const MISS_PHRASE = /кого вы так сильно ненавидите/i;
 const FLEE_SUCCESS_PHRASE = /Вы быстро убежали с поля битвы\./i;
 
 const MAX_CONSECUTIVE_MISSES = 3;
+
+const ANSI_RE = /\u001b\[[0-9;]*m/g;
+const CHARMIE_INJURED_PATTERN = /\[\S+:[^\]]+\] \[\S+:(?!Невредим|Слегка)[^\]]+\]|\[\S+:(?!Невредим|Слегка)[^\]]+\] \[\S+:[^\]]+\]/;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,6 +130,7 @@ export interface FarmZoneStep2Params {
   idleTimeoutMs?: number;
   maxPassCount?: number;
   skinCorpses?: boolean;
+  assistTarget?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +148,9 @@ export async function executeFarmZoneStep2(
   deps: ZoneScriptDeps,
   signal: AbortSignal,
 ): Promise<void> {
-  const { entryVnum, routeVnums, targetValues, mobNameMap, skipVnums = [], idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, maxPassCount = 1, skinCorpses = false } = params;
+  const { entryVnum, routeVnums, targetValues, mobNameMap, skipVnums = [], idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, maxPassCount = 1, skinCorpses = false, assistTarget } = params;
+  const isMerchant = deps.isMerchantProfile();
+  const effectiveAssistTarget = deps.getAssistTarget() ?? assistTarget;
   const skipSet = new Set(skipVnums);
   const filterKeys: string[] = targetValues ?? (mobNameMap !== undefined ? [...Object.keys(mobNameMap), "отдыхает здесь", "сидит здесь", "без сознания"] : []);
 
@@ -166,8 +173,25 @@ export async function executeFarmZoneStep2(
   let lootPending = false;
   let lastSeenMobs: string[] = [];
   let consecutiveMissCount = 0;
+  let charmieInjured = false;
+  let removeMudListener: (() => void) | null = null;
 
+  if (isMerchant) {
+    removeMudListener = deps.addMudTextListener((text) => {
+      if (!charmieInjured && CHARMIE_INJURED_PATTERN.test(text.replace(ANSI_RE, ""))) {
+        charmieInjured = true;
+        deps.onLog("farm_zone2: charmie injured — will abort farm and restart loop");
+      }
+    });
+  }
+
+  try {
   while (!signal.aborted) {
+    if (charmieInjured) {
+      deps.onLog("farm_zone2: charmie injured — exiting farm step for loop restart");
+      return;
+    }
+
     const inCombat = deps.combatState.getInCombat();
     const currentRoomId = deps.getCurrentRoomId();
 
@@ -176,7 +200,7 @@ export async function executeFarmZoneStep2(
     );
 
     // ── Detect combat entry ─────────────────────────────────────────────────
-    if (inCombat && phase === "moving") {
+    if (!isMerchant && inCombat && phase === "moving") {
       lastCombatAt = Date.now();
       phase = "fleeing";
       deps.onLog(
@@ -241,7 +265,7 @@ export async function executeFarmZoneStep2(
 
     // ── Waiting-safe phase ───────────────────────────────────────────────────
     if (phase === "waiting_safe") {
-      if (inCombat) {
+    if (!isMerchant && inCombat) {
         phase = "fleeing";
         deps.onLog("farm_zone2: combat in waiting_safe — switching to fleeing");
         await sleep(TICK_INTERVAL_MS, signal);
@@ -343,21 +367,40 @@ export async function executeFarmZoneStep2(
             deps.onLog(`farm_zone2: mobNameMap: no mapping for visible targets [${[...visibleTargets.keys()].join(", ")}] — skipping attack`);
           } else {
             for (const keyword of attackKeywords) {
-              deps.sendCommand("спрят");
-              deps.sendCommand(`закол ${keyword}`);
+              if (isMerchant) {
+                deps.sendCommand(`приказ все убит ${keyword}`);
+              } else {
+                deps.sendCommand("спрят");
+                deps.sendCommand(`закол ${keyword}`);
+              }
             }
+            if (isMerchant && effectiveAssistTarget !== undefined) {
+              await sleep(1000, signal);
+              deps.sendCommand(`помочь ${effectiveAssistTarget}`);
+            }
+            if (isMerchant) lastCombatAt = Date.now();
             deps.onLog(`farm_zone2: attack sent via mobNameMap for ${attackKeywords.size} keyword(s), waiting for death/miss`);
           }
         } else {
           for (const target of (targetValues ?? [])) {
-            deps.sendCommand("спрят");
-            deps.sendCommand(`закол ${target}`);
+            if (isMerchant) {
+              deps.sendCommand(`приказ все убит ${target}`);
+            } else {
+              deps.sendCommand("спрят");
+              deps.sendCommand(`закол ${target}`);
+            }
           }
+          if (isMerchant && effectiveAssistTarget !== undefined) {
+            await sleep(1000, signal);
+            deps.sendCommand(`помочь ${effectiveAssistTarget}`);
+          }
+          if (isMerchant) lastCombatAt = Date.now();
           deps.onLog(`farm_zone2: attack sent for ${(targetValues ?? []).length} target(s), waiting for death/miss`);
         }
 
-        const deathPromise = deps.onMudTextOnce(DEATH_PHRASE, DEATH_WAIT_TIMEOUT_MS);
-        const missPromise = deps.onMudTextOnce(MISS_PHRASE, DEATH_WAIT_TIMEOUT_MS);
+        const deathWaitMs = isMerchant ? MERCHANT_DEATH_WAIT_TIMEOUT_MS : DEATH_WAIT_TIMEOUT_MS;
+        const deathPromise = deps.onMudTextOnce(DEATH_PHRASE, deathWaitMs);
+        const missPromise = deps.onMudTextOnce(MISS_PHRASE, deathWaitMs);
         const waitResult = await Promise.race([
           deathPromise.then(() => "death" as const).catch(() => "timeout" as const),
           missPromise.then(() => "miss" as const).catch(() => "timeout_miss" as const),
@@ -424,30 +467,55 @@ export async function executeFarmZoneStep2(
 
     if (edge) {
       const dirCmd = DIRECTION_TO_COMMAND[edge.direction];
-      deps.onLog(`farm_zone2: sneaking "краст ${dirCmd}" toward vnum=${targetVnum}`);
-      const moveResult = await deps.stealthMove(edge.direction);
-      if (moveResult.kind === "ok") {
-        lastMoveDirection = edge.direction;
-        lastSeenMobs = moveResult.mobs;
-        consecutiveMissCount = 0;
-        deps.onLog(
-          `farm_zone2: sneak succeeded → room=${moveResult.roomId} mobs=${moveResult.mobs.length}`,
-        );
-        deps.onLog(
-          `farm_zone2: stealthMove raw mobs=[${moveResult.mobs.join(" | ")}] after move to room=${moveResult.roomId}`,
-        );
-        const visibleAfterMove = parseMobsFromRoomDescription(lastSeenMobs, filterKeys);
-        if (visibleAfterMove.size === 0) {
-          await lootAndSkinRoom(deps, skinCorpses);
+      if (isMerchant) {
+        deps.onLog(`farm_zone2: moving "${dirCmd}" toward vnum=${targetVnum}`);
+        const moveResult = await deps.move(edge.direction);
+        if (moveResult === "ok") {
+          lastMoveDirection = edge.direction;
+          lastSeenMobs = [...deps.getVisibleTargets().values()];
+          consecutiveMissCount = 0;
+          deps.onLog(
+            `farm_zone2: move succeeded → room=${deps.getCurrentRoomId()} mobs=${lastSeenMobs.length}`,
+          );
+          const visibleAfterMove = parseMobsFromRoomDescription(lastSeenMobs, filterKeys);
+          if (visibleAfterMove.size === 0) {
+            await lootAndSkinRoom(deps, skinCorpses);
+          }
+        } else {
+          lastMoveDirection = null;
+          lastSeenMobs = [];
+          deps.onLog(
+            `farm_zone2: move ${moveResult} — falling back to navigateTo (targetVnum=${targetVnum})`,
+          );
+          await deps.navigateTo(targetVnum);
+          if (signal.aborted) return;
         }
       } else {
-        lastMoveDirection = null;
-        lastSeenMobs = [];
-        deps.onLog(
-          `farm_zone2: sneak ${moveResult.kind} — falling back to navigateTo and clearing lastMoveDirection (targetVnum=${targetVnum})`,
-        );
-        await deps.navigateTo(targetVnum);
-        if (signal.aborted) return;
+        deps.onLog(`farm_zone2: sneaking "краст ${dirCmd}" toward vnum=${targetVnum}`);
+        const moveResult = await deps.stealthMove(edge.direction);
+        if (moveResult.kind === "ok") {
+          lastMoveDirection = edge.direction;
+          lastSeenMobs = moveResult.mobs;
+          consecutiveMissCount = 0;
+          deps.onLog(
+            `farm_zone2: sneak succeeded → room=${moveResult.roomId} mobs=${moveResult.mobs.length}`,
+          );
+          deps.onLog(
+            `farm_zone2: stealthMove raw mobs=[${moveResult.mobs.join(" | ")}] after move to room=${moveResult.roomId}`,
+          );
+          const visibleAfterMove = parseMobsFromRoomDescription(lastSeenMobs, filterKeys);
+          if (visibleAfterMove.size === 0) {
+            await lootAndSkinRoom(deps, skinCorpses);
+          }
+        } else {
+          lastMoveDirection = null;
+          lastSeenMobs = [];
+          deps.onLog(
+            `farm_zone2: sneak ${moveResult.kind} — falling back to navigateTo and clearing lastMoveDirection (targetVnum=${targetVnum})`,
+          );
+          await deps.navigateTo(targetVnum);
+          if (signal.aborted) return;
+        }
       }
     } else {
       deps.onLog(`farm_zone2: no direct edge to vnum=${targetVnum} — using navigateTo`);
@@ -465,5 +533,8 @@ export async function executeFarmZoneStep2(
 
   if (signal.aborted) {
     deps.onLog("farm_zone2: stopped — user aborted zoning");
+  }
+  } finally {
+    removeMudListener?.();
   }
 }

@@ -150,6 +150,23 @@ export function handleMudText(
       schedule(TARGET_NOT_VISIBLE_REGEXP.test(normalized) ? 50 : 150);
     }
   }
+
+  if (
+    !state.enabled &&
+    state.recalling &&
+    options.currentRoomId !== null &&
+    state.zoneId !== null &&
+    getZoneId(options.currentRoomId) !== state.zoneId
+  ) {
+    state.recalling = false;
+    state.recallTimer.clear();
+    state.zoneId = null;
+    if (state.loopEnabled) {
+      const logger = createLogger(deps);
+      logger.info(`Recall complete — loop restart scheduled in ${state.loopDelayMs / 60000} min`);
+      state.loopRestartScheduledAt = Date.now();
+    }
+  }
 }
 
 export function handleSessionClosed(

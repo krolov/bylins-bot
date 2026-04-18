@@ -131,6 +131,7 @@ export type ScriptStep =
        */
       maxPassCount?: number;
       skinCorpses?: boolean;
+      assistTarget?: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -163,6 +164,8 @@ export interface ZoneScriptStateSnapshot {
   steps: StepState[];
   /** Overall error message when the script aborted. */
   errorMessage: string | null;
+  /** Unix timestamp (ms) when the loop wait ends. Null when not waiting. */
+  loopWaitingUntil: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,8 +194,8 @@ export interface ZoneScriptDeps {
   refreshCurrentRoom(timeoutMs: number): Promise<number | null>;
   /** Called whenever script state changes — broadcast to browser. */
   onStateChange(state: ZoneScriptStateSnapshot): void;
-  /** Logging (English only). */
   onLog(message: string): void;
+  getStats(): { hp: number; hpMax: number };
   // ── farm_zone deps ──────────────────────────────────────────────────────
   getSnapshot(currentVnum: number | null): Promise<MapSnapshot>;
   move(direction: Direction): Promise<MoveResult>;
@@ -201,7 +204,10 @@ export interface ZoneScriptDeps {
   getVisibleTargets(): Map<string, string>;
   getCorpseCount(): number;
   reinitRoom(): void;
+  getAssistTarget(): string | undefined;
   mobResolver: MobResolverDeps;
   isStealthProfile(): boolean;
+  isMerchantProfile(): boolean;
   autoSortInventory(): Promise<void>;
+  addMudTextListener(handler: (text: string) => void): () => void;
 }
