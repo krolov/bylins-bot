@@ -2650,9 +2650,27 @@ button:hover {
 
 .script-panel__header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--panel-border, #444);
+}
+
+.script-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.script-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--input-bg, #1e1e1e);
+  color: var(--text, #ccc);
+  border: 1px solid var(--panel-border, #444);
+  border-radius: 3px;
 }
 
 .script-loop-label {

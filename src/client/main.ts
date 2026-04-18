@@ -70,6 +70,7 @@ const scriptStepsList = requireElement<HTMLUListElement>("#script-steps-list");
 const scriptPanelTitle = requireElement<HTMLSpanElement>("#script-panel-title");
 const scriptStatusLine = requireElement<HTMLDivElement>("#script-status-line");
 const scriptToggleBtn = requireElement<HTMLButtonElement>("#script-toggle-btn");
+const scriptSelect = requireElement<HTMLSelectElement>("#script-select");
 const scriptLoopEnabled = requireElement<HTMLInputElement>("#script-loop-enabled");
 const scriptLoopDelay = requireElement<HTMLInputElement>("#script-loop-delay");
 const zoneScriptAssistTargetInput = requireElement<HTMLInputElement>("#zone-script-assist-target");
@@ -286,8 +287,31 @@ function renderFarmButton(): void {
 }
 
 
-function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; steps: Array<{ index: number; label: string; status: string; error?: string }>; errorMessage: string | null; loopWaitingUntil?: number | null }): void {
-  scriptPanelTitle.textContent = state.zoneName ? `Скрипт: ${state.zoneName}` : "Скрипт";
+function refreshScriptToggleBtn(): void {
+  if (zoneScriptState?.payload.enabled || zoneScriptState?.payload.loopWaitingUntil != null) {
+    scriptToggleBtn.textContent = "Стоп";
+    scriptToggleBtn.disabled = false;
+    return;
+  }
+  const selectedId = scriptSelect.value !== "" ? Number(scriptSelect.value) : null;
+  const selectedScript = selectedId !== null ? AVAILABLE_ZONE_SCRIPTS.find((s) => s.zoneId === selectedId) : undefined;
+  const autoScript = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
+  const effective = selectedScript ?? autoScript;
+  if (effective !== undefined) {
+    scriptToggleBtn.textContent = effective.name;
+    scriptToggleBtn.disabled = false;
+  } else {
+    scriptToggleBtn.textContent = "Нет скрипта";
+    scriptToggleBtn.disabled = true;
+  }
+}
+
+function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; steps: Array<{ index: number; label: string; status: string; error?: string }>; errorMessage: string | null; loopWaitingUntil?: number | null; playlistId?: number | null; playlistZoneIndex?: number; playlistZoneCount?: number }): void {
+  let titleText = state.zoneName ? `Скрипт: ${state.zoneName}` : "Скрипт";
+  if (state.playlistId != null && (state.playlistZoneCount ?? 0) > 0) {
+    titleText += ` [${(state.playlistZoneIndex ?? 0) + 1}/${state.playlistZoneCount}]`;
+  }
+  scriptPanelTitle.textContent = titleText;
 
   if (state.errorMessage) {
     scriptStatusLine.textContent = state.errorMessage;
@@ -302,19 +326,7 @@ function renderScriptSteps(state: { enabled: boolean; zoneName: string | null; s
     scriptStatusLine.classList.add("script-status-line--hidden");
   }
 
-  if (state.enabled || state.loopWaitingUntil != null) {
-    scriptToggleBtn.textContent = "Стоп";
-    scriptToggleBtn.disabled = false;
-  } else {
-    const script = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
-    if (script !== undefined) {
-      scriptToggleBtn.textContent = script.name;
-      scriptToggleBtn.disabled = false;
-    } else {
-      scriptToggleBtn.textContent = "Нет скрипта";
-      scriptToggleBtn.disabled = true;
-    }
-  }
+  refreshScriptToggleBtn();
 
   scriptStepsList.innerHTML = "";
 
@@ -855,13 +867,35 @@ containerTabInventory.addEventListener("click", () => switchContainerTab("invent
 containerTabNav.addEventListener("click", () => switchContainerTab("nav"));
 containerTabScript.addEventListener("click", () => switchContainerTab("script"));
 
+(function populateScriptSelect() {
+  const autoOpt = document.createElement("option");
+  autoOpt.value = "";
+  autoOpt.textContent = "— авто —";
+  scriptSelect.appendChild(autoOpt);
+  for (const s of AVAILABLE_ZONE_SCRIPTS) {
+    const opt = document.createElement("option");
+    opt.value = String(s.zoneId);
+    opt.textContent = s.name;
+    scriptSelect.appendChild(opt);
+  }
+  const saved = localStorage.getItem("scriptSelectId");
+  if (saved) scriptSelect.value = saved;
+})();
+
+scriptSelect.addEventListener("change", () => {
+  localStorage.setItem("scriptSelectId", scriptSelect.value);
+  refreshScriptToggleBtn();
+});
+
 scriptToggleBtn.addEventListener("click", () => {
   if (zoneScriptState?.payload.enabled || zoneScriptState?.payload.loopWaitingUntil != null) {
     sendClientEvent({ type: "zone_script_toggle", payload: { enabled: false } });
   } else {
-    const script = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
-    if (script !== undefined) {
-      sendClientEvent({ type: "zone_script_toggle", payload: { enabled: true, zoneId: script.zoneId } });
+    const selectedId = scriptSelect.value !== "" ? Number(scriptSelect.value) : null;
+    const autoScript = trackerCurrentVnum !== null ? getScriptForVnum(trackerCurrentVnum) : undefined;
+    const zoneId = selectedId ?? autoScript?.zoneId;
+    if (zoneId !== undefined) {
+      sendClientEvent({ type: "zone_script_toggle", payload: { enabled: true, zoneId } });
     }
   }
 });

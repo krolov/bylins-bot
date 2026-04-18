@@ -152,20 +152,16 @@ export interface StepState {
 // ---------------------------------------------------------------------------
 
 export interface ZoneScriptStateSnapshot {
-  /** Whether the script runner is active. */
   enabled: boolean;
-  /** Zone ID currently running (null when idle). */
   zoneId: number | null;
-  /** Human-readable name of the current zone script. */
   zoneName: string | null;
-  /** Current step index (null when idle or finished). */
   currentStepIndex: number | null;
-  /** Full step list with statuses. Empty when idle. */
   steps: StepState[];
-  /** Overall error message when the script aborted. */
   errorMessage: string | null;
-  /** Unix timestamp (ms) when the loop wait ends. Null when not waiting. */
   loopWaitingUntil: number | null;
+  playlistId: number | null;
+  playlistZoneIndex: number;
+  playlistZoneCount: number;
 }
 
 // ---------------------------------------------------------------------------

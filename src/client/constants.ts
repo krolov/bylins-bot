@@ -114,6 +114,16 @@ export const AVAILABLE_ZONE_SCRIPTS: Array<{ zoneId: number; name: string; hundr
     stepLabels: [
       "Идти к входу в усадьбу (10400)",
       "Зачистить купеческую усадьбу (стелс)",
+      "Перейти в локацию 34349",
+    ],
+  },
+  {
+    zoneId: 10001,
+    name: "▶ Три дороги (102 + 104)",
+    hundreds: [],
+    stepLabels: [
+      "Дубрава (зона 102)",
+      "Купеческая усадьба (зона 104)",
     ],
   },
 ];

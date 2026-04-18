@@ -6,6 +6,8 @@ import { ZONE_111_ID, ZONE_111_NAME, zone111Steps } from "./zones/111.ts";
 import { ZONE_258_ID, ZONE_258_NAME, zone258Steps } from "./zones/258.ts";
 import { ZONE_280_ID, ZONE_280_NAME, zone280Steps } from "./zones/280.ts";
 import { ZONE_286_ID, ZONE_286_NAME, zone286Steps } from "./zones/286.ts";
+import { ZONE_PLAYLISTS } from "./playlists.ts";
+import type { ZonePlaylist } from "./playlists.ts";
 import { executeFarmZoneStep2 } from "./farm-zone-executor2.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -40,6 +42,9 @@ interface RunnerState {
   loopDelayMs: number;
   loopAbortController: AbortController | null;
   loopWaitingUntil: number | null;
+  playlistId: number | null;
+  playlistZoneIds: readonly number[] | null;
+  playlistZoneIndex: number;
 }
 
 function createInitialState(): RunnerState {
@@ -55,6 +60,9 @@ function createInitialState(): RunnerState {
     loopDelayMs: 0,
     loopAbortController: null,
     loopWaitingUntil: null,
+    playlistId: null,
+    playlistZoneIds: null,
+    playlistZoneIndex: 0,
   };
 }
 
@@ -67,6 +75,9 @@ function getSnapshot(state: RunnerState): ZoneScriptStateSnapshot {
     steps: state.steps,
     errorMessage: state.errorMessage,
     loopWaitingUntil: state.loopWaitingUntil,
+    playlistId: state.playlistId,
+    playlistZoneIndex: state.playlistZoneIndex,
+    playlistZoneCount: state.playlistZoneIds?.length ?? 0,
   };
 }
 
@@ -231,10 +242,19 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
     state.steps = [];
     state.currentStepIndex = null;
     state.errorMessage = null;
+    state.playlistId = null;
+    state.playlistZoneIds = null;
+    state.playlistZoneIndex = 0;
     broadcastState();
   }
 
   function start(zoneId: number): void {
+    const playlist = ZONE_PLAYLISTS.find((p) => p.playlistId === zoneId);
+    if (playlist) {
+      startPlaylist(playlist);
+      return;
+    }
+
     const script = ZONE_SCRIPTS.find((s) => s.zoneId === zoneId);
     if (!script) {
       deps.onLog(`Zone script not found for zone ${zoneId}`);
@@ -264,7 +284,21 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
         deps.onLog(`Zone script completed: zone ${zoneId}`);
         broadcastState();
 
+        if (state.playlistZoneIds !== null) {
+          const nextIndex = state.playlistZoneIndex + 1;
+          if (nextIndex < state.playlistZoneIds.length) {
+            state.playlistZoneIndex = nextIndex;
+            broadcastState();
+            start(state.playlistZoneIds[nextIndex]!);
+            return;
+          }
+          state.playlistZoneIndex = 0;
+        }
+
         if (state.loopEnabled && state.loopDelayMs > 0) {
+          const restartId = state.playlistZoneIds !== null
+            ? (state.playlistId ?? zoneId)
+            : zoneId;
           const loopAbort = new AbortController();
           state.loopAbortController = loopAbort;
           state.loopWaitingUntil = Date.now() + state.loopDelayMs;
@@ -272,7 +306,7 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
           void waitForLoop(state.loopDelayMs, deps, loopAbort.signal).then(() => {
             state.loopAbortController = null;
             state.loopWaitingUntil = null;
-            if (!loopAbort.signal.aborted) start(zoneId);
+            if (!loopAbort.signal.aborted) start(restartId);
           }).catch(() => {
             state.loopAbortController = null;
             state.loopWaitingUntil = null;
@@ -290,28 +324,54 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
       });
   }
 
+  function startPlaylist(playlist: ZonePlaylist): void {
+    abort();
+    state.playlistId = playlist.playlistId;
+    state.playlistZoneIds = playlist.zoneIds;
+    state.playlistZoneIndex = 0;
+    broadcastState();
+    deps.onLog(`Playlist started: ${playlist.playlistName}`);
+    start(playlist.zoneIds[0]!);
+  }
+
   return {
     getState(): ZoneScriptStateSnapshot {
       return getSnapshot(state);
     },
 
     getZoneList(): Array<{ zoneId: number; zoneName: string; hundreds: number[]; stepLabels: string[] }> {
-      return ZONE_SCRIPTS.map((s) => ({
+      const zones = ZONE_SCRIPTS.map((s) => ({
         zoneId: s.zoneId,
         zoneName: s.zoneName,
         hundreds: s.hundreds,
         stepLabels: s.steps.map((step) => step.label),
       }));
+      const playlists = ZONE_PLAYLISTS.map((p) => ({
+        zoneId: p.playlistId,
+        zoneName: p.playlistName,
+        hundreds: [] as number[],
+        stepLabels: p.zoneIds.map((id) => {
+          const zone = ZONE_SCRIPTS.find((s) => s.zoneId === id);
+          return zone ? zone.zoneName : `Zone ${id}`;
+        }),
+      }));
+      return [...zones, ...playlists];
     },
 
     setEnabled(enabled: boolean, zoneId?: number): void {
       if (enabled) {
-        const targetZoneId = zoneId ?? state.zoneId;
-        if (targetZoneId === null) {
+        const targetId = zoneId ?? state.zoneId ?? state.playlistId;
+        if (targetId === null) {
           deps.onLog("Zone script: no zone ID specified");
           return;
         }
-        start(targetZoneId);
+        const isPlaylist = ZONE_PLAYLISTS.some((p) => p.playlistId === targetId);
+        if (!isPlaylist) {
+          state.playlistId = null;
+          state.playlistZoneIds = null;
+          state.playlistZoneIndex = 0;
+        }
+        start(targetId);
       } else {
         stop();
       }

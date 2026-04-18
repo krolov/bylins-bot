@@ -7,7 +7,7 @@
     <link rel="preload" href="/client.js?v=7" as="script" crossorigin />
     <link rel="modulepreload" href="/client.js?v=7" />
     <!-- chunk-preload:start -->
-    <link rel="modulepreload" href="/chunk-wtr0d5hw.js" />
+    <link rel="modulepreload" href="/chunk-tjcwjq56.js" />
     <link rel="modulepreload" href="/chunk-bezgv9t7.js" />
     <!-- chunk-preload:end -->
     <link rel="stylesheet" href="/styles.min.css?v=7" />
@@ -222,24 +222,29 @@
           </div>
         </div>
 
-        <div id="container-panel-script" class="container-panels__panel container-panels__panel--hidden">
-            <div class="container-panel script-panel">
-            <div class="container-panel__header script-panel__header">
-              <span class="container-panel__title" id="script-panel-title">Скрипт</span>
-                <button id="script-toggle-btn" type="button" class="button-secondary button-small">Нет скрипта</button>
+         <div id="container-panel-script" class="container-panels__panel container-panels__panel--hidden">
+             <div class="container-panel script-panel">
+             <div class="script-panel__header">
+               <div class="script-panel__row">
+                 <select id="script-select" class="script-select" title="Выбрать зону или плейлист вручную"></select>
+                 <button id="script-toggle-btn" type="button" class="button-secondary button-small">Нет скрипта</button>
+               </div>
+               <div class="script-panel__row">
                  <label class="script-loop-label" title="Бесконечный повтор">
                    <input id="script-loop-enabled" type="checkbox" />
                    <span>∞</span>
                  </label>
                  <input id="script-loop-delay" type="number" min="1" max="999" value="5" class="script-loop-delay" title="Пауза между повторами (мин)" />
                  <input id="zone-script-assist-target" type="text" class="script-assist-target-input" placeholder="Помочь (ключ моба)" title="Ключевое слово нанятого моба для команды 'помочь'" />
+               </div>
+               <span id="script-panel-title" class="script-panel__title-line"></span>
              </div>
-            <div id="script-status-line" class="script-status-line script-status-line--hidden"></div>
-            <div class="container-panel__scroll">
-              <ul id="script-steps-list" class="script-steps-list"></ul>
-            </div>
-          </div>
-        </div>
+             <div id="script-status-line" class="script-status-line script-status-line--hidden"></div>
+             <div class="container-panel__scroll">
+               <ul id="script-steps-list" class="script-steps-list"></ul>
+             </div>
+           </div>
+         </div>
       </div>
 
       <div id="chat-panel" class="chat-panel panel">
