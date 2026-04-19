@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createMudBus } from "./mud-event-bus.ts";
-import type { MudEventBusDependencies } from "./types.ts";
+import type { MudEvent, MudEventBusDependencies } from "./types.ts";
 
 function makeDeps(): { deps: MudEventBusDependencies; errors: string[] } {
   const errors: string[] = [];
@@ -68,19 +68,17 @@ describe("createMudBus", () => {
   test("onAny receives the typed event", () => {
     const { deps, errors } = makeDeps();
     const bus = createMudBus(deps);
-    let seenKind: string | null = null;
-    let seenText: string | null = null;
-    bus.onAny((event) => {
-      seenKind = event.kind;
-      if (event.kind === "mud_text_raw") {
-        seenText = event.text;
-      }
-    });
+    const captured: MudEvent[] = [];
+    bus.onAny((event) => { captured.push(event); });
 
     bus.emit({ kind: "mud_text_raw", text: "x" });
 
-    expect(seenKind).toBe("mud_text_raw");
-    expect(seenText).toBe("x");
+    expect(captured.length).toBe(1);
+    const event = captured[0];
+    expect(event?.kind).toBe("mud_text_raw");
+    if (event?.kind === "mud_text_raw") {
+      expect(event.text).toBe("x");
+    }
     expect(errors).toEqual([]);
   });
 
