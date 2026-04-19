@@ -9,7 +9,7 @@
 
 ### Safety Harness
 
-- [ ] **SAFE-01**: Captured baseline — 30-минутный лог реального MUD-трафика сохранён в `.fixtures/mud-traffic-baseline.log` как replay-фикстура
+- [x] **SAFE-01**: Captured baseline — tooling to reproduce 30-минутный лог реального MUD-трафика в `.fixtures/mud-traffic-baseline.log` (gitignored, D-04 local-only); `scripts/extract-baseline.ts` streams a time-windowed slice from `/var/log/bylins-bot/mud-traffic.log` on demand
 - [ ] **SAFE-02**: Parser snapshot harness — `scripts/parser-snapshot.ts` прогоняет `src/map/parser.ts` по baseline и пишет `snapshots/before.jsonl`; diff-тест падает если поведение парсера изменилось
 - [ ] **SAFE-03**: Deterministic clock injection — `NowProvider` и `TimerProvider` порты внедрены в controllers, заменяют прямые `Date.now()` / `setTimeout` там где это нужно для тестов
 - [ ] **SAFE-04**: `docs/mud-phrases.md` — инвентарь всех hardcoded-фраз/регексов русского MUD по файлу и назначению (triggers, survival, market, bazaar, farm2, prompt-stats)
@@ -114,7 +114,7 @@ Populated during roadmap creation (2026-04-18).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SAFE-01 | Phase 1 | Pending |
+| SAFE-01 | Phase 1 | Complete (Plan 01 — 2026-04-19) |
 | SAFE-02 | Phase 1 | Pending |
 | SAFE-03 | Phase 1 | Pending |
 | SAFE-04 | Phase 1 | Pending |

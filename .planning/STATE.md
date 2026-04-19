@@ -2,13 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-04-19T00:00:00.000Z"
+status: executing
+last_updated: "2026-04-19T08:30:14.340Z"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 0
+  completed_plans: 1
+  percent: 14
 ---
 
 # STATE: bylins-bot — Monolith Refactor
@@ -20,7 +21,7 @@ progress:
 
 **Core Value:** Сделать кодобазу проще в работе — разобрать монолиты и устранить >15-секундное зависание UI после reload — не меняя поведение бота.
 
-**Current Focus:** Phase 1 — Safety Harness + Scaffolding Infrastructure. Regression oracle и структурные примитивы до любых доменных правок.
+**Current Focus:** Phase 01 — safety-harness-scaffolding-infrastructure
 
 **Primary Constraints:**
 
@@ -32,14 +33,16 @@ progress:
 
 ## Current Position
 
+Phase: 01 (safety-harness-scaffolding-infrastructure) — EXECUTING
+Plan: 2 of 7
 **Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** 7 plans drafted across 3 waves — ready for `/gsd-execute-phase 1`
-**Status:** Ready to execute
+**Plan:** Plan 01 complete; Wave-2 (Plans 04, 05) next in sequential execution
+**Status:** Executing Phase 01
 **Progress:**
 
 ```
-Overall:  [░░░░░░░░░░░░░░░░░░░░]   0% (0/36 requirements)
-Phase 1:  [░░░░░░░░░░░░░░░░░░░░]   0% (0/9 requirements — SAFE-*, INFRA-*)
+Overall:  [██░░░░░░░░░░░░░░░░░░]  14% (1/7 plans in Phase 01)
+Phase 1:  [██░░░░░░░░░░░░░░░░░░]  11% (1/9 requirements — SAFE-01 done)
 ```
 
 ## Performance Metrics
@@ -65,6 +68,9 @@ Tracked at phase-completion boundaries.
 - **2026-04-18** — Strangler-fig bus cutover splits across Phase 2 (BUS-01 shim + BUS-02 per-controller migration) and Phase 3 (BUS-03 delete) — preserves "both paths alive until last consumer migrates" invariant
 - **2026-04-18** — Tests deferred to Phase 4 per PROJECT.md Key Decision ("Структура ПРЕЖДЕ тестов — писать против монолита дороже чем против разобранного модуля")
 - **2026-04-18** — Extraction order within Phase 2: leaf-first (stats → chat → loot-sort → navigation → browser-gateway) recommended by research; PROJECT.md says user wants navigation first; roadmap flags this as planning-time decision to surface at `/gsd-plan-phase 2`
+- **2026-04-19** — Plan 01 (SAFE-01 baseline extraction): locked `LOG_LINE_REGEXP` contract `/^\[(?<ts>[^\]]+)\] session=(?<session>\S+) direction=(?<direction>\S+) message=/`; Plans 05 (parser-snapshot) and 06 (replay-harness) MUST reuse this regex verbatim to prevent drift
+- **2026-04-19** — Plan 01: exit-code contract published — 0=success, 1=usage/fs error, 2=empty-window warning; Plan 07 playbook must quote verbatim
+- **2026-04-19** — Plan 01: half-open windowing `[start, endExclusive)` chosen over closed interval — matches idiomatic time-range semantics, avoids boundary double-count
 
 ### Open Questions (for future plan-phase sessions)
 
@@ -100,9 +106,11 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Phase 1 planned — 7 plans across 3 waves, verification PASSED (5 non-blocking warnings).
-**Next command:** `/gsd-execute-phase 1` — run Wave 1 (Plans 01, 02, 03) in parallel, then Wave 2 (04, 05), then Wave 3 (06, 07).
-**Last file edited:** `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-0{1..7}-PLAN.md`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-PATTERNS.md`
+**Last action:** Plan 01 (SAFE-01 baseline extraction) executed — 2 tasks committed (`2504de1`, `ee50370`), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-01-SUMMARY.md`.
+**Last session:** 2026-04-19T08:28:55Z
+**Stopped at:** Completed 01-01-PLAN.md
+**Next command:** `/gsd-execute-plan 01 02` (or `/gsd-execute-phase 1` continuation) — Wave 1 Plan 02 (mud-event-bus) + Plan 03 (ports) remain; Wave 2 Plan 04 + Plan 05 follow; Wave 3 Plans 06 + 07 close the phase.
+**Last file edited:** `scripts/extract-baseline.ts`, `.gitignore`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-01-SUMMARY.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
