@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-19T08:30:14.340Z"
+last_updated: "2026-04-19T08:36:39Z"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 1
-  percent: 14
+  completed_plans: 2
+  percent: 29
 ---
 
 # STATE: bylins-bot — Monolith Refactor
@@ -34,15 +34,15 @@ progress:
 ## Current Position
 
 Phase: 01 (safety-harness-scaffolding-infrastructure) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 **Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** Plan 01 complete; Wave-2 (Plans 04, 05) next in sequential execution
+**Plan:** Plans 01 + 02 complete; Wave-1 Plan 03 (ports layer) next in sequential execution
 **Status:** Executing Phase 01
 **Progress:**
 
 ```
-Overall:  [██░░░░░░░░░░░░░░░░░░]  14% (1/7 plans in Phase 01)
-Phase 1:  [██░░░░░░░░░░░░░░░░░░]  11% (1/9 requirements — SAFE-01 done)
+Overall:  [██████░░░░░░░░░░░░░░]  29% (2/7 plans in Phase 01)
+Phase 1:  [████░░░░░░░░░░░░░░░░]  22% (2/9 requirements — SAFE-01, INFRA-01 done)
 ```
 
 ## Performance Metrics
@@ -71,11 +71,14 @@ Tracked at phase-completion boundaries.
 - **2026-04-19** — Plan 01 (SAFE-01 baseline extraction): locked `LOG_LINE_REGEXP` contract `/^\[(?<ts>[^\]]+)\] session=(?<session>\S+) direction=(?<direction>\S+) message=/`; Plans 05 (parser-snapshot) and 06 (replay-harness) MUST reuse this regex verbatim to prevent drift
 - **2026-04-19** — Plan 01: exit-code contract published — 0=success, 1=usage/fs error, 2=empty-window warning; Plan 07 playbook must quote verbatim
 - **2026-04-19** — Plan 01: half-open windowing `[start, endExclusive)` chosen over closed interval — matches idiomatic time-range semantics, avoids boundary double-count
+- **2026-04-19** — Plan 02 (INFRA-01): roll-your-own `createMudBus` chosen over `mitt` (the research STACK.md open question resolved); MudEvent union has exactly one variant `mud_text_raw` in Phase 1; Phase 2 extends inline. `[bus] handler error for <kind>: <message>` error-message prefix convention locked; Phase 2 consumers will see this prefix in logEvent output
+- **2026-04-19** — Plan 02: `once()` implemented as an `on()` wrapper that unsubscribes itself before invoking user handler — keeps the returned unsubscribe closure in sync with internal registration, prevents double-unsub bugs
+- **2026-04-19** — Plan 02: test-helper pattern `makeDeps() → {deps, errors}` with closure-over-array established for future bus-consumer tests (Phase 2 will reuse this)
 
 ### Open Questions (for future plan-phase sessions)
 
 - Phase 2: navigation-first (user preference) vs leaf-first (research recommendation)? — decide at `/gsd-plan-phase 2`
-- Phase 1: `mitt` (3.0.1, <200 bytes) vs roll-your-own `createMudBus` (~80 LOC) for INFRA-01? STACK.md says both valid; decide on plan-phase
+- ~~Phase 1: `mitt` (3.0.1, <200 bytes) vs roll-your-own `createMudBus` (~80 LOC) for INFRA-01?~~ — **RESOLVED 2026-04-19 Plan 02: roll-your-own shipped in `src/bus/mud-event-bus.ts` (72 LOC)**
 - Phase 1: `postgres-shift` (0.1.0, Dec 2022, low maintenance) vs roll-your-own (~40 LOC) for INFRA-03? STACK.md says both valid
 - Phase 3: if FREEZE-01 identifies `map_delta` as root cause, PERF-01 from v2 promotes into this milestone; otherwise defer
 - Phase 2: loot-sort ↔ gather-script `onPickupForRaskhod` — bus event or direct callback? (single consumer → leaning direct)
@@ -106,11 +109,11 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Plan 01 (SAFE-01 baseline extraction) executed — 2 tasks committed (`2504de1`, `ee50370`), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-01-SUMMARY.md`.
-**Last session:** 2026-04-19T08:28:55Z
-**Stopped at:** Completed 01-01-PLAN.md
-**Next command:** `/gsd-execute-plan 01 02` (or `/gsd-execute-phase 1` continuation) — Wave 1 Plan 02 (mud-event-bus) + Plan 03 (ports) remain; Wave 2 Plan 04 + Plan 05 follow; Wave 3 Plans 06 + 07 close the phase.
-**Last file edited:** `scripts/extract-baseline.ts`, `.gitignore`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-01-SUMMARY.md`
+**Last action:** Plan 02 (INFRA-01 MUD event bus) executed — 3 commits (`997e608` types, `edb2804` RED test, `e5169f4` GREEN impl), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-02-SUMMARY.md`. 7 D-25 test cases green; full suite 31/31 pass; no consumer wired (D-29).
+**Last session:** 2026-04-19T08:36:39Z
+**Stopped at:** Completed 01-02-PLAN.md
+**Next command:** `/gsd-execute-plan 01 03` (or `/gsd-execute-phase 1` continuation) — Wave 1 Plan 03 (ports) remains; Wave 2 Plan 04 + Plan 05 follow; Wave 3 Plans 06 + 07 close the phase.
+**Last file edited:** `src/bus/types.ts`, `src/bus/mud-event-bus.ts`, `src/bus/mud-event-bus.test.ts`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-02-SUMMARY.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
