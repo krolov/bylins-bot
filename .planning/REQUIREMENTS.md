@@ -19,8 +19,8 @@
 
 - [x] **INFRA-01**: Event bus — `src/bus/mud-event-bus.ts` с типизированным `MudEvent` discriminated union, sync-delivery семантикой (match with current `onMudText`), `emit`/`on`/`once`/`off`/`onAny` API, returns unsubscribe closures
 - [x] **INFRA-02**: Ports layer — `src/ports/` с чистыми interfaces: `MudCommandSink`, `Broadcaster`, `NowProvider`, `TimerProvider`, `SessionTeardownRegistry` (MapStore intentionally deferred per D-28 — остаётся в `src/map/store.ts`); + 3 default factory impls в `src/ports/defaults/`
-- [ ] **INFRA-03**: Migration framework — таблица `schema_migrations` + numbered SQL-скрипты в `src/map/migrations/`, runner с advisory lock + идемпотентностью + baseline-seed для уже-мигрированного prod
-- [ ] **INFRA-04**: Inline DDL удалён — все `ALTER TABLE IF NOT EXISTS` / `DROP TABLE` из `mapStore.initialize()` перенесены в numbered migrations; `initialize()` сводится к вызову migration runner'а
+- [x] **INFRA-03**: Migration framework — таблица `schema_migrations` + numbered SQL-скрипты в `src/map/migrations/`, runner с advisory lock + идемпотентностью + baseline-seed для уже-мигрированного prod
+- [x] **INFRA-04**: Inline DDL удалён — все `ALTER TABLE IF NOT EXISTS` / `DROP TABLE` из `mapStore.initialize()` перенесены в numbered migrations; `initialize()` сводится к вызову migration runner'а
 
 ### Server Extraction
 
@@ -121,8 +121,8 @@ Populated during roadmap creation (2026-04-18).
 | SAFE-05 | Phase 1 | Pending |
 | INFRA-01 | Phase 1 | Complete (01-02-PLAN.md) |
 | INFRA-02 | Phase 1 | Complete (01-03-PLAN.md — 2026-04-19) |
-| INFRA-03 | Phase 1 | Pending |
-| INFRA-04 | Phase 1 | Pending |
+| INFRA-03 | Phase 1 | Complete (01-04-PLAN.md — 2026-04-19) |
+| INFRA-04 | Phase 1 | Complete (01-04-PLAN.md — 2026-04-19) |
 | SRV-01 | Phase 2 | Pending |
 | SRV-02 | Phase 2 | Pending |
 | SRV-03 | Phase 2 | Pending |

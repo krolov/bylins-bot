@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-04-19T08:48:08.161Z"
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-04-19T10:00:00.000Z"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 3
-  percent: 43
+  completed_plans: 4
+  percent: 57
 ---
 
 # STATE: bylins-bot — Monolith Refactor
@@ -35,15 +35,15 @@ progress:
 ## Current Position
 
 Phase: 01 (safety-harness-scaffolding-infrastructure) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 **Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** Plans 01 + 02 + 03 complete; Wave-2 Plan 04 (migration framework) + Plan 05 (parser snapshot) next in sequential execution
+**Plan:** Plans 01 + 02 + 03 + 04 complete; Wave-2 Plan 05 (parser snapshot) next in sequential execution
 **Status:** Executing Phase 01
 **Progress:**
 
 ```
-Overall:  [█████████░░░░░░░░░░░]  43% (3/7 plans in Phase 01)
-Phase 1:  [██████░░░░░░░░░░░░░░]  33% (3/9 requirements — SAFE-01, INFRA-01, INFRA-02 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15)
+Overall:  [███████████░░░░░░░░░]  57% (4/7 plans in Phase 01)
+Phase 1:  [██████████░░░░░░░░░░]  55% (5/9 requirements — SAFE-01, INFRA-01, INFRA-02, INFRA-03, INFRA-04 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15)
 ```
 
 ## Performance Metrics
@@ -79,12 +79,19 @@ Tracked at phase-completion boundaries.
 - **2026-04-19** — Plan 03: `MudCommandSink.send(source: string)` vocabulary fixed at 18 values (enumerated in 01-03-SUMMARY.md "Source-String Vocabulary" table) — Phase 2 controllers reuse verbatim, do NOT invent new sources without a logged deviation; protects mud-out log-audit grep patterns.
 - **2026-04-19** — Plan 03: `createDefaultSessionTeardownRegistry.invokeAll()` does NOT wrap hooks in try/catch by design — mirrors existing `server.ts:158` no-catch semantic. Phase 2 composition root decides error-isolation policy (wrap at registration if needed); port default stays minimal.
 - **2026-04-19** — Plan 03: `[...hooks]` snapshot-before-iterate inside `invokeAll()` is a CONTRACT requirement mirroring Plan 02 bus emit defense; any future re-implementation must preserve this (do NOT switch to `hooks.forEach` or direct `for..of hooks`).
+- **2026-04-19** — Plan 04 (INFRA-03 + INFRA-04): `ADVISORY_LOCK_ID = 727465` locked runtime contract; never change — would orphan migrations mid-flight against any running pre-change process. Transaction-scoped `pg_advisory_xact_lock` (not session-scoped `pg_advisory_lock`) chosen — auto-releases on commit/rollback, no leak on process crash.
+- **2026-04-19** — Plan 04: three-state baseline-pump machine locked (D-31). Branches: (1) schema_migrations absent + map_rooms present → seed all ids WITHOUT executing SQL (production-unmigrated); (2) schema_migrations absent + map_rooms absent → apply every migration (fresh-install); (3) schema_migrations present → apply only unregistered. Branch 1 is the pitfall-5 mitigation; unit test case 2 asserts zero `tx.unsafe` calls in that branch.
+- **2026-04-19** — Plan 04: migration filename regex `/^\d{14}-[a-z0-9-]+\.sql$/` is a T-01-04-02 SQL-injection mitigation (rejects stray dev scratch files). Timestamp prefixes `20260418180000/180100/180200` are load-bearing — runner seeds schema_migrations using these exact ids; renaming a file breaks seed-reconciliation on already-migrated prod DBs.
+- **2026-04-19** — Plan 04: fail-fast semantic locked (D-35). `runMigrations()` does not catch; `mapStore.initialize()` does not catch; process exits non-zero on any migration error. Matches existing `DATABASE_URL missing` refuse-to-start semantic at `src/config.ts:110`. Phase 2 composition root may inject a real `onLog` dep but must preserve no-catch policy.
+- **2026-04-19** — Plan 04: postgres.js v3 typing gap — `TransactionSql<TTypes>` extends `Omit<Sql<TTypes>, ...>` which drops the callable tagged-template signatures. Runner works around via single `as unknown as DatabaseClient` cast inside the `.begin()` callback; documented inline. Phase 2+ migrations MUST reuse this exact pattern — do NOT attempt alternative typing (intersection tricks) that add noise.
+- **2026-04-19** — Plan 04: destructive migrations list bootstrapped with `20260418180200-drop-farm-zone-settings.sql`. Plan 07 (`docs/refactor-playbook.md`) must enumerate this list verbatim so operators know which migrations require pre-run backups.
+- **2026-04-19** — Plan 04: baseline.sql captures full production reality (17 tables, not just the 8 in store.ts inline DDL). `pg_dump --schema-only --no-owner --no-privileges` + idempotency retrofit (`IF NOT EXISTS` + `DO $$ ... pg_constraint` guards). Fresh-install creates the complete schema; prod seed-only path preserves existing data.
 
 ### Open Questions (for future plan-phase sessions)
 
 - Phase 2: navigation-first (user preference) vs leaf-first (research recommendation)? — decide at `/gsd-plan-phase 2`
 - ~~Phase 1: `mitt` (3.0.1, <200 bytes) vs roll-your-own `createMudBus` (~80 LOC) for INFRA-01?~~ — **RESOLVED 2026-04-19 Plan 02: roll-your-own shipped in `src/bus/mud-event-bus.ts` (72 LOC)**
-- Phase 1: `postgres-shift` (0.1.0, Dec 2022, low maintenance) vs roll-your-own (~40 LOC) for INFRA-03? STACK.md says both valid
+- ~~Phase 1: `postgres-shift` (0.1.0, Dec 2022, low maintenance) vs roll-your-own (~40 LOC) for INFRA-03? STACK.md says both valid~~ — **RESOLVED 2026-04-19 Plan 04: roll-your-own shipped in `src/map/migrations/runner.ts` (106 LOC) — baseline-pump strategy required custom state machine; postgres-shift couldn't express this cleanly**
 - Phase 3: if FREEZE-01 identifies `map_delta` as root cause, PERF-01 from v2 promotes into this milestone; otherwise defer
 - Phase 2: loot-sort ↔ gather-script `onPickupForRaskhod` — bus event or direct callback? (single consumer → leaning direct)
 - Phase 2: combat-state — queryable singleton (current) or emit `combat_started`/`combat_ended` via bus? (research leans queryable, post-milestone polish if needed)
@@ -114,11 +121,11 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Plan 03 (INFRA-02 + partial SAFE-03 ports layer) executed — 2 commits (`505015d` five interfaces, `9d288c6` three default impls), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-03-SUMMARY.md`. Typecheck clean; full suite 31/31 pass (no regression from Plan 02 baseline — ports layer is passive scaffolding); D-29 verified (grep for `from "../ports/"` outside src/ports/ returns 0); D-28 verified (no `src/ports/map-store.ts`).
-**Last session:** 2026-04-19T08:46:04Z
-**Stopped at:** Completed 01-03-PLAN.md
-**Next command:** `/gsd-execute-plan 01 04` (or `/gsd-execute-phase 1` continuation) — Wave 2 Plan 04 (INFRA-03/04 migration framework) + Plan 05 (SAFE-02 parser snapshot); Wave 3 Plans 06 (SAFE-01 replay-harness) + 07 (SAFE-04/05 docs + pre-commit hook) close the phase.
-**Last file edited:** `src/ports/mud-command-sink.ts`, `src/ports/broadcaster.ts`, `src/ports/now-provider.ts`, `src/ports/timer-provider.ts`, `src/ports/session-teardown-registry.ts`, `src/ports/defaults/now.ts`, `src/ports/defaults/timer.ts`, `src/ports/defaults/session-teardown.ts`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-03-SUMMARY.md`
+**Last action:** Plan 04 (INFRA-03 + INFRA-04 migration framework) executed — 5 commits (`8c2cad6` preflight note, `1f11614` three migration SQL files, `14b48d0` runner.ts, `47b63db` runner.test.ts, `cd01630` store.ts collapse + package.json scripts), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-04-SUMMARY.md`. Typecheck clean; full suite 35/35 pass (31 prior + 4 new baseline-pump tests, zero regressions). GitNexus pre-flight: initialize + createMapStore both LOW risk, single d=1 caller src/server.ts; post-flight: caller set unchanged, interface preserved. Inline DDL extinction in store.ts: count 13 → 0; LOC 838 → 726.
+**Last session:** 2026-04-19T10:00:00Z
+**Stopped at:** Completed 01-04-PLAN.md
+**Next command:** `/gsd-execute-plan 01 05` (or `/gsd-execute-phase 1` continuation) — Wave 2 Plan 05 (SAFE-02 parser snapshot); Wave 3 Plans 06 (SAFE-01 replay-harness) + 07 (SAFE-04/05 docs + pre-commit hook) close the phase.
+**Last file edited:** `src/map/migrations/runner.ts`, `src/map/migrations/runner.test.ts`, `src/map/migrations/20260418180000-baseline.sql`, `src/map/migrations/20260418180100-add-has-wiki-data.sql`, `src/map/migrations/20260418180200-drop-farm-zone-settings.sql`, `src/map/store.ts`, `package.json`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-04-preflight.md`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-04-SUMMARY.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
@@ -145,7 +152,7 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 **Hot-path source files (ports target):**
 
 - `src/mud-connection.ts` (492 LOC) — touches in Phase 1 (bus shim) + Phase 3 (remove callback API)
-- `src/map/store.ts` (785 LOC) — touches in Phase 1 (migration framework adoption)
+- `src/map/store.ts` (726 LOC — was 838 pre-Plan-04; inline DDL removed in Plan 04) — future touches deferred post-Phase-1
 
 ---
 *State initialized: 2026-04-18 after roadmap creation*
