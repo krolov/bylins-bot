@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-04-19T10:00:00.000Z"
+stopped_at: Completed 01-05-PLAN.md
+last_updated: "2026-04-19T09:12:43.000Z"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 4
-  percent: 57
+  completed_plans: 5
+  percent: 71
 ---
 
 # STATE: bylins-bot — Monolith Refactor
@@ -35,15 +35,15 @@ progress:
 ## Current Position
 
 Phase: 01 (safety-harness-scaffolding-infrastructure) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7 (next)
 **Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** Plans 01 + 02 + 03 + 04 complete; Wave-2 Plan 05 (parser snapshot) next in sequential execution
+**Plan:** Plans 01 + 02 + 03 + 04 + 05 complete; Wave-3 Plan 06 (replay-harness) next in sequential execution
 **Status:** Executing Phase 01
 **Progress:**
 
 ```
-Overall:  [███████████░░░░░░░░░]  57% (4/7 plans in Phase 01)
-Phase 1:  [██████████░░░░░░░░░░]  55% (5/9 requirements — SAFE-01, INFRA-01, INFRA-02, INFRA-03, INFRA-04 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15)
+Overall:  [██████████████░░░░░░]  71% (5/7 plans in Phase 01)
+Phase 1:  [█████████████░░░░░░░]  66% (6/9 requirements — SAFE-01, SAFE-02, INFRA-01, INFRA-02, INFRA-03, INFRA-04 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15)
 ```
 
 ## Performance Metrics
@@ -86,6 +86,11 @@ Tracked at phase-completion boundaries.
 - **2026-04-19** — Plan 04: postgres.js v3 typing gap — `TransactionSql<TTypes>` extends `Omit<Sql<TTypes>, ...>` which drops the callable tagged-template signatures. Runner works around via single `as unknown as DatabaseClient` cast inside the `.begin()` callback; documented inline. Phase 2+ migrations MUST reuse this exact pattern — do NOT attempt alternative typing (intersection tricks) that add noise.
 - **2026-04-19** — Plan 04: destructive migrations list bootstrapped with `20260418180200-drop-farm-zone-settings.sql`. Plan 07 (`docs/refactor-playbook.md`) must enumerate this list verbatim so operators know which migrations require pre-run backups.
 - **2026-04-19** — Plan 04: baseline.sql captures full production reality (17 tables, not just the 8 in store.ts inline DDL). `pg_dump --schema-only --no-owner --no-privileges` + idempotency retrofit (`IF NOT EXISTS` + `DO $$ ... pg_constraint` guards). Fresh-install creates the complete schema; prod seed-only path preserves existing data.
+- **2026-04-19** — Plan 05 (SAFE-02 parser snapshot): `LOG_LINE_REGEXP` reused verbatim from Plan 01's `scripts/extract-baseline.ts` (stops at `message=` prefix; does NOT capture message body). Plan 05's own action section contained a longer regex but its acceptance criterion demanded byte-equality with Plan 01 — resolved in favor of Plan 01's invariant. Message body extraction handled via new `extractMessageLiteral(line, matchLength)` helper that walks the quoted-string tail honouring backslash escapes; returns the JSON-string literal ready for `JSON.parse`. Plan 06 (replay-harness) MUST reuse both the same LOG_LINE_REGEXP AND the extractMessageLiteral pattern.
+- **2026-04-19** — Plan 05: JSONL contract locked — one line per CHUNK (not per event), shape `{chunkIndex: number, events: ParsedEvent[]}`. Zero-event chunks still emit `{"chunkIndex":N,"events":[]}` so line numbering stays in sync with chunk numbering. Single shared `ParserState` across the entire stream (one `createParserState()` at script start, fed iteratively) — resetting per-chunk would corrupt output because lineBuffer/rawLineBuffer/pendingMobs accumulate across chunks.
+- **2026-04-19** — Plan 05: Exit-code contract published — `0` success (including `--write-initial`) / `1` diff-or-error / `2` fixture missing. Plan 07's pre-commit hook MUST distinguish these: `0` allow commit, `1` block commit with first-diff line, `2` warn-but-don't-block (fresh clone without local fixture).
+- **2026-04-19** — Plan 05: `snapshots/parser-before.jsonl` deliberately NOT committed by this plan — it is a developer-generated artifact requiring Plan 01's baseline fixture which is gitignored and local-only. Seed ritual (extract-baseline → parser:snapshot --write-initial → commit) documented in Plan 07's playbook. `snapshots/.gitkeep` ensures the directory is tracked in git before the first seed.
+- **2026-04-19** — Plan 05: Byte-exact JSONL diff (no jsondiffpatch / deep-diff dep) chosen — implementation ~15 LOC (`diffSnapshots` returns `{equal, firstDiff}`). Per D-19 any textual divergence IS the regression signal we want; tolerance-based or semantic diff would mask real drift. Plan 06 can copy this template for replay-harness side-effect diff.
 
 ### Open Questions (for future plan-phase sessions)
 
@@ -121,11 +126,11 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Plan 04 (INFRA-03 + INFRA-04 migration framework) executed — 5 commits (`8c2cad6` preflight note, `1f11614` three migration SQL files, `14b48d0` runner.ts, `47b63db` runner.test.ts, `cd01630` store.ts collapse + package.json scripts), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-04-SUMMARY.md`. Typecheck clean; full suite 35/35 pass (31 prior + 4 new baseline-pump tests, zero regressions). GitNexus pre-flight: initialize + createMapStore both LOW risk, single d=1 caller src/server.ts; post-flight: caller set unchanged, interface preserved. Inline DDL extinction in store.ts: count 13 → 0; LOC 838 → 726.
-**Last session:** 2026-04-19T10:00:00Z
-**Stopped at:** Completed 01-04-PLAN.md
-**Next command:** `/gsd-execute-plan 01 05` (or `/gsd-execute-phase 1` continuation) — Wave 2 Plan 05 (SAFE-02 parser snapshot); Wave 3 Plans 06 (SAFE-01 replay-harness) + 07 (SAFE-04/05 docs + pre-commit hook) close the phase.
-**Last file edited:** `src/map/migrations/runner.ts`, `src/map/migrations/runner.test.ts`, `src/map/migrations/20260418180000-baseline.sql`, `src/map/migrations/20260418180100-add-has-wiki-data.sql`, `src/map/migrations/20260418180200-drop-farm-zone-settings.sql`, `src/map/store.ts`, `package.json`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-04-preflight.md`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-04-SUMMARY.md`
+**Last action:** Plan 05 (SAFE-02 parser snapshot) executed — 2 commits (`8905c0d` feat scripts/parser-snapshot.ts, `14e8a2a` chore snapshots/.gitkeep + package.json parser:snapshot entry), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-05-SUMMARY.md`. Typecheck clean; full suite 35/35 pass (zero regressions from Plan 04 baseline). Script: 248 LOC, streaming I/O, LOG_LINE_REGEXP verbatim from Plan 01 (byte-identical via `diff <(grep ...) <(grep ...)` gate), `{chunkIndex, events}` JSONL per D-11, exit codes 0/1/2 per Plan 07 playbook. 2 deviations auto-resolved (Rule 3): plan's action-section regex contradicted its acceptance criterion → used Plan 01's shorter regex + extractMessageLiteral helper; comment-word "any" triggered grep gate → rephrased. No pre-existing symbols edited; GitNexus impact analysis not applicable.
+**Last session:** 2026-04-19T09:12:43Z
+**Stopped at:** Completed 01-05-PLAN.md
+**Next command:** `/gsd-execute-plan 01 06` (or `/gsd-execute-phase 1` continuation) — Wave 3 Plan 06 (SAFE-01 replay-harness); Plan 07 (SAFE-04/05 docs + pre-commit hook) closes the phase.
+**Last file edited:** `scripts/parser-snapshot.ts`, `snapshots/.gitkeep`, `package.json`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-05-SUMMARY.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
