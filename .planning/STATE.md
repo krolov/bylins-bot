@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-05-PLAN.md
-last_updated: "2026-04-19T09:12:43.000Z"
+stopped_at: Completed 01-06-PLAN.md
+last_updated: "2026-04-19T09:24:58.000Z"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 5
-  percent: 71
+  completed_plans: 6
+  percent: 86
 ---
 
 # STATE: bylins-bot — Monolith Refactor
@@ -35,15 +35,15 @@ progress:
 ## Current Position
 
 Phase: 01 (safety-harness-scaffolding-infrastructure) — EXECUTING
-Plan: 6 of 7 (next)
+Plan: 7 of 7 (next)
 **Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** Plans 01 + 02 + 03 + 04 + 05 complete; Wave-3 Plan 06 (replay-harness) next in sequential execution
+**Plan:** Plans 01 + 02 + 03 + 04 + 05 + 06 complete; Plan 07 (SAFE-04/05 playbook + mud-phrases inventory + pre-commit hook) closes the phase
 **Status:** Executing Phase 01
 **Progress:**
 
 ```
-Overall:  [██████████████░░░░░░]  71% (5/7 plans in Phase 01)
-Phase 1:  [█████████████░░░░░░░]  66% (6/9 requirements — SAFE-01, SAFE-02, INFRA-01, INFRA-02, INFRA-03, INFRA-04 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15)
+Overall:  [█████████████████░░░]  86% (6/7 plans in Phase 01)
+Phase 1:  [██████████████░░░░░░]  70% (6.5/9 requirements — SAFE-01 now fully done (fixture extractor + replay harness), SAFE-02 done, INFRA-01..04 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15; SAFE-04/05 remain for Plan 07)
 ```
 
 ## Performance Metrics
@@ -91,6 +91,12 @@ Tracked at phase-completion boundaries.
 - **2026-04-19** — Plan 05: Exit-code contract published — `0` success (including `--write-initial`) / `1` diff-or-error / `2` fixture missing. Plan 07's pre-commit hook MUST distinguish these: `0` allow commit, `1` block commit with first-diff line, `2` warn-but-don't-block (fresh clone without local fixture).
 - **2026-04-19** — Plan 05: `snapshots/parser-before.jsonl` deliberately NOT committed by this plan — it is a developer-generated artifact requiring Plan 01's baseline fixture which is gitignored and local-only. Seed ritual (extract-baseline → parser:snapshot --write-initial → commit) documented in Plan 07's playbook. `snapshots/.gitkeep` ensures the directory is tracked in git before the first seed.
 - **2026-04-19** — Plan 05: Byte-exact JSONL diff (no jsondiffpatch / deep-diff dep) chosen — implementation ~15 LOC (`diffSnapshots` returns `{equal, firstDiff}`). Per D-19 any textual divergence IS the regression signal we want; tolerance-based or semantic diff would mask real drift. Plan 06 can copy this template for replay-harness side-effect diff.
+- **2026-04-19** — Plan 06 (SAFE-01 runtime): replay harness shipped as `scripts/replay-harness.ts` (311 LOC) + `scripts/lib/fake-clock.ts` (155 LOC) + `scripts/lib/mock-map-store.ts` (192 LOC). CLI shape + exit codes (0/1/2) mirror Plan 05 verbatim. LOG_LINE_REGEXP + `extractMessageLiteral` helper reused from Plan 05 (single-source-of-truth invariant now spans THREE scripts: extract-baseline, parser-snapshot, replay-harness). JSONL transcript schema locked: `{seq: number, kind: string, ...payload}` with dot-separated `kind` namespace (`bus.emit` / `bus.error` / `parser.events` / `mapStore.<method>` / `timer.schedule-<kind>` / `timer.clear-<kind>` / `timer.fire`). Phase 2 extractions grow the kind namespace but do not reshape the schema.
+- **2026-04-19** — Plan 06: fake clock virtual-time seeded from first baseline timestamp (D-10). `createFakeClock(seedMs, sink)` returns `{now, timer, advanceTo, drain, nowMs}`. `advanceTo(t)` fires eligible timers in fireAt-ascending order emitting `timer.fire` BEFORE callback invocation (transcript reflects real-time dispatch). `drain()` at end-of-stream wakes all pending timers. `createFakeNowProvider(seedMs)` is a real standalone factory for Phase 4 tests; `createFakeTimerProvider()` is a throw-stub naming export (production-replay callers use `createFakeClock`). 4 boundary casts between numeric ids and opaque setTimeout/setInterval handle types — all confined to the factory interior.
+- **2026-04-19** — Plan 06: mock MapStore is an object literal satisfying `MapStore` directly — zero boundary casts (contrast Plan 04's runner.test.ts mock which needed `as unknown as DatabaseClient`). tsc guarantees completeness: adding a MapStore method without updating the mock fails typecheck. 44 methods; reads return minimal defaults (`[]` / `null` / `{}` / empty `MapSnapshot`); writes return `Promise<void>`. No `postgres` import; hermetic spy.
+- **2026-04-19** — Plan 06: `bus.emit` transcript entry emitted BEFORE `bus.emit()` call — preserves chronological ordering `harness-intent → subscriber-side-effects → parser.events` when Phase 2 subscribers land (D-29: Phase 1 has no subscribers, so the ordering is moot in Phase 1 but locks the invariant for Phase 2+). `void mapStore;` silences unused-variable warning while keeping the full pipeline wired — Phase 2 extractions snap in via composition without reshaping the harness.
+- **2026-04-19** — Plan 06: `snapshots/replay-before.jsonl` deliberately NOT committed by this plan — same pattern as Plan 05's `parser-before.jsonl`. Plan 06 ships tooling only; Plan 07's playbook documents the one-time developer seed ritual (extract-baseline → replay:check --write-initial → review → commit). `snapshots/.gitkeep` (shipped by Plan 05) ensures the directory is tracked.
+- **2026-04-19** — Plan 06: `package.json` gained `"replay:check": "bun run scripts/replay-harness.ts"` script entry. Zero new dependencies added (D-30 invariant). Plan 07's pre-commit hook will invoke `bun run replay:check` (and `bun run parser:snapshot`) on commits matching `refactor(...)` message or `refactor/*` branch. Exit-code handling: `0` allow commit, `1` block with first-diff line printed, `2` warn-but-don't-block (fresh clone without baseline fixture).
 
 ### Open Questions (for future plan-phase sessions)
 
@@ -126,11 +132,11 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Plan 05 (SAFE-02 parser snapshot) executed — 2 commits (`8905c0d` feat scripts/parser-snapshot.ts, `14e8a2a` chore snapshots/.gitkeep + package.json parser:snapshot entry), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-05-SUMMARY.md`. Typecheck clean; full suite 35/35 pass (zero regressions from Plan 04 baseline). Script: 248 LOC, streaming I/O, LOG_LINE_REGEXP verbatim from Plan 01 (byte-identical via `diff <(grep ...) <(grep ...)` gate), `{chunkIndex, events}` JSONL per D-11, exit codes 0/1/2 per Plan 07 playbook. 2 deviations auto-resolved (Rule 3): plan's action-section regex contradicted its acceptance criterion → used Plan 01's shorter regex + extractMessageLiteral helper; comment-word "any" triggered grep gate → rephrased. No pre-existing symbols edited; GitNexus impact analysis not applicable.
-**Last session:** 2026-04-19T09:12:43Z
-**Stopped at:** Completed 01-05-PLAN.md
-**Next command:** `/gsd-execute-plan 01 06` (or `/gsd-execute-phase 1` continuation) — Wave 3 Plan 06 (SAFE-01 replay-harness); Plan 07 (SAFE-04/05 docs + pre-commit hook) closes the phase.
-**Last file edited:** `scripts/parser-snapshot.ts`, `snapshots/.gitkeep`, `package.json`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-05-SUMMARY.md`
+**Last action:** Plan 06 (SAFE-01 runtime replay-harness) executed — 4 atomic commits (`a0db214` feat scripts/lib/fake-clock.ts, `386f76d` feat scripts/lib/mock-map-store.ts, `4f2020b` feat scripts/replay-harness.ts, `d4ed34e` chore package.json replay:check entry), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-06-SUMMARY.md`. Typecheck clean; full suite 35/35 pass (zero regressions from Plan 05 baseline). Total 658 LOC across three new files + 1 line added to package.json. Zero new dependencies (D-30 invariant). LOG_LINE_REGEXP now byte-identical across THREE scripts (extract-baseline + parser-snapshot + replay-harness). JSONL transcript schema locked with dot-separated kind namespace ready for Phase 2 extractions. 2 Rule 3 deviations auto-resolved: plan's example MapSnapshot shape was wrong (used `rooms/aliases/autoCommands` instead of actual `nodes/edges/currentVnum/zoneNames`) → fixed via `emptySnapshot(currentVnum)` helper; frontmatter exact-string gate required `import type { MapStore }` on its own line → split imports. Functional smoke test with synthetic 3-line fixture confirmed correct JSONL shape + seq monotonicity + mud-out filtering + round-trip byte-equality between write-initial and default modes. No pre-existing symbols edited; GitNexus impact analysis not applicable.
+**Last session:** 2026-04-19T09:24:58Z
+**Stopped at:** Completed 01-06-PLAN.md
+**Next command:** `/gsd-execute-plan 01 07` (or `/gsd-execute-phase 1` continuation) — Wave 3 Plan 07 (SAFE-04 mud-phrases inventory + SAFE-05 refactor-playbook + `.githooks/pre-commit`) closes Phase 1.
+**Last file edited:** `scripts/lib/fake-clock.ts`, `scripts/lib/mock-map-store.ts`, `scripts/replay-harness.ts`, `package.json`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-06-SUMMARY.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
@@ -161,3 +167,4 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ---
 *State initialized: 2026-04-18 after roadmap creation*
+*Last updated: 2026-04-19 after Plan 06 completion*

@@ -114,7 +114,7 @@ Populated during roadmap creation (2026-04-18).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SAFE-01 | Phase 1 | Complete (Plan 01 — 2026-04-19) |
+| SAFE-01 | Phase 1 | Complete (Plan 01 baseline extraction + Plan 06 replay-harness runtime — 2026-04-19) |
 | SAFE-02 | Phase 1 | Complete (Plan 05 — 2026-04-19) |
 | SAFE-03 | Phase 1 | Partial (ports + defaults shipped in 01-03; per-controller injection deferred to Phase 2 per D-15) |
 | SAFE-04 | Phase 1 | Pending |
