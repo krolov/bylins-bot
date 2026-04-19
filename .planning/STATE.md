@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: Ready to execute
+last_updated: "2026-04-19T00:00:00.000Z"
+progress:
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 7
+  completed_plans: 0
+---
+
 # STATE: bylins-bot — Monolith Refactor
 
 **Initialized:** 2026-04-18
@@ -10,6 +23,7 @@
 **Current Focus:** Phase 1 — Safety Harness + Scaffolding Infrastructure. Regression oracle и структурные примитивы до любых доменных правок.
 
 **Primary Constraints:**
+
 - Behaviour-preserving: bit-for-bit identical bot behaviour (farm/combat/zone-scripts/triggers)
 - Factory pattern `createXxx({deps})`; no classes in domain code
 - Single-user, single-session assumption holds
@@ -19,9 +33,10 @@
 ## Current Position
 
 **Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** (not yet planned — awaits `/gsd-plan-phase 1`)
-**Status:** Not started
+**Plan:** 7 plans drafted across 3 waves — ready for `/gsd-execute-phase 1`
+**Status:** Ready to execute
 **Progress:**
+
 ```
 Overall:  [░░░░░░░░░░░░░░░░░░░░]   0% (0/36 requirements)
 Phase 1:  [░░░░░░░░░░░░░░░░░░░░]   0% (0/9 requirements — SAFE-*, INFRA-*)
@@ -85,9 +100,9 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Roadmap created and STATE initialized.
-**Next command:** `/gsd-plan-phase 1` — decompose Phase 1 into executable plans.
-**Last file edited:** `.planning/ROADMAP.md`, `.planning/STATE.md`, `.planning/REQUIREMENTS.md` (traceability update)
+**Last action:** Phase 1 planned — 7 plans across 3 waves, verification PASSED (5 non-blocking warnings).
+**Next command:** `/gsd-execute-phase 1` — run Wave 1 (Plans 01, 02, 03) in parallel, then Wave 2 (04, 05), then Wave 3 (06, 07).
+**Last file edited:** `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-0{1..7}-PLAN.md`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-PATTERNS.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
@@ -95,6 +110,7 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 ## Key Files Reference
 
 **Planning artifacts:**
+
 - `.planning/PROJECT.md` — project scope
 - `.planning/REQUIREMENTS.md` — v1 requirements + traceability
 - `.planning/ROADMAP.md` — phase breakdown (this milestone)
@@ -104,12 +120,14 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 - `.planning/config.json` — granularity=coarse, mode=yolo, sequential
 
 **Hot-path source files (monoliths to break):**
+
 - `src/server.ts` (1867 LOC) → Phase 2
 - `src/client/main.ts` (1029 LOC) → Phase 3
 - `src/client/map-grid.ts` (1046 LOC) → Phase 3
 - `src/wiki.ts` (955 LOC) → Phase 3
 
 **Hot-path source files (ports target):**
+
 - `src/mud-connection.ts` (492 LOC) — touches in Phase 1 (bus shim) + Phase 3 (remove callback API)
 - `src/map/store.ts` (785 LOC) — touches in Phase 1 (migration framework adoption)
 
