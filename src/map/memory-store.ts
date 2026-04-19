@@ -1,11 +1,12 @@
 import type { MapAlias, MapEdge, MapNode, MapSnapshot } from "./types";
-import type { GameItem, MapStore, MarketSale, MobName, RoomAutoCommand, ZoneScriptSettings } from "./store";
+import type { GameItem, MapStore, MarketSale, MobName, QuestCompletion, RoomAutoCommand, ZoneScriptSettings } from "./store";
 
 export function createMemoryMapStore(): MapStore {
   const rooms = new Map<number, MapNode>();
   const edges = new Map<string, MapEdge>();
   const aliases = new Map<number, string>();
   const autoCommands = new Map<number, string>();
+  const questCompletions = new Map<string, QuestCompletion>();
 
   return {
     async initialize(): Promise<void> {},
@@ -170,6 +171,26 @@ export function createMemoryMapStore(): MapStore {
 
     async getRoomAutoCommand(vnum: number): Promise<string | null> {
       return autoCommands.get(vnum) ?? null;
+    },
+
+    async getQuestCompletions(): Promise<Record<string, QuestCompletion>> {
+      return Object.fromEntries(questCompletions.entries());
+    },
+
+    async setQuestCompleted(questId: string): Promise<void> {
+      const existing = questCompletions.get(questId);
+      questCompletions.set(questId, {
+        completedAt: new Date(),
+        grivnas: existing?.grivnas ?? null,
+      });
+    },
+
+    async setQuestGrivnas(questId: string, grivnas: number | null): Promise<void> {
+      const existing = questCompletions.get(questId);
+      questCompletions.set(questId, {
+        completedAt: existing?.completedAt ?? new Date(),
+        grivnas,
+      });
     },
 
     async saveMobRoomName(_name: string, _vnum: number | null, _combatName?: string): Promise<void> {},

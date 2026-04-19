@@ -23,6 +23,7 @@ export type ScriptStep =
       kind: "command";
       label: string;
       command: string;
+      delayBeforeMs?: number;
       /** Optional delay in ms to wait after sending before proceeding. Default 0. */
       delayAfterMs?: number;
     }
@@ -178,6 +179,8 @@ export interface ZoneScriptDeps {
    * Resolves when the player arrives, rejects on failure.
    */
   navigateTo(targetVnum: number): Promise<void>;
+  /** Cancel any in-progress navigation immediately. */
+  stopNavigation(): void;
   /** Send a raw command to MUD. */
   sendCommand(command: string): void;
   /**
@@ -191,7 +194,7 @@ export interface ZoneScriptDeps {
   /** Called whenever script state changes — broadcast to browser. */
   onStateChange(state: ZoneScriptStateSnapshot): void;
   onLog(message: string): void;
-  getStats(): { hp: number; hpMax: number };
+  getStats(): { hp: number; hpMax: number; energy: number; energyMax: number };
   // ── farm_zone deps ──────────────────────────────────────────────────────
   getSnapshot(currentVnum: number | null): Promise<MapSnapshot>;
   move(direction: Direction): Promise<MoveResult>;
@@ -206,4 +209,5 @@ export interface ZoneScriptDeps {
   isMerchantProfile(): boolean;
   autoSortInventory(): Promise<void>;
   addMudTextListener(handler: (text: string) => void): () => void;
+  triggerRecall(): void;
 }

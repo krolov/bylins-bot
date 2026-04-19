@@ -22,6 +22,7 @@ import { createPopups } from "./popups.ts";
 import { createNavPanel } from "./nav-panel.ts";
 import { createMapGrid } from "./map-grid.ts";
 import { createNet } from "./net.ts";
+import { initQuestsPanel } from "./quests.ts";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -63,9 +64,11 @@ const mapPanelMap = requireElement<HTMLDivElement>("#map-panel-map");
 const containerTabInventory = requireElement<HTMLButtonElement>("#container-tab-inventory");
 const containerTabNav = requireElement<HTMLButtonElement>("#container-tab-nav");
 const containerTabScript = requireElement<HTMLButtonElement>("#container-tab-script");
+const containerTabQuests = requireElement<HTMLButtonElement>("#container-tab-quests");
 const containerPanelInventory = requireElement<HTMLDivElement>("#container-panel-inventory");
 const containerPanelNav = requireElement<HTMLDivElement>("#container-panel-nav");
 const containerPanelScript = requireElement<HTMLDivElement>("#container-panel-script");
+const containerPanelQuests = requireElement<HTMLDivElement>("#container-panel-quests");
 const scriptStepsList = requireElement<HTMLUListElement>("#script-steps-list");
 const scriptPanelTitle = requireElement<HTMLSpanElement>("#script-panel-title");
 const scriptStatusLine = requireElement<HTMLDivElement>("#script-status-line");
@@ -149,13 +152,15 @@ function switchMapTab(tab: "map"): void {
   mapPanelMap.classList.toggle("map-tab-panel--hidden", tab !== "map");
 }
 
-function switchContainerTab(tab: "inventory" | "nav" | "script"): void {
+function switchContainerTab(tab: "inventory" | "nav" | "script" | "quests"): void {
   containerTabInventory.classList.toggle("map-tab--active", tab === "inventory");
   containerTabNav.classList.toggle("map-tab--active", tab === "nav");
   containerTabScript.classList.toggle("map-tab--active", tab === "script");
+  containerTabQuests.classList.toggle("map-tab--active", tab === "quests");
   containerPanelInventory.classList.toggle("container-panels__panel--hidden", tab !== "inventory");
   containerPanelNav.classList.toggle("container-panels__panel--hidden", tab !== "nav");
   containerPanelScript.classList.toggle("container-panels__panel--hidden", tab !== "script");
+  containerPanelQuests.classList.toggle("container-panels__panel--hidden", tab !== "quests");
 }
 
 let openAliasPopup: (vnum: number, alias: string | undefined, name: string) => void;
@@ -395,11 +400,16 @@ function handleServerEvent(message: ServerEvent): void {
     case "error":
       appendSystemLine(`error: ${message.payload.message}`);
       break;
+    case "quests_data":
+      bus.emit("quests_data", message.payload);
+      break;
     case "map_snapshot":
       trackerCurrentVnum = message.payload.currentVnum;
       mapGrid.updateMap(message.payload, true);
       if (zoneScriptState && !zoneScriptState.payload.enabled) {
         renderScriptSteps(zoneScriptState.payload);
+      } else {
+        refreshScriptToggleBtn();
       }
       break;
     case "map_update":
@@ -407,6 +417,8 @@ function handleServerEvent(message: ServerEvent): void {
       mapGrid.updateMap(message.payload, false);
       if (zoneScriptState && !zoneScriptState.payload.enabled) {
         renderScriptSteps(zoneScriptState.payload);
+      } else {
+        refreshScriptToggleBtn();
       }
       break;
     case "farm2_state":
@@ -539,6 +551,7 @@ function handleServerEvent(message: ServerEvent): void {
         pendingEquippedAction = null;
         const commands: string[] = [];
         for (const item of items) {
+          if (item.correctlyMarked) continue;
           commands.push(`сня ${item.keyword}`);
           commands.push(`нацарапать клан ${item.keyword} Ринли *${item.slot}*`);
           commands.push(`${item.wearCmd} ${item.keyword}`);
@@ -588,6 +601,7 @@ function handleServerEvent(message: ServerEvent): void {
 // destructuring has run.
 const net = createNet({ onMessage: handleServerEvent });
 const { sendClientEvent, ensureSocketOpen } = net;
+initQuestsPanel(sendClientEvent);
 
 // Modal chunks emit outbound messages via the bus to avoid importing main.ts
 // (which would force the bundler to keep them on the critical path).
@@ -866,6 +880,7 @@ mapTabMap.addEventListener("click", () => switchMapTab("map"));
 containerTabInventory.addEventListener("click", () => switchContainerTab("inventory"));
 containerTabNav.addEventListener("click", () => switchContainerTab("nav"));
 containerTabScript.addEventListener("click", () => switchContainerTab("script"));
+containerTabQuests.addEventListener("click", () => { switchContainerTab("quests"); bus.emit("quests_tab_activated", {}); });
 
 (function populateScriptSelect() {
   const autoOpt = document.createElement("option");
@@ -880,6 +895,7 @@ containerTabScript.addEventListener("click", () => switchContainerTab("script"))
   }
   const saved = localStorage.getItem("scriptSelectId");
   if (saved) scriptSelect.value = saved;
+  refreshScriptToggleBtn();
 })();
 
 scriptSelect.addEventListener("change", () => {

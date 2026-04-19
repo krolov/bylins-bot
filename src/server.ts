@@ -27,6 +27,40 @@ import { findVorozheRoute } from "./vorozhe-graph.ts";
 import { createBazaarNotifier } from "./bazaar-notifier.ts";
 
 type BunServerWebSocket = Bun.ServerWebSocket<WsData>;
+
+interface Quest {
+  id: string;
+  name: string;
+  region: string;
+  wikiUrl: string;
+}
+
+const QUEST_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+const QUESTS: Quest[] = [
+  { id: "kladbishche", name: "Кладбище", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/кладбище" },
+  { id: "bobry", name: "Бобры и плотина", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/бобры_и_плотина" },
+  { id: "razboynichy-les", name: "Разбойничий лес", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/разбойничий_лес" },
+  { id: "letuchiy-korabl", name: "Летучий корабль", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/летучий_корабль" },
+  { id: "ugodya", name: "Охотничьи угодья", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/охотничьи_угодья_князя" },
+  { id: "strannyy-les", name: "Странный лес", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/странный_лес" },
+  { id: "polovcy", name: "Половцы", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/стоянка_половцев" },
+  { id: "slobodka", name: "Слободка", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/крепость_слободка_близ_переяславля" },
+  { id: "gramota", name: "Грамота Кхариту", region: "У Корсуни", wikiUrl: "" },
+  { id: "lager-razboynikov", name: "Лагерь разбойников", region: "У Корсуни", wikiUrl: "https://wiki.bylins.su/лагерь_разбойников" },
+  { id: "proklyataya-derevnya", name: "Проклятая деревня", region: "У Киева", wikiUrl: "https://wiki.bylins.su/проклятая_деревня" },
+  { id: "voron", name: "Кровавый Ворон", region: "У Киева", wikiUrl: "https://wiki.bylins.su/кровавый_ворон" },
+  { id: "solovey", name: "Соловей-разбойник", region: "У Киева", wikiUrl: "https://wiki.bylins.su/соловей-разбойник" },
+  { id: "u-solovya", name: "У Соловья в доме", region: "У Киева", wikiUrl: "https://wiki.bylins.su/у_соловья_в_доме" },
+  { id: "lodya", name: "Торговая лодья", region: "У Киева", wikiUrl: "https://wiki.bylins.su/торговая_лодья" },
+  { id: "boyarskie-horomy", name: "Боярские хоромы", region: "У Вышгорода", wikiUrl: "https://wiki.bylins.su/вышгород-боярские_хоромы" },
+  { id: "myatezhnaya", name: "Мятежная деревня", region: "У Вышгорода", wikiUrl: "https://wiki.bylins.su/мятежная_деревня" },
+  { id: "chudskaya", name: "Чудская деревня", region: "У Новгорода", wikiUrl: "https://wiki.bylins.su/чудская_деревня" },
+  { id: "zabros-krepost", name: "Заброшенная крепость", region: "У Новгорода", wikiUrl: "https://wiki.bylins.su/заброшенная_крепость" },
+  { id: "sadko", name: "Садко / Ильмень-озеро", region: "У Новгорода", wikiUrl: "https://wiki.bylins.su/на_ильмень-озере" },
+  { id: "zamok-maga", name: "Замок тёмного мага", region: "У Новгорода", wikiUrl: "https://wiki.bylins.su/замок_темного_мага" },
+];
+
 const LOG_DIR = "/var/log/bylins-bot";
 const LOG_FILE = `${LOG_DIR}/mud-traffic.log`;
 const DEBUG_LOG_FILE = `${LOG_DIR}/debug.log`;
@@ -322,11 +356,12 @@ const repairController = createRepairController({
     }
     return bestVnum ?? vnums[0] ?? null;
   },
-  navigateTo: (vnum) => startNavigation(null, vnum),
-  isInCombat: () => combatState.getInCombat(),
-  isConnected: () => sharedSession.connected,
-  registerTextHandler: (h) => mudTextHandlers.add(h),
-  unregisterTextHandler: (h) => mudTextHandlers.delete(h),
+   navigateTo: (vnum) => startNavigation(null, vnum),
+   stopNavigation: () => stopNavigation(),
+   isInCombat: () => combatState.getInCombat(),
+   isConnected: () => sharedSession.connected,
+   registerTextHandler: (h) => mudTextHandlers.add(h),
+   unregisterTextHandler: (h) => mudTextHandlers.delete(h),
   onStateChange: (state) => {
     broadcastServerEvent({ type: "repair_state", payload: state });
   },
@@ -469,11 +504,14 @@ function refreshCurrentRoom(timeoutMs: number): Promise<number | null> {
   });
 }
 
+let zoneScriptControllerRef: ReturnType<typeof createZoneScriptController> | null = null;
+
 const zoneScriptController = createZoneScriptController({
   getCurrentRoomId: () => trackerState.currentRoomId,
   isConnected: () => sharedSession.connected && Boolean(sharedSession.tcpSocket),
-  navigateTo: (targetVnum) => startNavigation(null, targetVnum),
-  sendCommand: (command) => {
+   navigateTo: (targetVnum) => startNavigation(null, targetVnum),
+   stopNavigation: () => stopNavigation(),
+   sendCommand: (command) => {
     if (!sharedSession.tcpSocket || !sharedSession.connected) return;
     mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, command, "zone-script");
   },
@@ -486,7 +524,7 @@ const zoneScriptController = createZoneScriptController({
   onLog: (message) => {
     logEvent(null, "session", message);
   },
-  getStats: () => ({ hp: statsHp, hpMax: statsHpMax }),
+  getStats: () => ({ hp: statsHp, hpMax: statsHpMax, energy: statsEnergy, energyMax: statsEnergyMax }),
   getSnapshot: (currentVnum) => mapStore.getSnapshot(currentVnum),
   move: (direction) => mover.move(direction, trackerState.currentRoomId),
   stealthMove: (direction) => mover.stealthMove(direction, trackerState.currentRoomId),
@@ -522,8 +560,16 @@ const zoneScriptController = createZoneScriptController({
     mudTextHandlers.add(handler);
     return () => mudTextHandlers.delete(handler);
   },
+  triggerRecall: () => {
+    zoneScriptControllerRef?.setEnabled(false);
+    if (!sharedSession.tcpSocket || !sharedSession.connected) return;
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "взя возв склад", "zone-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "зачит возв", "zone-script");
+    mudConnection.writeAndLogMudCommand(null, sharedSession.tcpSocket!, "держ лев", "zone-script");
+  },
 });
 sessionTeardownHooks.add(() => zoneScriptController.handleSessionClosed());
+zoneScriptControllerRef = zoneScriptController;
 
 const bazaarNotifier = createBazaarNotifier({
   telegramBotToken: runtimeConfig.telegramBotToken,
@@ -535,8 +581,9 @@ const bazaarNotifier = createBazaarNotifier({
     return path !== null ? path.length : null;
   },
   resolveAlias: (alias: string) => mapStore.resolveAliasAll(alias),
-  navigateTo: (vnum: number) => startNavigation(null, vnum),
-  onceRoomChanged: (timeoutMs: number) => onceRoomChanged(timeoutMs),
+   navigateTo: (vnum: number) => startNavigation(null, vnum),
+   stopNavigation: () => stopNavigation(),
+   onceRoomChanged: (timeoutMs: number) => onceRoomChanged(timeoutMs),
   isNavigating: () => navigationState.active,
   isInCombat: () => combatState.getInCombat(),
   sendCommand: (command: string) => {
@@ -752,6 +799,30 @@ function rememberOutput(text: string): void {
 async function sendSurvivalSettings(ws: BunServerWebSocket): Promise<void> {
   const survival = await mapStore.getSurvivalSettings();
   sendServerEvent(ws, { type: "survival_settings_data", payload: survival });
+}
+
+async function buildQuestsPayload(): Promise<Extract<ServerEvent, { type: "quests_data" }>> {
+  const completions = await mapStore.getQuestCompletions();
+  const now = Date.now();
+
+  return {
+    type: "quests_data",
+    payload: {
+      quests: QUESTS.map((quest) => {
+        const completion = completions[quest.id];
+        const completedAt = completion?.completedAt;
+        const cooldownUntil = completedAt
+          ? completedAt.getTime() + QUEST_COOLDOWN_MS
+          : null;
+
+        return {
+          ...quest,
+          cooldownUntil: cooldownUntil !== null && cooldownUntil > now ? cooldownUntil : null,
+          grivnas: completion?.grivnas ?? null,
+        };
+      }),
+    },
+  };
 }
 
 async function loadZoneScriptSettings(): Promise<ZoneScriptSettings> {
@@ -1490,6 +1561,30 @@ const server = Bun.serve({
           logEvent(ws, "browser-in", "disconnect");
           mudConnection.teardownSession(ws, "Disconnected by user.");
           break;
+        case "quests_get": {
+          logEvent(ws, "browser-in", "quests_get");
+          sendServerEvent(ws, await buildQuestsPayload());
+          break;
+        }
+        case "quest_complete": {
+          const questId = event.payload?.questId;
+          if (questId && QUESTS.some((quest) => quest.id === questId)) {
+            logEvent(ws, "browser-in", "quest_complete", { questId });
+            await mapStore.setQuestCompleted(questId);
+            broadcastServerEvent(await buildQuestsPayload());
+          }
+          break;
+        }
+        case "quest_set_grivnas": {
+          const questId = event.payload?.questId;
+          const grivnas = event.payload?.grivnas ?? null;
+          if (questId && QUESTS.some((quest) => quest.id === questId)) {
+            logEvent(ws, "browser-in", "quest_set_grivnas", { questId, grivnas });
+            await mapStore.setQuestGrivnas(questId, grivnas);
+            broadcastServerEvent(await buildQuestsPayload());
+          }
+          break;
+        }
         case "map_reset":
           logEvent(ws, "browser-in", "map_reset");
           resetMapState();

@@ -121,6 +121,7 @@ async function executeStep(
     }
 
     case "command": {
+      if (step.delayBeforeMs && step.delayBeforeMs > 0) await sleep(step.delayBeforeMs, signal);
       deps.sendCommand(step.command);
       const delay = step.delayAfterMs ?? COMMAND_DELAY_MS;
       if (delay > 0) await sleep(delay, signal);
@@ -210,8 +211,8 @@ async function waitForLoop(
 ): Promise<void> {
   await sleep(delayMs, signal);
   while (!signal.aborted) {
-    const { hp, hpMax } = deps.getStats();
-    if (hpMax > 0 && hp >= hpMax) return;
+    const { hp, hpMax, energy, energyMax } = deps.getStats();
+    if (hpMax > 0 && hp >= hpMax && energyMax > 0 && energy >= energyMax) return;
     await sleep(10_000, signal);
   }
 }
@@ -236,6 +237,7 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
 
   function stop(): void {
     abort();
+    deps.stopNavigation();
     state.enabled = false;
     state.zoneId = null;
     state.zoneName = null;
@@ -303,10 +305,14 @@ export function createZoneScriptController(deps: ZoneScriptDeps) {
           state.loopAbortController = loopAbort;
           state.loopWaitingUntil = Date.now() + state.loopDelayMs;
           broadcastState();
+          deps.sendCommand("отд");
           void waitForLoop(state.loopDelayMs, deps, loopAbort.signal).then(() => {
             state.loopAbortController = null;
             state.loopWaitingUntil = null;
-            if (!loopAbort.signal.aborted) start(restartId);
+            if (!loopAbort.signal.aborted) {
+              deps.sendCommand("вст");
+              start(restartId);
+            }
           }).catch(() => {
             state.loopAbortController = null;
             state.loopWaitingUntil = null;

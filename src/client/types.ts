@@ -152,6 +152,15 @@ export interface HotkeyEntry {
   label: string;
 }
 
+export interface QuestPayload {
+  id: string;
+  name: string;
+  region: string;
+  wikiUrl: string;
+  cooldownUntil: number | null;
+  grivnas: number | null;
+}
+
 export type CompareScanPayload = {
   hasShop: boolean;
   coins: number;
@@ -223,6 +232,12 @@ export type ServerEvent =
       type: "error";
       payload: {
         message: string;
+      };
+    }
+  | {
+      type: "quests_data";
+      payload: {
+        quests: QuestPayload[];
       };
     }
   | {
@@ -346,7 +361,7 @@ export type ServerEvent =
   | {
       type: "equipped_contents";
       payload: {
-        items: Array<{ slot: string; name: string; keyword: string; wearCmd: string }>;
+        items: Array<{ slot: string; name: string; keyword: string; wearCmd: string; correctlyMarked: boolean }>;
       };
     }
   | {
@@ -386,6 +401,9 @@ export type ClientEvent =
     }
   | { type: "send"; payload: { command: string } }
   | { type: "disconnect" }
+  | { type: "quests_get" }
+  | { type: "quest_complete"; payload: { questId: string } }
+  | { type: "quest_set_grivnas"; payload: { questId: string; grivnas: number | null } }
   | { type: "map_reset" }
   | { type: "map_reset_area" }
   | { type: "map_recording_toggle"; payload?: { enabled?: boolean } }

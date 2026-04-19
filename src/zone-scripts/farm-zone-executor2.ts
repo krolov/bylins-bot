@@ -55,6 +55,9 @@ const FLEE_SUCCESS_PHRASE = /Вы быстро убежали с поля бит
 
 const MAX_CONSECUTIVE_MISSES = 3;
 
+const LOW_HP_FLEE_THRESHOLD = 0.5;
+const ZONE_ID_OF = (vnum: number) => Math.floor(vnum / 100);
+
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
 const CHARMIE_INJURED_PATTERN = /\[\S+:[^\]]+\] \[\S+:(?!Невредим|Слегка)[^\]]+\]|\[\S+:(?!Невредим|Слегка)[^\]]+\] \[\S+:[^\]]+\]/;
 
@@ -139,6 +142,28 @@ export interface FarmZoneStep2Params {
 
 type Phase = "moving" | "fleeing" | "waiting_safe";
 
+async function runLowHpRecallMonitor(
+  deps: ZoneScriptDeps,
+  entryVnum: number,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      await sleep(1_000, signal);
+    } catch {
+      return;
+    }
+    if (signal.aborted) return;
+    const { hp, hpMax } = deps.getStats();
+    if (hpMax <= 0 || hp / hpMax >= LOW_HP_FLEE_THRESHOLD) continue;
+    const currentRoom = deps.getCurrentRoomId();
+    if (currentRoom !== null && ZONE_ID_OF(currentRoom) !== ZONE_ID_OF(entryVnum)) return;
+    deps.onLog(`farm_zone2: [monitor] low HP (${hp}/${hpMax}) — triggering recall`);
+    deps.triggerRecall();
+    return;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main executor
 // ---------------------------------------------------------------------------
@@ -163,6 +188,10 @@ export async function executeFarmZoneStep2(
   await deps.navigateTo(entryVnum);
   if (signal.aborted) return;
 
+  void runLowHpRecallMonitor(deps, entryVnum, signal);
+
+  let lastSeenMobs: string[] = [...deps.getVisibleTargets().values()];
+
   deps.onLog(`farm_zone2: started route steps=${routeVnums.length} idleTimeout=${idleTimeoutMs}ms${maxPassCount !== undefined ? ` maxPassCount=${maxPassCount}` : ""}`);
 
   let routeIndex = 0;
@@ -171,7 +200,6 @@ export async function executeFarmZoneStep2(
   let lastCombatAt = Date.now();
   let lastMoveDirection: Direction | null = null;
   let lootPending = false;
-  let lastSeenMobs: string[] = [];
   let consecutiveMissCount = 0;
   let charmieInjured = false;
   let removeMudListener: (() => void) | null = null;

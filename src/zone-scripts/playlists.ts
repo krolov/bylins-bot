@@ -8,7 +8,7 @@ export interface ZonePlaylist {
 export const ZONE_PLAYLISTS: ZonePlaylist[] = [
   {
     playlistId: 10001,
-    playlistName: "Три дороги (102 + 104)",
-    zoneIds: [102, 104],
+    playlistName: "Три дороги (102 + 103 + 104)",
+    zoneIds: [102, 103, 104],
   },
 ];

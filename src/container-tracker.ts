@@ -24,12 +24,13 @@ const EQUIPPED_WEAR_CMD: Record<string, string> = {
   "в левой руке": "держ",
 };
 
-export function parseEquippedItems(text: string): Array<{ slot: string; name: string; keyword: string; wearCmd: string }> {
+export function parseEquippedItems(text: string): Array<{ slot: string; name: string; keyword: string; wearCmd: string; correctlyMarked: boolean }> {
   const stripped = text.replace(ANSI_STRIP_REGEXP, "").replace(/\r/g, "");
   const lines = stripped.split("\n");
   const startIndex = lines.findIndex((l) => /На вас надето/i.test(l));
   if (startIndex < 0) return [];
-  const result: Array<{ slot: string; name: string; keyword: string; wearCmd: string }> = [];
+  const result: Array<{ slot: string; name: string; keyword: string; wearCmd: string; correctlyMarked: boolean }> = [];
+  const keywordCount: Record<string, number> = {};
   for (let i = startIndex + 1; i < lines.length; i += 1) {
     const line = lines[i]?.trim() ?? "";
     if (!line || PROMPT_REGEXP.test(line) || /Вых:/i.test(line)) break;
@@ -37,10 +38,15 @@ export function parseEquippedItems(text: string): Array<{ slot: string; name: st
     if (!match) continue;
     const slot = match[1]?.trim() ?? "";
     const fullName = match[2]?.trim() ?? "";
+    const escapedSlot = slot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const correctlyMarked = new RegExp(`\\*Ринли\\s*\\*${escapedSlot}\\*`, "i").test(fullName);
     const cleanName = fullName.replace(/\*+[^*]*\*+/g, "").trim();
-    const keyword = cleanName.split(/\s+/).slice(0, 2).join(".");
+    const baseKeyword = cleanName.split(/\s+/)[0] ?? cleanName;
+    keywordCount[baseKeyword] = (keywordCount[baseKeyword] ?? 0) + 1;
+    const n = keywordCount[baseKeyword];
+    const keyword = n > 1 ? `${n}.${baseKeyword}` : baseKeyword;
     const wearCmd = EQUIPPED_WEAR_CMD[slot] ?? "над";
-    result.push({ slot, name: cleanName, keyword, wearCmd });
+    result.push({ slot, name: cleanName, keyword, wearCmd, correctlyMarked });
   }
   return result;
 }
@@ -50,7 +56,7 @@ export type ContainerKey = "склад" | "расход" | "базар" | "хл�
 export interface ContainerTrackerDeps {
   onContainerContents(container: ContainerKey, items: Array<{ name: string; count: number }>): void;
   onInventoryContents(items: Array<{ name: string; count: number }>): void;
-  onEquippedContents(items: Array<{ slot: string; name: string; keyword: string; wearCmd: string }>): void;
+  onEquippedContents(items: Array<{ slot: string; name: string; keyword: string; wearCmd: string; correctlyMarked: boolean }>): void;
 }
 
 const CONTAINER_LABEL_MAP: Record<string, ContainerKey> = {

@@ -482,13 +482,10 @@ export function createMapGrid(deps: MapGridDeps): MapGridModule {
             const cy = (lastRenderedMaxY - cell.gridY + PAD) * CELL + TILE / 2;
             const targetScrollLeft = cx - mapCanvasElement.clientWidth / 2;
             const targetScrollTop = cy - mapCanvasElement.clientHeight / 2;
-            console.log("[scroll-fast] vnum=" + snapshot.currentVnum + " gridX=" + cell.gridX + " gridY=" + cell.gridY + " minX=" + lastRenderedMinX + " maxY=" + lastRenderedMaxY + " cx=" + cx + " cy=" + cy + " clientW=" + mapCanvasElement.clientWidth + " clientH=" + mapCanvasElement.clientHeight + " canvasH=" + mapCanvasElement.scrollHeight + " targetL=" + targetScrollLeft + " targetT=" + targetScrollTop);
-            mapCanvasElement.scrollLeft = targetScrollLeft;
-            mapCanvasElement.scrollTop = targetScrollTop;
-            console.log("[scroll-fast-after] actualL=" + mapCanvasElement.scrollLeft + " actualT=" + mapCanvasElement.scrollTop);
-          });
-        } else {
-          console.log("[scroll-fast] cell NOT FOUND for vnum=" + snapshot.currentVnum + " gridLayout.size=" + gridLayout.size);
+             mapCanvasElement.scrollLeft = targetScrollLeft;
+             mapCanvasElement.scrollTop = targetScrollTop;
+           });
+         } else {
         }
       }
       return;
@@ -890,7 +887,6 @@ export function createMapGrid(deps: MapGridDeps): MapGridModule {
       const snapCell = currentCell;
       requestAnimationFrame(() => {
         const [cx, cy] = tileCenter(snapCell.gridX, snapCell.gridY);
-        console.log("[scroll-full] vnum=" + snapshot.currentVnum + " gridX=" + snapCell.gridX + " gridY=" + snapCell.gridY + " cx=" + cx + " cy=" + cy + " clientW=" + mapCanvasElement.clientWidth + " clientH=" + mapCanvasElement.clientHeight + " canvasH=" + mapCanvasElement.scrollHeight);
         mapCanvasElement.scrollLeft = cx - mapCanvasElement.clientWidth / 2;
         mapCanvasElement.scrollTop = cy - mapCanvasElement.clientHeight / 2;
       });

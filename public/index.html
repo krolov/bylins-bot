@@ -11,6 +11,7 @@
     <link rel="modulepreload" href="/chunk-bezgv9t7.js" />
     <!-- chunk-preload:end -->
     <link rel="stylesheet" href="/styles.min.css?v=7" />
+    <link rel="stylesheet" href="/styles.css?v=7" />
   </head>
   <body>
     <header class="topbar">
@@ -133,6 +134,7 @@
           <button id="container-tab-inventory" type="button" class="map-tab map-tab--active">Инвентарь</button>
           <button id="container-tab-nav" type="button" class="map-tab">Навигация</button>
           <button id="container-tab-script" type="button" class="map-tab">Скрипт</button>
+          <button id="container-tab-quests" type="button" class="map-tab">Квесты</button>
           <button id="refresh-all-containers-btn" type="button" class="button-secondary button-small" title="Обновить все контейнеры">↺ все</button>
         </div>
 
@@ -222,8 +224,8 @@
           </div>
         </div>
 
-         <div id="container-panel-script" class="container-panels__panel container-panels__panel--hidden">
-             <div class="container-panel script-panel">
+          <div id="container-panel-script" class="container-panels__panel container-panels__panel--hidden">
+              <div class="container-panel script-panel">
              <div class="script-panel__header">
                <div class="script-panel__row">
                  <select id="script-select" class="script-select" title="Выбрать зону или плейлист вручную"></select>
@@ -243,8 +245,12 @@
              <div class="container-panel__scroll">
                <ul id="script-steps-list" class="script-steps-list"></ul>
              </div>
-           </div>
-         </div>
+          </div>
+        </div>
+
+        <div id="container-panel-quests" class="container-panels__panel container-panels__panel--hidden">
+          <div id="quests-panel" class="quests-panel"></div>
+        </div>
       </div>
 
       <div id="chat-panel" class="chat-panel panel">
