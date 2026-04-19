@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 01-06-PLAN.md
-last_updated: "2026-04-19T09:24:58.000Z"
+status: phase-complete
+stopped_at: Completed 01-07-PLAN.md (Phase 1 complete)
+last_updated: "2026-04-19T09:40:24.000Z"
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 7
-  completed_plans: 6
-  percent: 86
+  completed_plans: 7
+  percent: 100
 ---
 
 # STATE: bylins-bot — Monolith Refactor
@@ -34,16 +34,16 @@ progress:
 
 ## Current Position
 
-Phase: 01 (safety-harness-scaffolding-infrastructure) — EXECUTING
-Plan: 7 of 7 (next)
-**Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** Plans 01 + 02 + 03 + 04 + 05 + 06 complete; Plan 07 (SAFE-04/05 playbook + mud-phrases inventory + pre-commit hook) closes the phase
-**Status:** Executing Phase 01
+Phase: 01 (safety-harness-scaffolding-infrastructure) — COMPLETE
+Plan: 7 of 7 (done)
+**Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure (COMPLETE)
+**Plan:** Plans 01 + 02 + 03 + 04 + 05 + 06 + 07 all complete; Phase 1 closed with SAFE-03/04/05 delivery
+**Status:** Phase 01 Complete — ready for `/gsd-plan-phase 2`
 **Progress:**
 
 ```
-Overall:  [█████████████████░░░]  86% (6/7 plans in Phase 01)
-Phase 1:  [██████████████░░░░░░]  70% (6.5/9 requirements — SAFE-01 now fully done (fixture extractor + replay harness), SAFE-02 done, INFRA-01..04 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15; SAFE-04/05 remain for Plan 07)
+Overall:  [█████████████████████]  100% (7/7 plans in Phase 01; 1/4 phases complete)
+Phase 1:  [█████████████████████]  100% (9/9 requirements — SAFE-01..05 + INFRA-01..04 all shipped; SAFE-03 documented + ports shipped, per-controller injection deferred to Phase 2 per D-15)
 ```
 
 ## Performance Metrics
@@ -97,6 +97,12 @@ Tracked at phase-completion boundaries.
 - **2026-04-19** — Plan 06: `bus.emit` transcript entry emitted BEFORE `bus.emit()` call — preserves chronological ordering `harness-intent → subscriber-side-effects → parser.events` when Phase 2 subscribers land (D-29: Phase 1 has no subscribers, so the ordering is moot in Phase 1 but locks the invariant for Phase 2+). `void mapStore;` silences unused-variable warning while keeping the full pipeline wired — Phase 2 extractions snap in via composition without reshaping the harness.
 - **2026-04-19** — Plan 06: `snapshots/replay-before.jsonl` deliberately NOT committed by this plan — same pattern as Plan 05's `parser-before.jsonl`. Plan 06 ships tooling only; Plan 07's playbook documents the one-time developer seed ritual (extract-baseline → replay:check --write-initial → review → commit). `snapshots/.gitkeep` (shipped by Plan 05) ensures the directory is tracked.
 - **2026-04-19** — Plan 06: `package.json` gained `"replay:check": "bun run scripts/replay-harness.ts"` script entry. Zero new dependencies added (D-30 invariant). Plan 07's pre-commit hook will invoke `bun run replay:check` (and `bun run parser:snapshot`) on commits matching `refactor(...)` message or `refactor/*` branch. Exit-code handling: `0` allow commit, `1` block with first-diff line printed, `2` warn-but-don't-block (fresh clone without baseline fixture).
+- **2026-04-19** — Plan 07 (SAFE-03 docs + SAFE-04 + SAFE-05): closed Phase 1 with three artifacts — `docs/refactor-playbook.md` (14 KB, 8 required `##` sections + Tooling Reference + Glossary), `docs/mud-phrases.md` (32 KB, 14 source-file sections, 104 regex-feature entries with verbatim literals + purpose + example match), `.githooks/pre-commit` (37-line bash, executable, refactor-context-gated `bun run replay:check`). Zero new `package.json` scripts (D-30 invariant preserved). 1042 lines added in mud-phrases; regex fidelity spot-check verified `ROOM_HEADER_REGEXP` byte-identical between doc and `src/map/parser.ts`.
+- **2026-04-19** — Plan 07: pre-commit hook predicate locked as `branch == refactor/* OR commit_msg == *refactor(*`; exit-code propagation from `bun run replay:check` — 0 allow, 1/2 block (both with diagnostic to stderr). Non-refactor path exits 0 fast without invoking the harness (verified via synthetic empty commit-msg on `main`). Plain bash per D-09 — no husky, no node-based hook manager. Activation is voluntary (`git config core.hooksPath .githooks`).
+- **2026-04-19** — Plan 07: SAFE-03 scope boundary documented explicitly in playbook's "Clock and Timer Injection" section — Phase 1 shipped ports (Plan 03) + docs (Plan 07); Phase 2 ships the actual controller injection per D-15. Playbook names `src/ports/now-provider.ts` + `src/ports/timer-provider.ts` + `scripts/lib/fake-clock.ts` verbatim so Phase 2 extractors import the right identifiers.
+- **2026-04-19** — Plan 07: mud-phrases.md covered 8 EXTRA source files beyond the 6 frontmatter-required (gather-script, combat-state, repair-script, container-tracker, zone-scripts/farm-zone-executor2, mob-resolver, compare-scan, equip-utils). Duplication flags called out inline for 6 shared regex families: short-form ANSI (5 copies), full-form ANSI (7 copies), TARGET_PREFIX (3), DARK_ROOM (2 exact + 1 variant), ROOM_PROMPT (3), TARGET_NOT_VISIBLE (2). Phase 2+ consolidation candidates now visible at a glance.
+- **2026-04-19** — Plan 07: destructive migration `20260418180200-drop-farm-zone-settings.sql` (Plan 04) called out by name in playbook's Destructive Migrations section with `pg_dump` backup protocol documented. Future destructive migrations require adding a new entry here — the pre-commit hook does not catch this, it is a human-review gate.
+- **2026-04-19** — Plan 07: playbook documents developer seed ritual (extract-baseline → parser:snapshot --write-initial → replay:check --write-initial → commit snapshots/*-before.jsonl). Plan 07 ships PROCESS not artifacts — `snapshots/parser-before.jsonl` and `snapshots/replay-before.jsonl` remain developer-generated, uncommitted at this point. Whoever owns the first Phase 2 refactor PR (or a separate Phase 1 closure operation) seeds them.
 
 ### Open Questions (for future plan-phase sessions)
 
@@ -132,11 +138,11 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Plan 06 (SAFE-01 runtime replay-harness) executed — 4 atomic commits (`a0db214` feat scripts/lib/fake-clock.ts, `386f76d` feat scripts/lib/mock-map-store.ts, `4f2020b` feat scripts/replay-harness.ts, `d4ed34e` chore package.json replay:check entry), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-06-SUMMARY.md`. Typecheck clean; full suite 35/35 pass (zero regressions from Plan 05 baseline). Total 658 LOC across three new files + 1 line added to package.json. Zero new dependencies (D-30 invariant). LOG_LINE_REGEXP now byte-identical across THREE scripts (extract-baseline + parser-snapshot + replay-harness). JSONL transcript schema locked with dot-separated kind namespace ready for Phase 2 extractions. 2 Rule 3 deviations auto-resolved: plan's example MapSnapshot shape was wrong (used `rooms/aliases/autoCommands` instead of actual `nodes/edges/currentVnum/zoneNames`) → fixed via `emptySnapshot(currentVnum)` helper; frontmatter exact-string gate required `import type { MapStore }` on its own line → split imports. Functional smoke test with synthetic 3-line fixture confirmed correct JSONL shape + seq monotonicity + mud-out filtering + round-trip byte-equality between write-initial and default modes. No pre-existing symbols edited; GitNexus impact analysis not applicable.
-**Last session:** 2026-04-19T09:24:58Z
-**Stopped at:** Completed 01-06-PLAN.md
-**Next command:** `/gsd-execute-plan 01 07` (or `/gsd-execute-phase 1` continuation) — Wave 3 Plan 07 (SAFE-04 mud-phrases inventory + SAFE-05 refactor-playbook + `.githooks/pre-commit`) closes Phase 1.
-**Last file edited:** `scripts/lib/fake-clock.ts`, `scripts/lib/mock-map-store.ts`, `scripts/replay-harness.ts`, `package.json`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-06-SUMMARY.md`
+**Last action:** Plan 07 (SAFE-03 docs + SAFE-04 + SAFE-05) executed — 3 atomic commits (`f8e0d5f` docs/refactor-playbook.md, `7147ada` docs/mud-phrases.md, `1df2cc1` .githooks/pre-commit), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-07-SUMMARY.md`. Typecheck clean; full suite 35/35 pass (zero regressions from Plan 06 baseline). 1364 lines added across three new files. Zero new dependencies + zero new `package.json` scripts (D-30/D-21 invariants preserved). Regex fidelity spot-check verified `ROOM_HEADER_REGEXP` byte-identical between `docs/mud-phrases.md` and `src/map/parser.ts`. Zero deviations; plan executed exactly as written. Phase 1 closes with all 9 requirements (SAFE-01..05 + INFRA-01..04) delivered.
+**Last session:** 2026-04-19T09:40:24Z
+**Stopped at:** Completed 01-07-PLAN.md (Phase 1 complete)
+**Next command:** `/gsd-plan-phase 2` — begin Phase 2 (server.ts Extraction + Bus Cutover Strangler-Fig). Must resolve the navigation-first vs leaf-first ordering question (noted as open question below) at the start of plan-phase.
+**Last file edited:** `docs/refactor-playbook.md`, `docs/mud-phrases.md`, `.githooks/pre-commit`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-07-SUMMARY.md`, `.planning/STATE.md`, `.planning/ROADMAP.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
@@ -167,4 +173,4 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ---
 *State initialized: 2026-04-18 after roadmap creation*
-*Last updated: 2026-04-19 after Plan 06 completion*
+*Last updated: 2026-04-19 after Plan 07 completion — Phase 1 complete*

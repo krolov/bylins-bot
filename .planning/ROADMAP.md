@@ -14,7 +14,7 @@ Behaviour-preserving invariant: после каждой фазы baseline replay
 
 ## Phases
 
-- [ ] **Phase 1: Safety Harness + Scaffolding Infrastructure** — Regression oracle + ports/bus/migration primitives готовы, ни одного символа ещё не двигаем
+- [x] **Phase 1: Safety Harness + Scaffolding Infrastructure** — Regression oracle + ports/bus/migration primitives готовы, ни одного символа ещё не двигаем
 - [ ] **Phase 2: server.ts Extraction + Bus Cutover Strangler-Fig** — server.ts ≤400 LOC composition root, все controllers подписаны через bus, старая callback-цепочка ещё жива
 - [ ] **Phase 3: Client Split + Frontend Freeze Diagnosis & Fix + Bus Finalization** — client monolith разобран, freeze устранён, `mudTextHandlers` удалён, все migrations в framework
 - [ ] **Phase 4: Hot-Path Tests** — тесты для parser/triggers/farm2/mud-connection/map-store/extracted controllers/layout algorithm
@@ -106,7 +106,7 @@ Behaviour-preserving invariant: после каждой фазы baseline replay
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Safety Harness + Scaffolding Infrastructure | 6/7 | In progress | - |
+| 1. Safety Harness + Scaffolding Infrastructure | 7/7 | Complete | 2026-04-19 |
 | 2. server.ts Extraction + Bus Cutover | 0/? | Not started | - |
 | 3. Client Split + Freeze Fix + Bus Finalization | 0/? | Not started | - |
 | 4. Hot-Path Tests | 0/? | Not started | - |
@@ -175,4 +175,4 @@ Phase 4 (Hot-Path Tests)
 
 ---
 *Roadmap created: 2026-04-18*
-*Last updated: 2026-04-18 after initial creation*
+*Last updated: 2026-04-19 after Plan 07 completion — Phase 1 complete*

@@ -11,9 +11,9 @@
 
 - [x] **SAFE-01**: Captured baseline — tooling to reproduce 30-минутный лог реального MUD-трафика в `.fixtures/mud-traffic-baseline.log` (gitignored, D-04 local-only); `scripts/extract-baseline.ts` streams a time-windowed slice from `/var/log/bylins-bot/mud-traffic.log` on demand
 - [x] **SAFE-02**: Parser snapshot harness — `scripts/parser-snapshot.ts` прогоняет `src/map/parser.ts` по baseline и пишет `snapshots/before.jsonl`; diff-тест падает если поведение парсера изменилось
-- [ ] **SAFE-03**: Deterministic clock injection — `NowProvider` и `TimerProvider` порты внедрены в controllers, заменяют прямые `Date.now()` / `setTimeout` там где это нужно для тестов
-- [ ] **SAFE-04**: `docs/mud-phrases.md` — инвентарь всех hardcoded-фраз/регексов русского MUD по файлу и назначению (triggers, survival, market, bazaar, farm2, prompt-stats)
-- [ ] **SAFE-05**: Behaviour-preserving commit convention — один refactor-PR = зелёный replay-harness diff + зелёный `bun test`; `docs/refactor-playbook.md` описывает процесс
+- [x] **SAFE-03**: Deterministic clock injection — `NowProvider` и `TimerProvider` порты внедрены в controllers, заменяют прямые `Date.now()` / `setTimeout` там где это нужно для тестов (Phase 1 shipped the ports in Plan 03 + documented the injection pattern in Plan 07 `docs/refactor-playbook.md` "Clock and Timer Injection"; per-controller injection happens in Phase 2 per D-15)
+- [x] **SAFE-04**: `docs/mud-phrases.md` — инвентарь всех hardcoded-фраз/регексов русского MUD по файлу и назначению (triggers, survival, market, bazaar, farm2, prompt-stats) — shipped Plan 07: 14 source-file sections, 104 regex-feature entries
+- [x] **SAFE-05**: Behaviour-preserving commit convention — один refactor-PR = зелёный replay-harness diff + зелёный `bun test`; `docs/refactor-playbook.md` описывает процесс — shipped Plan 07: playbook + `.githooks/pre-commit`
 
 ### Infrastructure
 
@@ -116,9 +116,9 @@ Populated during roadmap creation (2026-04-18).
 |-------------|-------|--------|
 | SAFE-01 | Phase 1 | Complete (Plan 01 baseline extraction + Plan 06 replay-harness runtime — 2026-04-19) |
 | SAFE-02 | Phase 1 | Complete (Plan 05 — 2026-04-19) |
-| SAFE-03 | Phase 1 | Partial (ports + defaults shipped in 01-03; per-controller injection deferred to Phase 2 per D-15) |
-| SAFE-04 | Phase 1 | Pending |
-| SAFE-05 | Phase 1 | Pending |
+| SAFE-03 | Phase 1 | Complete (ports shipped Plan 03, injection pattern documented Plan 07 — per-controller injection happens in Phase 2 per D-15) |
+| SAFE-04 | Phase 1 | Complete (Plan 07 — 2026-04-19) |
+| SAFE-05 | Phase 1 | Complete (Plan 07 — 2026-04-19) |
 | INFRA-01 | Phase 1 | Complete (01-02-PLAN.md) |
 | INFRA-02 | Phase 1 | Complete (01-03-PLAN.md — 2026-04-19) |
 | INFRA-03 | Phase 1 | Complete (01-04-PLAN.md — 2026-04-19) |
