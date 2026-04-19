@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs the replay-harness on refactor branches/commits.
+# Enabled per-developer via: git config core.hooksPath .githooks
+# Bypass in emergency (only for broken-harness cases): git commit --no-verify
+#
+# Exit codes propagated from bun run replay:check:
+#   0 -> no diff, commit allowed
+#   1 -> regression detected or harness error, commit blocked
+#   2 -> fixture missing (fresh clone without .fixtures/mud-traffic-baseline.log)
+
+set -euo pipefail
+
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || echo '')"
+commit_msg_file="${1:-.git/COMMIT_EDITMSG}"
+commit_msg=""
+if [[ -f "${commit_msg_file}" ]]; then
+  commit_msg="$(cat "${commit_msg_file}" 2>/dev/null || echo '')"
+fi
+
+is_refactor=0
+if [[ "${branch}" == refactor/* ]]; then
+  is_refactor=1
+elif [[ "${commit_msg}" == *"refactor("* ]]; then
+  is_refactor=1
+fi
+
+if [[ ${is_refactor} -eq 0 ]]; then
+  exit 0
+fi
+
+echo "[pre-commit] refactor context detected (branch='${branch}'); running replay:check"
+if ! bun run replay:check; then
+  echo "[pre-commit] replay:check failed - refusing commit. Fix the regression or run with --no-verify if the harness itself is broken." >&2
+  exit 1
+fi
+
+exit 0
