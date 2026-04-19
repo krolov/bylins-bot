@@ -3,13 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-19T08:36:39Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-04-19T08:48:08.161Z"
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 7
-  completed_plans: 2
-  percent: 29
+  completed_plans: 3
+  percent: 43
 ---
 
 # STATE: bylins-bot — Monolith Refactor
@@ -34,15 +35,15 @@ progress:
 ## Current Position
 
 Phase: 01 (safety-harness-scaffolding-infrastructure) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 **Phase:** 1 of 4 — Safety Harness + Scaffolding Infrastructure
-**Plan:** Plans 01 + 02 complete; Wave-1 Plan 03 (ports layer) next in sequential execution
+**Plan:** Plans 01 + 02 + 03 complete; Wave-2 Plan 04 (migration framework) + Plan 05 (parser snapshot) next in sequential execution
 **Status:** Executing Phase 01
 **Progress:**
 
 ```
-Overall:  [██████░░░░░░░░░░░░░░]  29% (2/7 plans in Phase 01)
-Phase 1:  [████░░░░░░░░░░░░░░░░]  22% (2/9 requirements — SAFE-01, INFRA-01 done)
+Overall:  [█████████░░░░░░░░░░░]  43% (3/7 plans in Phase 01)
+Phase 1:  [██████░░░░░░░░░░░░░░]  33% (3/9 requirements — SAFE-01, INFRA-01, INFRA-02 done; SAFE-03 partially done via ports — default impls shipped, per-controller injection deferred to Phase 2 per D-15)
 ```
 
 ## Performance Metrics
@@ -74,6 +75,10 @@ Tracked at phase-completion boundaries.
 - **2026-04-19** — Plan 02 (INFRA-01): roll-your-own `createMudBus` chosen over `mitt` (the research STACK.md open question resolved); MudEvent union has exactly one variant `mud_text_raw` in Phase 1; Phase 2 extends inline. `[bus] handler error for <kind>: <message>` error-message prefix convention locked; Phase 2 consumers will see this prefix in logEvent output
 - **2026-04-19** — Plan 02: `once()` implemented as an `on()` wrapper that unsubscribes itself before invoking user handler — keeps the returned unsubscribe closure in sync with internal registration, prevents double-unsub bugs
 - **2026-04-19** — Plan 02: test-helper pattern `makeDeps() → {deps, errors}` with closure-over-array established for future bus-consumer tests (Phase 2 will reuse this)
+- **2026-04-19** — Plan 03 (INFRA-02 + partial SAFE-03): 5 port interfaces + 3 default factory impls committed pre-wired (D-29) in `src/ports/` + `src/ports/defaults/`. MapStore port intentionally excluded (D-28) — stays in `src/map/store.ts`. Port signatures locked: `MudCommandSink.send(command, source)`, `Broadcaster.broadcast(ServerEvent)`, `NowProvider.now(): number`, `TimerProvider.{setTimeout,clearTimeout,setInterval,clearInterval}` + `TimerHandle`/`IntervalHandle` aliases, `SessionTeardownRegistry.{register,invokeAll}`. Phase 2 extractions import these identifiers by name — rename = break.
+- **2026-04-19** — Plan 03: `MudCommandSink.send(source: string)` vocabulary fixed at 18 values (enumerated in 01-03-SUMMARY.md "Source-String Vocabulary" table) — Phase 2 controllers reuse verbatim, do NOT invent new sources without a logged deviation; protects mud-out log-audit grep patterns.
+- **2026-04-19** — Plan 03: `createDefaultSessionTeardownRegistry.invokeAll()` does NOT wrap hooks in try/catch by design — mirrors existing `server.ts:158` no-catch semantic. Phase 2 composition root decides error-isolation policy (wrap at registration if needed); port default stays minimal.
+- **2026-04-19** — Plan 03: `[...hooks]` snapshot-before-iterate inside `invokeAll()` is a CONTRACT requirement mirroring Plan 02 bus emit defense; any future re-implementation must preserve this (do NOT switch to `hooks.forEach` or direct `for..of hooks`).
 
 ### Open Questions (for future plan-phase sessions)
 
@@ -109,11 +114,11 @@ Full traceability in REQUIREMENTS.md Traceability section (populated during road
 
 ## Session Continuity
 
-**Last action:** Plan 02 (INFRA-01 MUD event bus) executed — 3 commits (`997e608` types, `edb2804` RED test, `e5169f4` GREEN impl), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-02-SUMMARY.md`. 7 D-25 test cases green; full suite 31/31 pass; no consumer wired (D-29).
-**Last session:** 2026-04-19T08:36:39Z
-**Stopped at:** Completed 01-02-PLAN.md
-**Next command:** `/gsd-execute-plan 01 03` (or `/gsd-execute-phase 1` continuation) — Wave 1 Plan 03 (ports) remains; Wave 2 Plan 04 + Plan 05 follow; Wave 3 Plans 06 + 07 close the phase.
-**Last file edited:** `src/bus/types.ts`, `src/bus/mud-event-bus.ts`, `src/bus/mud-event-bus.test.ts`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-02-SUMMARY.md`
+**Last action:** Plan 03 (INFRA-02 + partial SAFE-03 ports layer) executed — 2 commits (`505015d` five interfaces, `9d288c6` three default impls), SUMMARY at `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-03-SUMMARY.md`. Typecheck clean; full suite 31/31 pass (no regression from Plan 02 baseline — ports layer is passive scaffolding); D-29 verified (grep for `from "../ports/"` outside src/ports/ returns 0); D-28 verified (no `src/ports/map-store.ts`).
+**Last session:** 2026-04-19T08:46:04Z
+**Stopped at:** Completed 01-03-PLAN.md
+**Next command:** `/gsd-execute-plan 01 04` (or `/gsd-execute-phase 1` continuation) — Wave 2 Plan 04 (INFRA-03/04 migration framework) + Plan 05 (SAFE-02 parser snapshot); Wave 3 Plans 06 (SAFE-01 replay-harness) + 07 (SAFE-04/05 docs + pre-commit hook) close the phase.
+**Last file edited:** `src/ports/mud-command-sink.ts`, `src/ports/broadcaster.ts`, `src/ports/now-provider.ts`, `src/ports/timer-provider.ts`, `src/ports/session-teardown-registry.ts`, `src/ports/defaults/now.ts`, `src/ports/defaults/timer.ts`, `src/ports/defaults/session-teardown.ts`, `.planning/phases/01-safety-harness-scaffolding-infrastructure/01-03-SUMMARY.md`
 **Working directory:** `/root/bylins-bot`
 **Git branch:** `main`
 **Git status at creation:** M AGENTS.md, M CLAUDE.md, M src/client/main.ts (pre-existing modifications, not part of this milestone yet)
