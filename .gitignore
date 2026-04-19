@@ -11,3 +11,4 @@ src/client.js.map
 .env
 scripts/wiki-mcp-cache.json
 .gitnexus
+.fixtures/
