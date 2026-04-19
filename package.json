@@ -18,6 +18,7 @@
     "smoke": "bun run build:client && bun run scripts/smoke-test.ts",
     "gear": "bun run scripts/gear-advisor.ts",
     "parser:snapshot": "bun run scripts/parser-snapshot.ts",
+    "replay:check": "bun run scripts/replay-harness.ts",
     "migrate": "bun -e 'import { runMigrations } from \"./src/map/migrations/runner.ts\"; import { sql } from \"./src/db.ts\"; await runMigrations(sql, { onLog: (m) => { process.stdout.write(m + \"\\n\"); } }); await sql.end(); process.exit(0);'",
     "migrate:status": "bun -e 'import { sql } from \"./src/db.ts\"; const rows = await sql`SELECT id, applied_at FROM schema_migrations ORDER BY id`; for (const r of rows) process.stdout.write(`${r.id}\\t${r.applied_at.toISOString()}\\n`); await sql.end(); process.exit(0);'"
   },
