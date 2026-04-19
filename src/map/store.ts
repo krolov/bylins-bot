@@ -1,5 +1,6 @@
 import type { DatabaseClient } from "../db";
 import type { MapAlias, MapEdge, MapNode, MapSnapshot } from "./types";
+import { runMigrations } from "./migrations/runner.ts";
 export interface FarmZoneSettings {
   attackCommand: string;
   skinningSalvoEnabled: boolean;
@@ -61,6 +62,17 @@ export interface RoomAutoCommand {
   command: string;
 }
 
+interface QuestCompletionRow {
+  quest_id: string;
+  completed_at: Date;
+  grivnas: number | null;
+}
+
+export interface QuestCompletion {
+  completedAt: Date;
+  grivnas: number | null;
+}
+
 export interface MapStore {
   initialize(): Promise<void>;
   upsertRoom(vnum: number, name: string, exits: MapNode["exits"], closedExits: MapNode["closedExits"]): Promise<void>;
@@ -91,6 +103,9 @@ export interface MapStore {
   deleteRoomAutoCommand(vnum: number): Promise<void>;
   getRoomAutoCommands(): Promise<RoomAutoCommand[]>;
   getRoomAutoCommand(vnum: number): Promise<string | null>;
+  getQuestCompletions(): Promise<Record<string, QuestCompletion>>;
+  setQuestCompleted(questId: string): Promise<void>;
+  setQuestGrivnas(questId: string, grivnas: number | null): Promise<void>;
   saveMobRoomName(name: string, vnum: number | null, combatName?: string): Promise<void>;
   saveMobCombatName(name: string, vnum: number | null): Promise<void>;
   getMobNames(): Promise<MobName[]>;
@@ -162,108 +177,7 @@ function parseItemData(raw: unknown): Record<string, unknown> {
 export function createMapStore(database: DatabaseClient): MapStore {
   return {
     async initialize(): Promise<void> {
-      await database`
-        CREATE TABLE IF NOT EXISTS map_rooms (
-          vnum INTEGER PRIMARY KEY,
-          name TEXT NOT NULL,
-          exits TEXT[] NOT NULL DEFAULT '{}',
-          closed_exits TEXT[] NOT NULL DEFAULT '{}',
-          visited BOOLEAN NOT NULL DEFAULT TRUE,
-          first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS zone_names (
-          zone_id INT PRIMARY KEY,
-          name TEXT NOT NULL
-        )
-      `;
-
-      await database`
-        DO $$ BEGIN
-          IF EXISTS (
-            SELECT 1 FROM information_schema.table_constraints
-            WHERE table_name = 'farm_zone_settings'
-              AND constraint_type = 'PRIMARY KEY'
-              AND constraint_name = 'farm_zone_settings_pkey'
-          ) AND NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'farm_zone_settings'
-              AND column_name = 'profile_id'
-          ) THEN
-            DROP TABLE farm_zone_settings;
-          END IF;
-        END $$
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS farm_zone_settings (
-          profile_id TEXT NOT NULL,
-          zone_id    INT NOT NULL,
-          settings   JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          PRIMARY KEY (profile_id, zone_id)
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS zone_script_settings (
-          id         TEXT PRIMARY KEY DEFAULT 'global',
-          settings   JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS chat_messages (
-          id        BIGSERIAL PRIMARY KEY,
-          text      TEXT NOT NULL,
-          ts        BIGINT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS game_items (
-          name       TEXT PRIMARY KEY,
-          item_type  TEXT NOT NULL,
-          data       JSONB NOT NULL,
-          has_wiki_data BOOLEAN NOT NULL DEFAULT FALSE,
-          has_game_data BOOLEAN NOT NULL DEFAULT FALSE,
-          first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          last_seen  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        ALTER TABLE game_items ADD COLUMN IF NOT EXISTS has_wiki_data BOOLEAN NOT NULL DEFAULT FALSE
-      `;
-
-      await database`
-        ALTER TABLE game_items ADD COLUMN IF NOT EXISTS has_game_data BOOLEAN NOT NULL DEFAULT FALSE
-      `;
-
-      await database`
-        CREATE TABLE IF NOT EXISTS market_sales (
-          id          BIGSERIAL PRIMARY KEY,
-          source      TEXT NOT NULL,
-          lot_number  INT,
-          item_name   TEXT NOT NULL,
-          price       INT NOT NULL,
-          is_ours     BOOLEAN NOT NULL DEFAULT FALSE,
-          sold_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      await database`
-        CREATE INDEX IF NOT EXISTS market_sales_item_name_idx ON market_sales (item_name)
-      `;
-
-      await database`
-        CREATE INDEX IF NOT EXISTS market_sales_sold_at_idx ON market_sales (sold_at DESC)
-      `;
+      await runMigrations(database);
     },
 
     async upsertRoom(vnum: number, name: string, exits: MapNode["exits"], closedExits: MapNode["closedExits"]): Promise<void> {
@@ -632,6 +546,33 @@ export function createMapStore(database: DatabaseClient): MapStore {
         SELECT command FROM room_auto_commands WHERE vnum = ${vnum}
       `;
       return rows[0]?.command ?? null;
+    },
+
+    async getQuestCompletions(): Promise<Record<string, QuestCompletion>> {
+      const rows = await database<QuestCompletionRow[]>`
+        SELECT quest_id, completed_at, grivnas
+        FROM quest_completions
+      `;
+
+      return Object.fromEntries(rows.map((row) => [row.quest_id, { completedAt: row.completed_at, grivnas: row.grivnas } satisfies QuestCompletion]));
+    },
+
+    async setQuestCompleted(questId: string): Promise<void> {
+      await database`
+        INSERT INTO quest_completions (quest_id, completed_at)
+        VALUES (${questId}, NOW())
+        ON CONFLICT (quest_id)
+        DO UPDATE SET completed_at = EXCLUDED.completed_at
+      `;
+    },
+
+    async setQuestGrivnas(questId: string, grivnas: number | null): Promise<void> {
+      await database`
+        INSERT INTO quest_completions (quest_id, grivnas)
+        VALUES (${questId}, ${grivnas})
+        ON CONFLICT (quest_id)
+        DO UPDATE SET grivnas = EXCLUDED.grivnas
+      `;
     },
 
     async saveMobRoomName(name: string, vnum: number | null, combatName?: string): Promise<void> {
